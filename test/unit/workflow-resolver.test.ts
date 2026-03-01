@@ -113,10 +113,10 @@ describe("workflow resolver", () => {
       expect(plan.orchestration.review.enabled).toBe(true);
     });
 
-    it("--noReview disables review even if workflow default is true", () => {
+    it("--no-review disables review even if workflow default is true", () => {
       const plan = resolveRunPlan(defaultConfig, makeOptions({
         workflow: "code", // code has review enabled
-        noReview: true,
+        review: false,    // commander sets review=false for --no-review
       }));
       expect(plan.orchestration.review.enabled).toBe(false);
     });

@@ -103,9 +103,10 @@ export function resolveRunPlan(
   }
 
   // Determine review config
+  // Commander: --review sets review=true, --no-review sets review=false, neither sets review=undefined
   const reviewEnabled = options.review === true
     ? true
-    : options.noReview === true
+    : options.review === false
     ? false
     : workflow.review.enabled;
 
