@@ -1,9 +1,13 @@
 export interface AgentAdapter {
   name: string;
-  /** Build the command array to exec inside the container */
-  buildCommand(prompt: string, options: AgentOptions): string[];
-  /** Build environment variables needed (as shell-style KEY=VALUE strings) */
-  buildEnv(secretEnv: Record<string, string>): string[];
+  /**
+   * Build a shell command string that reads the prompt from a file.
+   * The caller writes the prompt to `promptFile` inside the container,
+   * then executes: ["sh", "-c", buildShellCommand(promptFile, options)]
+   *
+   * This avoids ARG_MAX limits and shell escaping issues with multi-KB prompts.
+   */
+  buildShellCommand(promptFile: string, options: AgentOptions): string;
 }
 
 export interface AgentOptions {

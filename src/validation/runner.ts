@@ -1,10 +1,10 @@
 import type Docker from "dockerode";
 import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
-import type { AgentAdapter } from "../agent/types.js";
+import type { AgentAdapter, AgentOptions } from "../agent/types.js";
 import { runValidationStep, type StepResult } from "./step.js";
 import { formatFeedback } from "./feedback.js";
-import { execInContainer } from "../container/runner.js";
+import { invokeAgent } from "../agent/invoke.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -19,13 +19,12 @@ export interface ValidationResult {
 /**
  * Run all validation steps. If any fail, format feedback, re-invoke the agent,
  * then restart ALL validation steps from the top. Repeat up to maxRetries.
- *
- * @param agentEnv - Direct env key=value strings to pass to Docker exec (no shell subcommands)
  */
 export async function runValidationLoop(
   container: Docker.Container,
   plan: RunPlan,
   adapter: AgentAdapter,
+  agentOptions: AgentOptions,
   agentEnv: string[],
   logger: Logger
 ): Promise<ValidationResult> {
@@ -89,21 +88,11 @@ export async function runValidationLoop(
     const feedback = formatFeedback(failedSteps, plan.workflow.name);
     logger.info("validation", `${failedSteps.length} step(s) failed, sending feedback to agent`);
 
-    // Re-invoke agent with feedback prompt (passed directly, no shell escaping needed)
-    const agentCmd = adapter.buildCommand(feedback, {
-      model: plan.agent.model,
-      maxTurns: plan.agent.maxTurns,
-      timeout: plan.agent.timeout,
-      flags: plan.agent.flags,
-      workingDir: plan.input.mountPath,
-    });
-
+    // Re-invoke agent with feedback
     logger.info("agent", "Agent fixing validation failures...");
-    const fixResult = await execInContainer(container, agentCmd, {
-      env: agentEnv,
-      workingDir: plan.input.mountPath,
-      timeout: plan.agent.timeout,
-    });
+    const fixResult = await invokeAgent(
+      container, adapter, feedback, agentOptions, agentEnv, `fix-${attempt}`
+    );
 
     if (fixResult.exitCode !== 0) {
       logger.warn("agent", `Agent fix attempt exited with code ${fixResult.exitCode}`);

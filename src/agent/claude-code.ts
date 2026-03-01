@@ -3,34 +3,25 @@ import type { AgentAdapter, AgentOptions } from "./types.js";
 export const claudeCodeAdapter: AgentAdapter = {
   name: "claude-code",
 
-  buildCommand(prompt: string, options: AgentOptions): string[] {
-    const cmd = [
-      "claude",
-      "-p", prompt,
-      "--output-format", "text",
-    ];
+  buildShellCommand(promptFile: string, options: AgentOptions): string {
+    let cmd = `cat "${promptFile}" | claude -p - --output-format text`;
 
     if (options.maxTurns > 0) {
-      cmd.push("--max-turns", String(options.maxTurns));
+      cmd += ` --max-turns ${options.maxTurns}`;
     }
 
     if (options.model) {
-      cmd.push("--model", options.model);
+      cmd += ` --model ${shellEscape(options.model)}`;
     }
 
     for (const flag of options.flags) {
-      cmd.push(flag);
+      cmd += ` ${shellEscape(flag)}`;
     }
 
     return cmd;
   },
-
-  buildEnv(secretEnv: Record<string, string>): string[] {
-    const env: string[] = [];
-    if (secretEnv.ANTHROPIC_API_KEY_FILE) {
-      env.push(`ANTHROPIC_API_KEY=$(cat ${secretEnv.ANTHROPIC_API_KEY_FILE})`);
-    }
-    env.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
-    return env;
-  },
 };
+
+function shellEscape(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}

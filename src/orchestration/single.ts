@@ -3,8 +3,9 @@ import type { Logger } from "../logging/logger.js";
 import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
 import { getAgentAdapter } from "../agent/registry.js";
+import { invokeAgent } from "../agent/invoke.js";
 import { buildPrompt } from "../context/prompt.js";
-import { createContainer, execInContainer } from "../container/runner.js";
+import { createContainer } from "../container/runner.js";
 import { ensureImage } from "../container/builder.js";
 import { prepareRepoWorkspace, prepareFilesWorkspace } from "../container/workspace.js";
 import { createIsolatedNetwork, applyFirewall } from "../container/network.js";
@@ -101,25 +102,21 @@ export async function executeSingleAgent(
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
 
-    // 7. Build prompt and invoke agent
-    // Prompt is passed directly as a command argument — Docker exec does NOT do shell expansion,
-    // so no escaping is needed regardless of prompt content.
+    // 7. Build prompt and invoke agent via temp file (avoids ARG_MAX / escaping issues)
     const prompt = buildPrompt(plan);
     const adapter = getAgentAdapter(plan.agent.type);
-    const agentCmd = adapter.buildCommand(prompt, {
+    const agentOptions = {
       model: plan.agent.model,
       maxTurns: plan.agent.maxTurns,
       timeout: plan.agent.timeout,
       flags: plan.agent.flags,
       workingDir: plan.input.mountPath,
-    });
+    };
 
     logger.info("agent", `Running ${plan.agent.type}...`);
-    const agentResult = await execInContainer(container, agentCmd, {
-      env: agentEnv,
-      workingDir: plan.input.mountPath,
-      timeout: plan.agent.timeout,
-    });
+    const agentResult = await invokeAgent(
+      container, adapter, prompt, agentOptions, agentEnv
+    );
 
     logger.info("agent", `Agent finished (exit ${agentResult.exitCode}, ${agentResult.durationMs}ms)`);
     if (agentResult.exitCode !== 0) {
@@ -134,7 +131,7 @@ export async function executeSingleAgent(
 
     logger.info("validate", `Running ${plan.validation.steps.length} validation steps...`);
     const validationResult = await runValidationLoop(
-      container, plan, adapter, agentEnv, logger
+      container, plan, adapter, agentOptions, agentEnv, logger
     );
 
     // --- Phase: Collect Output ---
