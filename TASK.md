@@ -1,1111 +1,435 @@
-# TASK: Build forgectl Phase 1 + Phase 2
+# TASK: Build forgectl Phase 3 + Phase 4
 
-Build the foundation and container engine for forgectl. After this task, the following must work:
+## What Already Exists (DO NOT REBUILD)
 
-1. `forgectl init --stack node` generates a starter `.forgectl/config.yaml`
-2. `forgectl auth add claude-code` stores an API key in the system keychain
-3. `forgectl auth list` shows stored credentials
-4. `forgectl workflows list` shows all 6 built-in workflows
-5. `forgectl workflows show code` prints the full code workflow definition
-6. The config loader reads `.forgectl/config.yaml`, validates with zod, merges with defaults
-7. The workflow resolver merges (workflow + config + CLI flags) into a `RunPlan`
-8. Docker images can be built and pulled via `dockerode`
-9. Containers can be created, started, exec'd into, stopped, and removed
-10. Repo workspaces can be copied into containers (with glob exclusions)
-11. File inputs can be mounted into containers at `/input`
-12. Credentials can be mounted as read-only files in containers
-13. Network isolation works in all three modes: open (default), allowlist (iptables), airgapped
-14. All unit tests pass
+Phase 1+2 is complete. The following is already working:
 
-Do NOT build: agent execution, validation loop, output collection, daemon, dashboard, multi-agent, or relay. Those are later phases. Focus on getting the foundation solid so everything else plugs in cleanly.
+- **Config system** (`src/config/`): Zod schemas (`ConfigSchema`, `WorkflowSchema`, `ValidationStepSchema`), YAML loader, `deepMerge`
+- **Workflow system** (`src/workflow/`): 6 built-in workflows (code, research, content, data, ops, general), registry, custom workflow loader, resolver that produces `RunPlan`
+- **Auth/BYOK** (`src/auth/`): keytar + file fallback store, Claude/Codex credential management, container mount preparation
+- **Container engine** (`src/container/`): builder (pull/build images), runner (`createContainer`, `execInContainer`, `destroyContainer`), workspace prep (repo mode with glob exclusions, files mode), network isolation (open/allowlist/airgapped), secrets mounting, cleanup
+- **CLI skeleton** (`src/cli/`): `run` (dry-run only), `auth`, `init`, `workflows`. Stubs for `submit`, `up`, `down`, `status`, `logs`
+- **Dockerfiles** (`dockerfiles/`): code-node20, research, content, data, ops + init-firewall.sh
+- **Utils** (`src/utils/`): template, slug, duration, timer, hash, ports
+- **Types** (`src/workflow/types.ts`): `RunPlan`, `NetworkConfig`, `ResourceConfig`, `ReviewConfig`, `CommitConfig`, etc.
+- **77 unit tests passing**, 5 integration tests (Docker)
 
----
+## What to Build Now
 
-## Step 1: Project Scaffolding
+### Phase 3: Single-Agent Execution (the core loop)
+1. Agent adapters (Claude Code + Codex)
+2. Prompt builder (workflow-aware)
+3. Context file injection
+4. Validation runner (sequential steps, retry loop)
+5. Validation feedback formatter (workflow-aware error messages)
+6. Git output collector (branch, commit, extract to host)
+7. File output collector (copy from container to host)
+8. Output dispatcher
+9. Pre-flight checks
+10. Wire `forgectl run` end-to-end (replace the stub)
+11. Terminal output (progress, phases, summary)
+12. JSON run log
+13. Logging infrastructure
 
-Create the project with these files:
+### Phase 4: Daemon + API
+14. Daemon lifecycle (PID file, start/stop)
+15. Fastify REST server
+16. Run queue
+17. SSE event streaming
+18. Wire daemon CLI commands (`up`, `down`, `status`, `submit`, `logs`)
 
-**package.json:**
-```json
-{
-  "name": "forgectl",
-  "version": "0.1.0",
-  "description": "Run AI agents in isolated Docker containers for any workflow",
-  "type": "module",
-  "bin": {
-    "forgectl": "./dist/index.js"
-  },
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "start": "node dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:docker": "FORGECTL_SKIP_DOCKER=false vitest run",
-    "lint": "eslint src/",
-    "typecheck": "tsc --noEmit",
-    "format": "prettier --write 'src/**/*.ts'"
-  },
-  "dependencies": {
-    "chalk": "^5.3.0",
-    "commander": "^12.1.0",
-    "dockerode": "^4.0.2",
-    "js-yaml": "^4.1.0",
-    "keytar": "^7.9.0",
-    "picomatch": "^4.0.2",
-    "zod": "^3.23.0"
-  },
-  "devDependencies": {
-    "@types/dockerode": "^3.3.31",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.14.0",
-    "@types/picomatch": "^3.0.1",
-    "eslint": "^9.0.0",
-    "prettier": "^3.3.0",
-    "tsup": "^8.1.0",
-    "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
-  },
-  "engines": {
-    "node": ">=20"
-  }
-}
-```
-
-**tsconfig.json:**
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": "src",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
-  },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "test"]
-}
-```
-
-**tsup.config.ts:**
-```typescript
-import { defineConfig } from "tsup";
-
-export default defineConfig({
-  entry: ["src/index.ts"],
-  format: ["esm"],
-  target: "node20",
-  outDir: "dist",
-  clean: true,
-  sourcemap: true,
-  dts: true,
-  banner: {
-    js: "#!/usr/bin/env node",
-  },
-});
-```
-
-**vitest.config.ts:**
-```typescript
-import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-  test: {
-    globals: true,
-    include: ["test/**/*.test.ts"],
-    testTimeout: 30000,
-  },
-});
-```
+After this task, `forgectl run --task "..." --workflow code` must work end-to-end: container starts → agent runs → validation checks → retries if needed → output collected → container destroyed.
 
 ---
 
-## Step 2: Utility Modules (`src/utils/`)
+## Step 1: Install New Dependencies
 
-### `src/utils/template.ts`
+Add these to package.json and install:
 
-Simple Mustache-style `{{variable}}` expansion. No library needed.
-
-```typescript
-/**
- * Expand {{variable}} placeholders in a template string.
- * Supports nested keys like {{commit.prefix}}.
- * Unresolved placeholders are left as-is.
- */
-export function expandTemplate(
-  template: string,
-  vars: Record<string, unknown>
-): string {
-  return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (match, key: string) => {
-    const parts = key.split(".");
-    let value: unknown = vars;
-    for (const part of parts) {
-      if (value == null || typeof value !== "object") return match;
-      value = (value as Record<string, unknown>)[part];
-    }
-    return value != null ? String(value) : match;
-  });
-}
+```bash
+npm install fastify @fastify/cors @fastify/static
+npm install -D @types/tar
 ```
 
-### `src/utils/slug.ts`
-
-```typescript
-/**
- * Generate a URL-safe slug from a task description.
- * "Add rate limiting to /api/upload" → "add-rate-limiting-to-api-upload"
- */
-export function slugify(text: string, maxLength = 50): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, maxLength);
-}
-```
-
-### `src/utils/duration.ts`
-
-```typescript
-/**
- * Parse a duration string like "30m", "1h", "90s" into milliseconds.
- */
-export function parseDuration(input: string): number {
-  const match = input.match(/^(\d+)(s|m|h)$/);
-  if (!match) throw new Error(`Invalid duration: "${input}". Use format like 30s, 5m, 1h`);
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  switch (unit) {
-    case "s": return value * 1000;
-    case "m": return value * 60 * 1000;
-    case "h": return value * 60 * 60 * 1000;
-    default: throw new Error(`Unknown duration unit: ${unit}`);
-  }
-}
-
-/**
- * Format milliseconds into human-readable string: "2m 47s"
- */
-export function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-}
-```
-
-### `src/utils/timer.ts`
-
-```typescript
-export class Timer {
-  private startTime: number;
-  constructor() { this.startTime = Date.now(); }
-  elapsed(): number { return Date.now() - this.startTime; }
-  reset(): void { this.startTime = Date.now(); }
-}
-```
-
-### `src/utils/hash.ts`
-
-```typescript
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-
-export function hashString(input: string): string {
-  return createHash("sha256").update(input).digest("hex").slice(0, 12);
-}
-
-export function hashFile(filePath: string): string {
-  return hashString(readFileSync(filePath, "utf-8"));
-}
-```
-
-### `src/utils/ports.ts`
-
-```typescript
-import { createServer } from "node:net";
-
-export async function findAvailablePort(preferred: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(preferred, () => {
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : preferred;
-      server.close(() => resolve(port));
-    });
-    server.on("error", () => {
-      // Preferred port taken, let OS assign
-      const fallback = createServer();
-      fallback.listen(0, () => {
-        const addr = fallback.address();
-        const port = typeof addr === "object" && addr ? addr.port : 0;
-        fallback.close(() => resolve(port));
-      });
-      fallback.on("error", reject);
-    });
-  });
-}
-```
-
-Write tests for all utils at `test/unit/utils.test.ts`.
+Note: `tar` is NOT needed. File extraction uses dockerode's `getArchive` which returns a tar stream — use the built-in `node:stream` and `node:zlib` APIs or `container.getArchive` + pipe to fs.
 
 ---
 
-## Step 3: Config Schema + Loader (`src/config/`)
+## Step 2: Logging Infrastructure (`src/logging/`)
 
-### `src/config/schema.ts`
+Create a structured logging system that supports both terminal output and JSON run logs.
 
-Define all Zod schemas. These are the source of truth for the config shape.
-
-```typescript
-import { z } from "zod";
-
-const duration = z.string().regex(/^\d+(s|m|h)$/, "Must be a duration like 30s, 5m, 1h");
-
-export const AgentType = z.enum(["claude-code", "codex"]);
-export type AgentType = z.infer<typeof AgentType>;
-
-export const NetworkMode = z.enum(["open", "allowlist", "airgapped"]);
-export type NetworkMode = z.infer<typeof NetworkMode>;
-
-export const FailureAction = z.enum(["abandon", "output-wip", "pause"]);
-export const OrchestrationMode = z.enum(["single", "review", "parallel"]);
-export const InputMode = z.enum(["repo", "files", "both"]);
-export const OutputMode = z.enum(["git", "files"]);
-
-export const ValidationStepSchema = z.object({
-  name: z.string(),
-  command: z.string(),
-  retries: z.number().int().min(0).default(3),
-  timeout: duration.optional(),
-  description: z.string().default(""),
-});
-export type ValidationStep = z.infer<typeof ValidationStepSchema>;
-
-export const WorkflowSchema = z.object({
-  name: z.string(),
-  description: z.string().default(""),
-  extends: z.string().optional(),   // Name of built-in workflow to inherit from
-  container: z.object({
-    image: z.string(),
-    network: z.object({
-      mode: NetworkMode.default("open"),
-      allow: z.array(z.string()).default([]),
-    }).default({}),
-  }),
-  input: z.object({
-    mode: InputMode.default("repo"),
-    mountPath: z.string().default("/workspace"),
-  }).default({}),
-  tools: z.array(z.string()).default([]),
-  system: z.string().default(""),
-  validation: z.object({
-    steps: z.array(ValidationStepSchema).default([]),
-    on_failure: FailureAction.default("abandon"),
-  }).default({}),
-  output: z.object({
-    mode: OutputMode.default("git"),
-    path: z.string().default("/workspace"),
-    collect: z.array(z.string()).default([]),
-  }).default({}),
-  review: z.object({
-    enabled: z.boolean().default(false),
-    system: z.string().default(""),
-  }).default({}),
-});
-export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
-
-export const ConfigSchema = z.object({
-  agent: z.object({
-    type: AgentType.default("claude-code"),
-    model: z.string().default(""),
-    max_turns: z.number().int().default(50),
-    timeout: duration.default("30m"),
-    flags: z.array(z.string()).default([]),
-  }).default({}),
-
-  container: z.object({
-    image: z.string().optional(),       // Override workflow's default image
-    dockerfile: z.string().optional(),  // Build from custom Dockerfile
-    network: z.object({
-      mode: NetworkMode.optional(),     // Override workflow's network mode
-      allow: z.array(z.string()).optional(),
-    }).default({}),
-    resources: z.object({
-      memory: z.string().default("4g"),
-      cpus: z.number().default(2),
-    }).default({}),
-  }).default({}),
-
-  repo: z.object({
-    branch: z.object({
-      template: z.string().default("forge/{{slug}}/{{ts}}"),
-      base: z.string().default("main"),
-    }).default({}),
-    exclude: z.array(z.string()).default([
-      "node_modules/", ".git/objects/", "dist/", "build/", "*.log", ".env", ".env.*",
-    ]),
-  }).default({}),
-
-  orchestration: z.object({
-    mode: OrchestrationMode.default("single"),
-    review: z.object({
-      max_rounds: z.number().int().default(3),
-    }).default({}),
-  }).default({}),
-
-  commit: z.object({
-    message: z.object({
-      prefix: z.string().default("[forge]"),
-      template: z.string().default("{{prefix}} {{summary}}"),
-      include_task: z.boolean().default(true),
-    }).default({}),
-    author: z.object({
-      name: z.string().default("forgectl"),
-      email: z.string().default("forge@localhost"),
-    }).default({}),
-    sign: z.boolean().default(false),
-  }).default({}),
-
-  output: z.object({
-    dir: z.string().default("./forge-output"),
-    log_dir: z.string().default(".forgectl/runs"),
-  }).default({}),
-});
-
-export type ForgectlConfig = z.infer<typeof ConfigSchema>;
-```
-
-### `src/config/loader.ts`
+### `src/logging/logger.ts`
 
 ```typescript
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
-import yaml from "js-yaml";
-import { ConfigSchema, type ForgectlConfig } from "./schema.js";
+import chalk from "chalk";
 
-const CONFIG_FILENAMES = [".forgectl/config.yaml", ".forgectl/config.yml"];
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
-/**
- * Find the config file by walking up directories.
- * Check: CLI path → cwd → parent dirs → ~/.forgectl/config.yaml
- */
-export function findConfigFile(explicitPath?: string): string | null {
-  if (explicitPath) {
-    if (existsSync(explicitPath)) return resolve(explicitPath);
-    throw new Error(`Config file not found: ${explicitPath}`);
-  }
-
-  // Walk up from cwd
-  let dir = process.cwd();
-  while (true) {
-    for (const name of CONFIG_FILENAMES) {
-      const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
-    }
-    const parent = resolve(dir, "..");
-    if (parent === dir) break; // Reached filesystem root
-    dir = parent;
-  }
-
-  // Check home directory
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  for (const name of CONFIG_FILENAMES) {
-    const candidate = join(home, name);
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return null; // No config found — use defaults
+export interface LogEntry {
+  timestamp: string;
+  level: LogLevel;
+  phase: string;
+  message: string;
+  data?: Record<string, unknown>;
 }
 
-/**
- * Load config from file, validate with zod, return typed config.
- * Returns defaults if no config file exists.
- */
-export function loadConfig(explicitPath?: string): ForgectlConfig {
-  const configPath = findConfigFile(explicitPath);
+export class Logger {
+  private entries: LogEntry[] = [];
+  private verbose: boolean;
+  private listeners: Array<(entry: LogEntry) => void> = [];
 
-  if (!configPath) {
-    return ConfigSchema.parse({});
+  constructor(verbose = false) {
+    this.verbose = verbose;
   }
 
-  const raw = readFileSync(configPath, "utf-8");
-  const parsed = yaml.load(raw);
-
-  if (parsed == null || typeof parsed !== "object") {
-    return ConfigSchema.parse({});
+  private emit(level: LogLevel, phase: string, message: string, data?: Record<string, unknown>): void {
+    const entry: LogEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      phase,
+      message,
+      data,
+    };
+    this.entries.push(entry);
+    for (const listener of this.listeners) listener(entry);
   }
 
-  return ConfigSchema.parse(parsed);
-}
-
-/**
- * Deep merge two objects. `overrides` values take precedence.
- * Arrays are replaced (not merged). Undefined values in overrides are skipped.
- */
-export function deepMerge<T extends Record<string, unknown>>(
-  base: T,
-  overrides: Partial<T>
-): T {
-  const result = { ...base };
-  for (const key of Object.keys(overrides) as Array<keyof T>) {
-    const overrideVal = overrides[key];
-    if (overrideVal === undefined) continue;
-    const baseVal = base[key];
-    if (
-      baseVal != null &&
-      typeof baseVal === "object" &&
-      !Array.isArray(baseVal) &&
-      overrideVal != null &&
-      typeof overrideVal === "object" &&
-      !Array.isArray(overrideVal)
-    ) {
-      result[key] = deepMerge(
-        baseVal as Record<string, unknown>,
-        overrideVal as Record<string, unknown>
-      ) as T[keyof T];
-    } else {
-      result[key] = overrideVal as T[keyof T];
-    }
+  debug(phase: string, message: string, data?: Record<string, unknown>): void {
+    this.emit("debug", phase, message, data);
+    if (this.verbose) console.log(chalk.gray(`  [${phase}] ${message}`));
   }
-  return result;
+
+  info(phase: string, message: string, data?: Record<string, unknown>): void {
+    this.emit("info", phase, message, data);
+    console.log(chalk.cyan(`  [${phase}]`) + ` ${message}`);
+  }
+
+  warn(phase: string, message: string, data?: Record<string, unknown>): void {
+    this.emit("warn", phase, message, data);
+    console.log(chalk.yellow(`  ⚠ [${phase}]`) + ` ${message}`);
+  }
+
+  error(phase: string, message: string, data?: Record<string, unknown>): void {
+    this.emit("error", phase, message, data);
+    console.error(chalk.red(`  ✗ [${phase}]`) + ` ${message}`);
+  }
+
+  /** Subscribe to log events (for SSE streaming) */
+  onEntry(fn: (entry: LogEntry) => void): void {
+    this.listeners.push(fn);
+  }
+
+  /** Get all entries (for JSON run log) */
+  getEntries(): LogEntry[] {
+    return [...this.entries];
+  }
 }
 ```
 
-Write tests at `test/unit/config.test.ts`: test schema validation, test default values, test loading from YAML string, test deep merge.
+### `src/logging/events.ts`
 
----
-
-## Step 4: Workflow System (`src/workflow/`)
-
-### `src/workflow/types.ts`
-
-Re-export the `WorkflowDefinition` type from schema.ts. Add the `RunPlan` interface:
+Event emitter for run lifecycle events (used by daemon SSE later):
 
 ```typescript
-import type { WorkflowDefinition, AgentType, NetworkMode, ValidationStep, ForgectlConfig } from "../config/schema.js";
+import { EventEmitter } from "node:events";
 
-export type { WorkflowDefinition };
-
-export interface NetworkConfig {
-  mode: "open" | "allowlist" | "airgapped";
-  dockerNetwork: string;       // "bridge" for open, "none" for airgapped, "forgectl-<runId>" for allowlist
-  allow?: string[];            // Only for allowlist mode
+export interface RunEvent {
+  runId: string;
+  type: "started" | "phase" | "validation" | "retry" | "output" | "completed" | "failed";
+  timestamp: string;
+  data: Record<string, unknown>;
 }
 
-export interface ResourceConfig {
-  memory: string;
-  cpus: number;
-}
+export const runEvents = new EventEmitter();
 
-export interface InjectConfig {
-  source: string;   // Host path
-  target: string;   // Container path
+export function emitRunEvent(event: RunEvent): void {
+  runEvents.emit("run", event);
+  runEvents.emit(`run:${event.runId}`, event);
 }
+```
 
-export interface ReviewConfig {
-  enabled: boolean;
-  system: string;
-  maxRounds: number;
-  agent: AgentType;
-  model: string;
-}
+### `src/logging/run-log.ts`
 
-export interface CommitConfig {
-  message: { prefix: string; template: string; includeTask: boolean };
-  author: { name: string; email: string };
-  sign: boolean;
-}
+Save a JSON run log after each run:
 
-export interface RunPlan {
+```typescript
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { RunPlan } from "../workflow/types.js";
+import type { LogEntry } from "./logger.js";
+
+export interface RunLog {
   runId: string;
   task: string;
-  workflow: WorkflowDefinition;
-  agent: {
-    type: AgentType;
-    model: string;
-    maxTurns: number;
-    timeout: number;   // in ms
-    flags: string[];
-  };
-  container: {
-    image: string;
-    dockerfile?: string;
-    network: NetworkConfig;
-    resources: ResourceConfig;
-  };
-  input: {
-    mode: "repo" | "files" | "both";
-    sources: string[];       // Paths to repo or input files
-    mountPath: string;
-    exclude: string[];       // For repo mode
-  };
-  context: {
-    system: string;
-    files: string[];
-    inject: InjectConfig[];
-  };
+  workflow: string;
+  agent: string;
+  status: "success" | "failed" | "abandoned";
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
   validation: {
-    steps: ValidationStep[];
-    onFailure: "abandon" | "output-wip" | "pause";
+    attempts: number;
+    steps: Array<{
+      name: string;
+      passed: boolean;
+      attempts: number;
+    }>;
   };
   output: {
     mode: "git" | "files";
-    path: string;            // Container path
-    collect: string[];       // Globs for file mode
-    hostDir: string;         // Where file output lands on host
+    branch?: string;
+    dir?: string;
+    files?: string[];
   };
-  orchestration: {
-    mode: "single" | "review" | "parallel";
-    review: ReviewConfig;
-  };
-  commit: CommitConfig;
+  entries: LogEntry[];
+}
+
+export function saveRunLog(log: RunLog, logDir: string): string {
+  const dir = resolve(logDir);
+  mkdirSync(dir, { recursive: true });
+  const filePath = join(dir, `${log.runId}.json`);
+  writeFileSync(filePath, JSON.stringify(log, null, 2));
+  return filePath;
 }
 ```
 
-### `src/workflow/builtins/`
+---
 
-Create one TypeScript file per built-in workflow. Each exports a `WorkflowDefinition` object.
+## Step 3: Agent Adapters (`src/agent/`)
 
-Create these files with the exact content from the workflow YAML definitions in the spec:
-- `src/workflow/builtins/code.ts`
-- `src/workflow/builtins/research.ts`
-- `src/workflow/builtins/content.ts`
-- `src/workflow/builtins/data.ts`
-- `src/workflow/builtins/ops.ts`
-- `src/workflow/builtins/general.ts`
+### `src/agent/types.ts`
 
-The `general` workflow is:
 ```typescript
-export const generalWorkflow: WorkflowDefinition = {
-  name: "general",
-  description: "General-purpose workflow. Configure via project config.",
-  container: {
-    image: "forgectl/code-node20",
-    network: { mode: "open", allow: [] },
+export interface AgentAdapter {
+  name: string;
+  /** Build the command array to exec inside the container */
+  buildCommand(prompt: string, options: AgentOptions): string[];
+  /** Build environment variables needed */
+  buildEnv(secretEnv: Record<string, string>): string[];
+}
+
+export interface AgentOptions {
+  model: string;
+  maxTurns: number;
+  timeout: number;     // ms
+  flags: string[];
+  workingDir: string;
+}
+```
+
+### `src/agent/claude-code.ts`
+
+```typescript
+import type { AgentAdapter, AgentOptions } from "./types.js";
+
+export const claudeCodeAdapter: AgentAdapter = {
+  name: "claude-code",
+
+  buildCommand(prompt: string, options: AgentOptions): string[] {
+    const cmd = [
+      "claude",
+      "-p", prompt,            // Print mode (non-interactive)
+      "--output-format", "text",
+    ];
+
+    if (options.maxTurns > 0) {
+      cmd.push("--max-turns", String(options.maxTurns));
+    }
+
+    if (options.model) {
+      cmd.push("--model", options.model);
+    }
+
+    // Pass through any extra flags from config
+    for (const flag of options.flags) {
+      cmd.push(flag);
+    }
+
+    return cmd;
   },
-  input: { mode: "files", mountPath: "/input" },
-  tools: ["git", "curl", "jq", "python3"],
-  system: `You are an AI assistant working in an isolated container.
-Input files (if any) are in /input. Write output to /output.
-Complete the task as instructed.`,
-  validation: { steps: [], on_failure: "output-wip" },
-  output: { mode: "files", path: "/output", collect: ["**/*"] },
-  review: { enabled: false, system: "" },
+
+  buildEnv(secretEnv: Record<string, string>): string[] {
+    const env: string[] = [];
+    // Read API key from mounted secret file
+    if (secretEnv.ANTHROPIC_API_KEY_FILE) {
+      env.push(`ANTHROPIC_API_KEY=$(cat ${secretEnv.ANTHROPIC_API_KEY_FILE})`);
+    }
+    // Disable telemetry in container
+    env.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
+    return env;
+  },
 };
 ```
 
-### `src/workflow/registry.ts`
+### `src/agent/codex.ts`
 
 ```typescript
-import type { WorkflowDefinition } from "./types.js";
-import { codeWorkflow } from "./builtins/code.js";
-import { researchWorkflow } from "./builtins/research.js";
-import { contentWorkflow } from "./builtins/content.js";
-import { dataWorkflow } from "./builtins/data.js";
-import { opsWorkflow } from "./builtins/ops.js";
-import { generalWorkflow } from "./builtins/general.js";
-import { loadCustomWorkflows } from "./custom.js";
-import { deepMerge } from "../config/loader.js";
+import type { AgentAdapter, AgentOptions } from "./types.js";
 
-const BUILTINS: Record<string, WorkflowDefinition> = {
-  code: codeWorkflow,
-  research: researchWorkflow,
-  content: contentWorkflow,
-  data: dataWorkflow,
-  ops: opsWorkflow,
-  general: generalWorkflow,
+export const codexAdapter: AgentAdapter = {
+  name: "codex",
+
+  buildCommand(prompt: string, options: AgentOptions): string[] {
+    const cmd = [
+      "codex",
+      "--quiet",
+      "--approval-mode", "full-auto",
+      prompt,
+    ];
+
+    if (options.model) {
+      cmd.push("--model", options.model);
+    }
+
+    for (const flag of options.flags) {
+      cmd.push(flag);
+    }
+
+    return cmd;
+  },
+
+  buildEnv(secretEnv: Record<string, string>): string[] {
+    const env: string[] = [];
+    if (secretEnv.OPENAI_API_KEY_FILE) {
+      env.push(`OPENAI_API_KEY=$(cat ${secretEnv.OPENAI_API_KEY_FILE})`);
+    }
+    return env;
+  },
+};
+```
+
+### `src/agent/registry.ts`
+
+```typescript
+import type { AgentAdapter } from "./types.js";
+import { claudeCodeAdapter } from "./claude-code.js";
+import { codexAdapter } from "./codex.js";
+
+const ADAPTERS: Record<string, AgentAdapter> = {
+  "claude-code": claudeCodeAdapter,
+  "codex": codexAdapter,
 };
 
-/**
- * Get a workflow by name. Checks built-ins first, then custom workflows.
- * Custom workflows with `extends` inherit from the base and override.
- */
-export function getWorkflow(name: string, projectDir?: string): WorkflowDefinition {
-  // Check built-ins
-  if (BUILTINS[name]) return BUILTINS[name];
-
-  // Check custom workflows
-  const customs = loadCustomWorkflows(projectDir);
-  const custom = customs[name];
-  if (!custom) {
-    throw new Error(
-      `Unknown workflow: "${name}". Available: ${listWorkflowNames(projectDir).join(", ")}`
-    );
-  }
-
-  // If custom extends a built-in, merge
-  if (custom.extends && BUILTINS[custom.extends]) {
-    return deepMerge(BUILTINS[custom.extends], custom) as WorkflowDefinition;
-  }
-
-  return custom;
-}
-
-export function listWorkflowNames(projectDir?: string): string[] {
-  const customNames = Object.keys(loadCustomWorkflows(projectDir));
-  return [...Object.keys(BUILTINS), ...customNames];
-}
-
-export function listWorkflows(projectDir?: string): WorkflowDefinition[] {
-  const customs = loadCustomWorkflows(projectDir);
-  return [...Object.values(BUILTINS), ...Object.values(customs)];
-}
-```
-
-### `src/workflow/custom.ts`
-
-Load user-defined workflow YAML files from `.forgectl/workflows/`.
-
-```typescript
-import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-import yaml from "js-yaml";
-import { WorkflowSchema, type WorkflowDefinition } from "../config/schema.js";
-
-export function loadCustomWorkflows(
-  projectDir?: string
-): Record<string, WorkflowDefinition & { extends?: string }> {
-  const dir = resolve(projectDir || process.cwd(), ".forgectl", "workflows");
-  if (!existsSync(dir)) return {};
-
-  const result: Record<string, WorkflowDefinition & { extends?: string }> = {};
-
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".yaml") && !file.endsWith(".yml")) continue;
-    const raw = readFileSync(join(dir, file), "utf-8");
-    const parsed = yaml.load(raw);
-    if (parsed == null || typeof parsed !== "object") continue;
-
-    // Validate but allow `extends` field
-    const workflow = WorkflowSchema.parse(parsed);
-    const extendsField = (parsed as Record<string, unknown>).extends as string | undefined;
-    result[workflow.name] = { ...workflow, extends: extendsField };
-  }
-
-  return result;
-}
-```
-
-### `src/workflow/resolver.ts`
-
-The resolver produces a `RunPlan` from (workflow + config + CLI options).
-
-```typescript
-import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
-import type { ForgectlConfig } from "../config/schema.js";
-import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
-import { getWorkflow } from "./registry.js";
-import { parseDuration } from "../utils/duration.js";
-import { slugify } from "../utils/slug.js";
-
-export interface CLIOptions {
-  task: string;
-  workflow?: string;
-  repo?: string;
-  input?: string[];
-  context?: string[];
-  agent?: string;
-  model?: string;
-  review?: boolean;
-  noReview?: boolean;
-  outputDir?: string;
-  timeout?: string;
-  verbose?: boolean;
-  noCleanup?: boolean;
-  dryRun?: boolean;
-}
-
-/**
- * Auto-detect workflow from CLI inputs if not explicitly specified.
- */
-function detectWorkflow(options: CLIOptions): string {
-  if (options.workflow) return options.workflow;
-  if (options.repo) return "code";
-  if (options.input?.some(f => /\.(csv|tsv|json|parquet|xlsx)$/i.test(f))) return "data";
-  if (options.input?.some(f => /\.(md|txt|docx|doc)$/i.test(f))) return "content";
-  // Check if cwd is a git repo
-  try {
-    const { execSync } = require("node:child_process");
-    execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
-    return "code";
-  } catch {
-    return "general";
-  }
-}
-
-/**
- * Resolve network configuration from workflow + config overrides.
- */
-function resolveNetwork(
-  workflow: WorkflowDefinition,
-  config: ForgectlConfig,
-  agentType: string,
-  runId: string
-): NetworkConfig {
-  const mode = config.container.network.mode ?? workflow.container.network.mode;
-
-  if (mode === "open") {
-    return { mode: "open", dockerNetwork: "bridge" };
-  }
-
-  if (mode === "airgapped") {
-    return { mode: "airgapped", dockerNetwork: "none" };
-  }
-
-  // Allowlist mode
-  const allow = [
-    ...workflow.container.network.allow,
-    ...(config.container.network.allow ?? []),
-  ];
-
-  // Auto-add LLM API domain
-  if (agentType === "claude-code" && !allow.includes("api.anthropic.com")) {
-    allow.push("api.anthropic.com");
-  }
-  if (agentType === "codex" && !allow.includes("api.openai.com")) {
-    allow.push("api.openai.com");
-  }
-
-  return {
-    mode: "allowlist",
-    dockerNetwork: `forgectl-${runId}`,
-    allow,
-  };
-}
-
-/**
- * Build a complete RunPlan from workflow definition + config + CLI options.
- */
-export function resolveRunPlan(
-  config: ForgectlConfig,
-  options: CLIOptions
-): RunPlan {
-  const workflowName = detectWorkflow(options);
-  const workflow = getWorkflow(workflowName);
-  const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
-  const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
-  const slug = slugify(options.task);
-  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
-
-  // Determine input sources
-  const inputSources: string[] = [];
-  if (workflow.input.mode === "repo" || workflow.input.mode === "both") {
-    inputSources.push(resolve(options.repo || config.repo?.branch?.base ? "." : "."));
-  }
-  if (options.input) {
-    inputSources.push(...options.input.map(p => resolve(p)));
-  }
-
-  // Determine review config
-  const reviewEnabled = options.review === true
-    ? true
-    : options.noReview === true
-    ? false
-    : workflow.review.enabled;
-
-  return {
-    runId,
-    task: options.task,
-    workflow,
-    agent: {
-      type: agentType,
-      model: options.model ?? config.agent.model,
-      maxTurns: config.agent.max_turns,
-      timeout: parseDuration(options.timeout ?? config.agent.timeout),
-      flags: config.agent.flags,
-    },
-    container: {
-      image: config.container.image ?? workflow.container.image,
-      dockerfile: config.container.dockerfile,
-      network: resolveNetwork(workflow, config, agentType, runId),
-      resources: {
-        memory: config.container.resources.memory,
-        cpus: config.container.resources.cpus,
-      },
-    },
-    input: {
-      mode: workflow.input.mode,
-      sources: inputSources.length > 0 ? inputSources : [resolve(".")],
-      mountPath: workflow.input.mountPath,
-      exclude: config.repo.exclude,
-    },
-    context: {
-      system: workflow.system,
-      files: options.context ?? [],
-      inject: [],
-    },
-    validation: {
-      steps: workflow.validation.steps,
-      onFailure: workflow.validation.on_failure,
-    },
-    output: {
-      mode: workflow.output.mode,
-      path: workflow.output.path,
-      collect: workflow.output.collect,
-      hostDir: resolve(options.outputDir ?? config.output.dir, runId),
-    },
-    orchestration: {
-      mode: reviewEnabled && config.orchestration.mode === "single" ? "review" : config.orchestration.mode,
-      review: {
-        enabled: reviewEnabled,
-        system: workflow.review.system,
-        maxRounds: config.orchestration.review.max_rounds,
-        agent: agentType,
-        model: options.model ?? config.agent.model,
-      },
-    },
-    commit: {
-      message: {
-        prefix: config.commit.message.prefix,
-        template: config.commit.message.template,
-        includeTask: config.commit.message.include_task,
-      },
-      author: config.commit.author,
-      sign: config.commit.sign,
-    },
-  };
-}
-```
-
-Write tests at `test/unit/workflow-resolver.test.ts`: test auto-detection, test merge priority, test review flag override, test network resolution for each mode.
-
----
-
-## Step 5: Auth / BYOK (`src/auth/`)
-
-### `src/auth/store.ts`
-
-Abstract credential store. Uses `keytar` for system keychain access.
-
-```typescript
-import keytar from "keytar";
-
-const SERVICE_NAME = "forgectl";
-
-export async function setCredential(provider: string, key: string, value: string): Promise<void> {
-  await keytar.setPassword(SERVICE_NAME, `${provider}:${key}`, value);
-}
-
-export async function getCredential(provider: string, key: string): Promise<string | null> {
-  return keytar.getPassword(SERVICE_NAME, `${provider}:${key}`);
-}
-
-export async function deleteCredential(provider: string, key: string): Promise<boolean> {
-  return keytar.deletePassword(SERVICE_NAME, `${provider}:${key}`);
-}
-
-export async function listCredentials(): Promise<Array<{ provider: string; key: string }>> {
-  const all = await keytar.findCredentials(SERVICE_NAME);
-  return all.map(cred => {
-    const [provider, key] = cred.account.split(":", 2);
-    return { provider, key };
-  });
-}
-```
-
-### `src/auth/claude.ts`
-
-```typescript
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { getCredential, setCredential } from "./store.js";
-
-const PROVIDER = "claude-code";
-
-export interface ClaudeAuth {
-  type: "api_key" | "oauth_session";
-  apiKey?: string;
-  sessionDir?: string;
-}
-
-export async function getClaudeAuth(): Promise<ClaudeAuth | null> {
-  // Check for API key first
-  const apiKey = await getCredential(PROVIDER, "api_key");
-  if (apiKey) return { type: "api_key", apiKey };
-
-  // Check for OAuth session
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  const claudeDir = join(home, ".claude");
-  if (existsSync(claudeDir)) return { type: "oauth_session", sessionDir: claudeDir };
-
-  return null;
-}
-
-export async function setClaudeApiKey(key: string): Promise<void> {
-  await setCredential(PROVIDER, "api_key", key);
-}
-```
-
-### `src/auth/codex.ts`
-
-```typescript
-import { getCredential, setCredential } from "./store.js";
-
-const PROVIDER = "codex";
-
-export async function getCodexAuth(): Promise<string | null> {
-  return getCredential(PROVIDER, "api_key");
-}
-
-export async function setCodexApiKey(key: string): Promise<void> {
-  await setCredential(PROVIDER, "api_key", key);
-}
-```
-
-### `src/auth/mount.ts`
-
-Prepare credentials for container mounting.
-
-```typescript
-import { writeFileSync, mkdirSync, rmSync, chmodSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
-import type { ClaudeAuth } from "./claude.js";
-
-export interface ContainerMounts {
-  binds: string[];                   // Docker bind mount strings
-  env: Record<string, string>;       // Env vars to set in agent process
-  cleanup: () => void;               // Call after run to wipe temp files
-}
-
-export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerMounts {
-  const secretsDir = join(tmpdir(), `forgectl-secrets-${runId}-${randomBytes(4).toString("hex")}`);
-  mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
-  const binds: string[] = [];
-  const env: Record<string, string> = {};
-
-  if (auth.type === "api_key" && auth.apiKey) {
-    const keyPath = join(secretsDir, "anthropic_api_key");
-    writeFileSync(keyPath, auth.apiKey, { mode: 0o400 });
-    binds.push(`${secretsDir}:/run/secrets:ro`);
-    // Env injection happens at exec time: ANTHROPIC_API_KEY=$(cat /run/secrets/anthropic_api_key)
-    env.ANTHROPIC_API_KEY_FILE = "/run/secrets/anthropic_api_key";
-  } else if (auth.type === "oauth_session" && auth.sessionDir) {
-    binds.push(`${auth.sessionDir}:/home/node/.claude:ro`);
-  }
-
-  return {
-    binds,
-    env,
-    cleanup: () => { try { rmSync(secretsDir, { recursive: true, force: true }); } catch {} },
-  };
-}
-
-export function prepareCodexMounts(apiKey: string, runId: string): ContainerMounts {
-  const secretsDir = join(tmpdir(), `forgectl-secrets-${runId}-${randomBytes(4).toString("hex")}`);
-  mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
-
-  const keyPath = join(secretsDir, "openai_api_key");
-  writeFileSync(keyPath, apiKey, { mode: 0o400 });
-
-  return {
-    binds: [`${secretsDir}:/run/secrets:ro`],
-    env: { OPENAI_API_KEY_FILE: "/run/secrets/openai_api_key" },
-    cleanup: () => { try { rmSync(secretsDir, { recursive: true, force: true }); } catch {} },
-  };
+export function getAgentAdapter(name: string): AgentAdapter {
+  const adapter = ADAPTERS[name];
+  if (!adapter) throw new Error(`Unknown agent: "${name}". Available: ${Object.keys(ADAPTERS).join(", ")}`);
+  return adapter;
 }
 ```
 
 ---
 
-## Step 6: Container Engine (`src/container/`)
+## Step 4: Prompt Builder (`src/context/`)
 
-### `src/container/builder.ts`
+### `src/context/prompt.ts`
+
+Build the full prompt string from a RunPlan. This is what gets passed to the agent via `claude -p "..."`.
 
 ```typescript
-import Docker from "dockerode";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, basename } from "node:path";
+import type { RunPlan } from "../workflow/types.js";
 
-const docker = new Docker();
+export function buildPrompt(plan: RunPlan): string {
+  const parts: string[] = [];
 
-export async function imageExists(imageName: string): Promise<boolean> {
-  try {
-    await docker.getImage(imageName).inspect();
-    return true;
-  } catch {
-    return false;
+  // 1. Workflow system prompt
+  parts.push(plan.context.system || plan.workflow.system);
+
+  // 2. Context files (contents inlined with filename headers)
+  for (const file of plan.context.files) {
+    const absPath = resolve(file);
+    if (existsSync(absPath)) {
+      const content = readFileSync(absPath, "utf-8");
+      parts.push(`\n--- Context: ${basename(file)} ---\n${content}\n`);
+    }
   }
-}
 
-export async function pullImage(imageName: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    docker.pull(imageName, (err: Error | null, stream: NodeJS.ReadableStream) => {
-      if (err) return reject(err);
-      docker.modem.followProgress(stream, (err: Error | null) => {
-        if (err) return reject(err);
-        resolve();
-      });
-    });
-  });
-}
+  // 3. Available tools description
+  if (plan.workflow.tools.length > 0) {
+    parts.push(`\nAvailable tools in this container: ${plan.workflow.tools.join(", ")}\n`);
+  }
 
-export async function buildImage(
-  dockerfilePath: string,
-  contextPath: string,
-  tag: string
+  // 4. The task
+  parts.push(`\n--- Task ---\n${plan.task}\n`);
+
+  // 5. Validation instructions (so the agent knows what will be checked)
+  if (plan.validation.steps.length > 0) {
+    parts.push(`\nAfter you finish, these validation checks will run:`);
+    for (const step of plan.validation.steps) {
+      parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
+    }
+    parts.push(`\nIf any check fails, you'll receive the error output and must fix it.\n`);
+  }
+
+  // 6. Output instructions
+  if (plan.output.mode === "files") {
+    parts.push(`\nSave all output files to ${plan.output.path}\n`);
+  }
+
+  return parts.join("\n");
+}
+```
+
+### `src/context/inject.ts`
+
+Copy context files into the container:
+
+```typescript
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, basename } from "node:path";
+import type Docker from "dockerode";
+import { execInContainer } from "../container/runner.js";
+
+/**
+ * Copy context files from host into /input/context/ inside the container.
+ * These supplement the input files — they're extra reference material.
+ */
+export async function injectContextFiles(
+  container: Docker.Container,
+  files: string[]
 ): Promise<void> {
-  const stream = await docker.buildImage(
-    { context: contextPath, src: [dockerfilePath] },
-    { t: tag, dockerfile: dockerfilePath }
-  );
-  return new Promise((resolve, reject) => {
-    docker.modem.followProgress(stream, (err: Error | null) => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
-}
+  if (files.length === 0) return;
 
-export async function ensureImage(
-  imageName?: string,
-  dockerfilePath?: string,
-  contextPath?: string
-): Promise<string> {
-  if (dockerfilePath && contextPath) {
-    const tag = `forgectl-custom:latest`;
-    await buildImage(dockerfilePath, contextPath, tag);
-    return tag;
-  }
+  await execInContainer(container, ["mkdir", "-p", "/input/context"]);
 
-  const name = imageName || "forgectl/code-node20";
-  if (!(await imageExists(name))) {
-    await pullImage(name);
+  for (const file of files) {
+    const absPath = resolve(file);
+    if (!existsSync(absPath)) continue;
+
+    const content = readFileSync(absPath);
+    const name = basename(absPath);
+
+    // Write file content via exec (simpler than tar archive for small files)
+    await execInContainer(container, [
+      "sh", "-c", `cat > /input/context/${name}`,
+    ]);
+    // Alternative: use container.putArchive for binary files
+    // For now, rely on the prompt builder to inline context
   }
-  return name;
 }
 ```
 
-### `src/container/runner.ts`
+---
 
-The core container lifecycle manager.
+## Step 5: Validation System (`src/validation/`)
+
+This is the critical loop. Build it carefully.
+
+### `src/validation/step.ts`
+
+Execute a single validation step:
 
 ```typescript
-import Docker from "dockerode";
-import type { RunPlan, NetworkConfig } from "../workflow/types.js";
+import type Docker from "dockerode";
+import { execInContainer, type ExecResult } from "../container/runner.js";
+import type { ValidationStep } from "../config/schema.js";
+import { parseDuration } from "../utils/duration.js";
 
-const docker = new Docker();
-
-export interface ExecResult {
+export interface StepResult {
+  step: ValidationStep;
+  passed: boolean;
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -1113,785 +437,1309 @@ export interface ExecResult {
 }
 
 /**
- * Create and start a container based on the RunPlan.
+ * Run a single validation step inside the container.
  */
-export async function createContainer(
-  plan: RunPlan,
-  binds: string[]
-): Promise<Docker.Container> {
-  const networkMode = plan.container.network.dockerNetwork;
-
-  const container = await docker.createContainer({
-    Image: plan.container.image,
-    Cmd: ["sleep", "infinity"],
-    WorkingDir: plan.input.mountPath,
-    HostConfig: {
-      NetworkMode: networkMode,
-      Memory: parseMemory(plan.container.resources.memory),
-      NanoCpus: plan.container.resources.cpus * 1e9,
-      Binds: binds,
-      CapAdd: plan.container.network.mode === "allowlist" ? ["NET_ADMIN"] : [],
-    },
-    Tty: false,
-    OpenStdin: false,
-  });
-
-  await container.start();
-  return container;
-}
-
-/**
- * Execute a command inside a running container.
- * Returns stdout, stderr, exit code, and duration.
- */
-export async function execInContainer(
+export async function runValidationStep(
   container: Docker.Container,
-  cmd: string[],
-  options?: { env?: string[]; user?: string; workingDir?: string; timeout?: number }
-): Promise<ExecResult> {
-  const start = Date.now();
+  step: ValidationStep,
+  workingDir: string
+): Promise<StepResult> {
+  const timeout = step.timeout ? parseDuration(step.timeout) : 60_000; // default 60s per step
 
-  const exec = await container.exec({
-    Cmd: cmd,
-    AttachStdout: true,
-    AttachStderr: true,
-    Env: options?.env,
-    User: options?.user,
-    WorkingDir: options?.workingDir,
-  });
+  const result: ExecResult = await execInContainer(
+    container,
+    ["sh", "-c", step.command],
+    { workingDir, timeout }
+  );
 
-  const stream = await exec.start({ hijack: true, stdin: false });
-
-  return new Promise((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    // dockerode multiplexes stdout/stderr on the same stream
-    // We need to demux it
-    docker.modem.demuxStream(stream, 
-      { write: (chunk: Buffer) => stdoutChunks.push(chunk) } as NodeJS.WritableStream,
-      { write: (chunk: Buffer) => stderrChunks.push(chunk) } as NodeJS.WritableStream
-    );
-
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    if (options?.timeout) {
-      timeoutHandle = setTimeout(() => {
-        stream.destroy();
-        reject(new Error(`Command timed out after ${options.timeout}ms`));
-      }, options.timeout);
-    }
-
-    stream.on("end", async () => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      const inspection = await exec.inspect();
-      resolve({
-        exitCode: inspection.ExitCode ?? 1,
-        stdout: Buffer.concat(stdoutChunks).toString("utf-8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf-8"),
-        durationMs: Date.now() - start,
-      });
-    });
-
-    stream.on("error", (err: Error) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      reject(err);
-    });
-  });
-}
-
-/**
- * Stop and remove a container, handling errors gracefully.
- */
-export async function destroyContainer(container: Docker.Container): Promise<void> {
-  try { await container.stop({ t: 5 }); } catch {}
-  try { await container.remove({ force: true }); } catch {}
-}
-
-function parseMemory(mem: string): number {
-  const match = mem.match(/^(\d+)(g|m)$/i);
-  if (!match) return 4 * 1024 * 1024 * 1024; // default 4GB
-  const val = parseInt(match[1], 10);
-  return match[2].toLowerCase() === "g" ? val * 1024 ** 3 : val * 1024 ** 2;
+  return {
+    step,
+    passed: result.exitCode === 0,
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    durationMs: result.durationMs,
+  };
 }
 ```
 
-### `src/container/workspace.ts`
+### `src/validation/feedback.ts`
 
-Copy repo or files into the container.
+Format validation errors for the agent, with workflow-aware instructions:
+
+```typescript
+import type { StepResult } from "./step.js";
+
+const WORKFLOW_INSTRUCTIONS: Record<string, string> = {
+  code: "Fix the code issues. Do NOT weaken linting rules or delete tests.",
+  research: "Fix the report. Ensure sources are cited with URLs and claims are supported.",
+  content: "Revise the content. Address the style and quality issues.",
+  data: "Fix the data pipeline. Ensure output matches expected schema and no PII is present.",
+  ops: "Fix the infrastructure code. Ensure it passes validation/dry-run.",
+  general: "Fix the issues identified above.",
+};
+
+/**
+ * Format validation failure into a clear error message for the agent.
+ * Truncates long output to avoid blowing up the context window.
+ */
+export function formatFeedback(failedSteps: StepResult[], workflowName: string): string {
+  const parts: string[] = [
+    "VALIDATION FAILED. The following checks did not pass:\n",
+  ];
+
+  for (const { step, exitCode, stdout, stderr } of failedSteps) {
+    parts.push(`--- ${step.name} (exit code ${exitCode}) ---`);
+    parts.push(`Command: ${step.command}`);
+    if (stdout.trim()) {
+      parts.push(`STDOUT:\n${truncate(stdout, 3000)}`);
+    }
+    if (stderr.trim()) {
+      parts.push(`STDERR:\n${truncate(stderr, 3000)}`);
+    }
+    parts.push("");
+  }
+
+  const instruction = WORKFLOW_INSTRUCTIONS[workflowName] || WORKFLOW_INSTRUCTIONS.general;
+  parts.push(instruction);
+  parts.push("\nFix the issues and the checks will run again.");
+
+  return parts.join("\n");
+}
+
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const half = Math.floor(maxLen / 2);
+  return text.slice(0, half) + "\n\n... (truncated) ...\n\n" + text.slice(-half);
+}
+```
+
+### `src/validation/runner.ts`
+
+The main validation retry loop. This is the core quality gate.
+
+```typescript
+import type Docker from "dockerode";
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { AgentAdapter, AgentOptions } from "../agent/types.js";
+import { runValidationStep, type StepResult } from "./step.js";
+import { formatFeedback } from "./feedback.js";
+import { execInContainer } from "../container/runner.js";
+
+export interface ValidationResult {
+  passed: boolean;
+  totalAttempts: number;
+  stepResults: Array<{
+    name: string;
+    passed: boolean;
+    attempts: number;
+  }>;
+}
+
+/**
+ * Run all validation steps. If any fail, format feedback, re-invoke the agent,
+ * then restart ALL validation steps from the top. Repeat up to maxRetries.
+ *
+ * This is the core quality loop:
+ * 1. Run all steps sequentially
+ * 2. Collect all failures
+ * 3. If any failed: feed errors to agent → agent fixes → go to step 1
+ * 4. If all pass: return success
+ */
+export async function runValidationLoop(
+  container: Docker.Container,
+  plan: RunPlan,
+  adapter: AgentAdapter,
+  agentEnv: string[],
+  logger: Logger
+): Promise<ValidationResult> {
+  const steps = plan.validation.steps;
+  if (steps.length === 0) {
+    logger.info("validation", "No validation steps configured");
+    return { passed: true, totalAttempts: 0, stepResults: [] };
+  }
+
+  const maxRetries = Math.max(...steps.map(s => s.retries));
+  const stepAttemptCounts: Record<string, number> = {};
+  for (const step of steps) {
+    stepAttemptCounts[step.name] = 0;
+  }
+
+  let attempt = 0;
+
+  while (attempt <= maxRetries) {
+    attempt++;
+    logger.info("validation", `Validation round ${attempt}/${maxRetries + 1}`);
+
+    // Run ALL steps sequentially
+    const results: StepResult[] = [];
+    let allPassed = true;
+
+    for (const step of steps) {
+      logger.debug("validation", `Running: ${step.name} — ${step.command}`);
+      const result = await runValidationStep(container, step, plan.input.mountPath);
+      results.push(result);
+      stepAttemptCounts[step.name]++;
+
+      if (result.passed) {
+        logger.info("validation", `✔ ${step.name} passed (${result.durationMs}ms)`);
+      } else {
+        logger.warn("validation", `✗ ${step.name} failed (exit ${result.exitCode})`);
+        allPassed = false;
+      }
+    }
+
+    if (allPassed) {
+      logger.info("validation", "All validation steps passed");
+      return {
+        passed: true,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: true,
+          attempts: stepAttemptCounts[s.name],
+        })),
+      };
+    }
+
+    // Check if we have retries left
+    if (attempt > maxRetries) {
+      break;
+    }
+
+    // Feed errors back to agent
+    const failedSteps = results.filter(r => !r.passed);
+    const feedback = formatFeedback(failedSteps, plan.workflow.name);
+    logger.info("validation", `${failedSteps.length} step(s) failed, sending feedback to agent`);
+
+    // Re-invoke agent with feedback
+    const fixPrompt = feedback;
+    const agentCmd = adapter.buildCommand(fixPrompt, {
+      model: plan.agent.model,
+      maxTurns: plan.agent.maxTurns,
+      timeout: plan.agent.timeout,
+      flags: plan.agent.flags,
+      workingDir: plan.input.mountPath,
+    });
+
+    // Wrap in shell to inject env
+    const envPrefix = agentEnv.join(" ");
+    const fullCmd = envPrefix
+      ? ["sh", "-c", `${envPrefix} ${agentCmd.map(escapeShell).join(" ")}`]
+      : agentCmd;
+
+    logger.info("agent", "Agent fixing validation failures...");
+    const fixResult = await execInContainer(container, fullCmd, {
+      workingDir: plan.input.mountPath,
+      timeout: plan.agent.timeout,
+    });
+
+    if (fixResult.exitCode !== 0) {
+      logger.warn("agent", `Agent fix attempt exited with code ${fixResult.exitCode}`);
+    }
+  }
+
+  // Exhausted retries
+  logger.error("validation", `Validation failed after ${attempt} attempts`);
+  return {
+    passed: false,
+    totalAttempts: attempt,
+    stepResults: steps.map(s => ({
+      name: s.name,
+      passed: false, // Approximate — last round results
+      attempts: stepAttemptCounts[s.name],
+    })),
+  };
+}
+
+function escapeShell(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+```
+
+---
+
+## Step 6: Output Collectors (`src/output/`)
+
+### `src/output/types.ts`
+
+```typescript
+export interface GitResult {
+  mode: "git";
+  branch: string;
+  sha: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface FileResult {
+  mode: "files";
+  dir: string;
+  files: string[];
+  totalSize: number;
+}
+
+export type OutputResult = GitResult | FileResult;
+```
+
+### `src/output/git.ts`
+
+Collect git output: commit changes inside container, extract branch to host repo.
 
 ```typescript
 import { execSync } from "node:child_process";
-import { mkdirSync, cpSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
-import picomatch from "picomatch";
-import Docker from "dockerode";
-import tar from "tar"; // Add "tar" to dependencies if needed, or use dockerode's putArchive
+import type Docker from "dockerode";
+import { execInContainer } from "../container/runner.js";
+import { expandTemplate } from "../utils/template.js";
+import { slugify } from "../utils/slug.js";
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { GitResult } from "./types.js";
 
-/**
- * Prepare a workspace directory by copying source with exclusions.
- * Returns the temp directory path.
- */
-export function prepareRepoWorkspace(
-  repoPath: string,
-  exclude: string[]
-): string {
-  const tmpDir = join(tmpdir(), `forgectl-workspace-${randomBytes(4).toString("hex")}`);
-  mkdirSync(tmpDir, { recursive: true });
+export async function collectGitOutput(
+  container: Docker.Container,
+  plan: RunPlan,
+  logger: Logger
+): Promise<GitResult> {
+  const slug = slugify(plan.task);
+  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
+  const branchName = expandTemplate(plan.commit.message.template, {
+    slug, ts, prefix: plan.commit.message.prefix, summary: slug,
+  }).replace(/\s+/g, "-");
 
-  const isExcluded = picomatch(exclude);
+  // Use plan's branch template for the branch name
+  const branch = expandTemplate(plan.commit.author ? plan.commit.message.prefix : "forge/{{slug}}/{{ts}}", { slug, ts })
+    .replace(/[^a-zA-Z0-9/_-]/g, "-");
 
-  // Use rsync if available (faster, respects excludes natively)
-  // Fallback to recursive copy with filtering
-  try {
-    const excludeFlags = exclude.map(e => `--exclude='${e}'`).join(" ");
-    execSync(`rsync -a ${excludeFlags} '${resolve(repoPath)}/' '${tmpDir}/'`, { stdio: "ignore" });
-  } catch {
-    // Fallback: manual copy (slower but works everywhere)
-    cpSync(resolve(repoPath), tmpDir, {
-      recursive: true,
-      filter: (src) => {
-        const rel = src.replace(resolve(repoPath), "").replace(/^\//, "");
-        if (rel === "") return true;
-        return !isExcluded(rel);
-      },
-    });
+  // Actually, use the repo.branch.template from the plan
+  const branchFromTemplate = expandTemplate("forge/{{slug}}/{{ts}}", { slug, ts });
+
+  logger.info("output", `Creating branch: ${branchFromTemplate}`);
+
+  // Stage all changes
+  const addResult = await execInContainer(container, ["git", "add", "-A"], {
+    workingDir: "/workspace",
+  });
+
+  // Check if there are changes
+  const diffResult = await execInContainer(container, ["git", "diff", "--cached", "--stat"], {
+    workingDir: "/workspace",
+  });
+
+  if (!diffResult.stdout.trim()) {
+    logger.warn("output", "No changes detected in workspace");
+    return { mode: "git", branch: branchFromTemplate, sha: "", filesChanged: 0, insertions: 0, deletions: 0 };
   }
 
-  return tmpDir;
-}
+  // Create branch
+  await execInContainer(container, ["git", "checkout", "-b", branchFromTemplate], {
+    workingDir: "/workspace",
+  });
 
-/**
- * Prepare input files workspace for files mode.
- * Copies input files to a temp /input dir and creates empty /output dir.
- */
-export function prepareFilesWorkspace(
-  inputPaths: string[]
-): { inputDir: string; outputDir: string } {
-  const base = join(tmpdir(), `forgectl-files-${randomBytes(4).toString("hex")}`);
-  const inputDir = join(base, "input");
-  const outputDir = join(base, "output");
-  mkdirSync(inputDir, { recursive: true });
+  // Commit
+  const commitMsg = expandTemplate(plan.commit.message.template, {
+    prefix: plan.commit.message.prefix,
+    summary: plan.task.slice(0, 72),
+  });
+
+  const commitCmd = [
+    "git", "commit",
+    "-m", commitMsg,
+    "--author", `${plan.commit.author.name} <${plan.commit.author.email}>`,
+  ];
+  if (plan.commit.sign) commitCmd.push("-S");
+
+  await execInContainer(container, commitCmd, { workingDir: "/workspace" });
+
+  // Get commit SHA
+  const shaResult = await execInContainer(container, ["git", "rev-parse", "HEAD"], {
+    workingDir: "/workspace",
+  });
+  const sha = shaResult.stdout.trim();
+
+  // Get diff stat
+  const statResult = await execInContainer(container, ["git", "diff", "--stat", "HEAD~1"], {
+    workingDir: "/workspace",
+  });
+
+  // Parse stats (last line: "N files changed, N insertions(+), N deletions(-)")
+  const statLine = statResult.stdout.trim().split("\n").pop() || "";
+  const filesChanged = parseInt(statLine.match(/(\d+) file/)?.[1] || "0", 10);
+  const insertions = parseInt(statLine.match(/(\d+) insertion/)?.[1] || "0", 10);
+  const deletions = parseInt(statLine.match(/(\d+) deletion/)?.[1] || "0", 10);
+
+  // Extract .git from container and fetch into host repo
+  const tmpGit = mkdtempSync(join(tmpdir(), "forgectl-git-"));
+  try {
+    // Copy .git dir from container
+    const archive = await container.getArchive({ path: "/workspace/.git" });
+    // Extract tar stream to temp dir
+    await new Promise<void>((resolve, reject) => {
+      const extract = require("node:child_process").spawn("tar", ["xf", "-", "-C", tmpGit]);
+      archive.pipe(extract.stdin);
+      extract.on("close", (code: number) => code === 0 ? resolve() : reject(new Error(`tar exit ${code}`)));
+      extract.on("error", reject);
+    });
+
+    // Fetch the branch from the extracted git dir into the host repo
+    const gitDir = join(tmpGit, ".git");
+    const hostRepo = plan.input.sources[0]; // The original repo path
+    execSync(`git fetch "${gitDir}" "${branchFromTemplate}:${branchFromTemplate}"`, {
+      cwd: hostRepo,
+      stdio: "pipe",
+    });
+
+    logger.info("output", `Branch ${branchFromTemplate} fetched to host repo`);
+  } finally {
+    rmSync(tmpGit, { recursive: true, force: true });
+  }
+
+  return {
+    mode: "git",
+    branch: branchFromTemplate,
+    sha,
+    filesChanged,
+    insertions,
+    deletions,
+  };
+}
+```
+
+### `src/output/files.ts`
+
+Collect file output: copy `/output` from container to host directory.
+
+```typescript
+import { mkdirSync, writeFileSync, statSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import type Docker from "dockerode";
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { FileResult } from "./types.js";
+
+export async function collectFileOutput(
+  container: Docker.Container,
+  plan: RunPlan,
+  logger: Logger
+): Promise<FileResult> {
+  const outputDir = plan.output.hostDir;
   mkdirSync(outputDir, { recursive: true });
 
-  for (const p of inputPaths) {
-    const resolved = resolve(p);
-    if (!existsSync(resolved)) throw new Error(`Input file not found: ${p}`);
-    cpSync(resolved, join(inputDir, require("node:path").basename(resolved)), { recursive: true });
-  }
+  logger.info("output", `Collecting files from container ${plan.output.path} → ${outputDir}`);
 
-  return { inputDir, outputDir };
-}
-```
+  // Get archive of the output directory from container
+  const archive = await container.getArchive({ path: plan.output.path });
 
-### `src/container/network.ts`
-
-Network isolation. Only applies iptables when mode is `allowlist`.
-
-```typescript
-import Docker from "dockerode";
-import { execInContainer } from "./runner.js";
-
-const docker = new Docker();
-
-/**
- * Create a Docker network for a run (only for allowlist mode).
- */
-export async function createIsolatedNetwork(name: string): Promise<Docker.Network> {
-  return docker.createNetwork({
-    Name: name,
-    Driver: "bridge",
-    Internal: false,
-  });
-}
-
-/**
- * Apply iptables firewall inside a container (only for allowlist mode).
- * This restricts outbound traffic to only the allowed domains.
- */
-export async function applyFirewall(
-  container: Docker.Container,
-  allowedDomains: string[]
-): Promise<void> {
-  const domainsStr = allowedDomains.join(",");
-  await execInContainer(container, [
-    "/bin/bash", "/usr/local/bin/init-firewall.sh",
-  ], {
-    env: [`FORGECTL_ALLOWED_DOMAINS=${domainsStr}`],
-    user: "root",
-  });
-}
-
-/**
- * Remove a Docker network.
- */
-export async function removeNetwork(name: string): Promise<void> {
+  // Extract to a temp dir first, then move files to outputDir
+  const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-output-"));
   try {
-    const network = docker.getNetwork(name);
-    await network.remove();
-  } catch {}
-}
+    await new Promise<void>((resolve, reject) => {
+      const extract = require("node:child_process").spawn("tar", ["xf", "-", "-C", tmpDir]);
+      archive.pipe(extract.stdin);
+      extract.on("close", (code: number) => code === 0 ? resolve() : reject(new Error(`tar exit ${code}`)));
+      extract.on("error", reject);
+    });
 
-/**
- * Verify firewall is working by testing a blocked domain.
- * Returns true if the domain is blocked (expected), false if it's reachable (unexpected).
- */
-export async function verifyFirewall(container: Docker.Container): Promise<boolean> {
-  const result = await execInContainer(container, [
-    "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "3", "https://example.com",
-  ]);
-  // If curl fails or times out, firewall is working
-  return result.exitCode !== 0;
-}
-```
+    // The tar extracts into a subdirectory named after the container path
+    // e.g., /output becomes tmpDir/output/
+    const extractedDir = join(tmpDir, "output");
 
-### `src/container/secrets.ts`
-
-Re-export the mount preparation functions from `src/auth/mount.ts` and add the container-side injection helper:
-
-```typescript
-export { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
-
-/**
- * Build the env injection prefix for running an agent command.
- * This reads the secret from the mounted file and sets it as an env var
- * only in the agent's process.
- */
-export function buildSecretEnvPrefix(envMapping: Record<string, string>): string {
-  const parts: string[] = [];
-  for (const [envVar, filePath] of Object.entries(envMapping)) {
-    parts.push(`${envVar}=$(cat ${filePath})`);
+    // Copy files to final output dir
+    execSync(`cp -r "${extractedDir}/." "${outputDir}/"`, { stdio: "pipe" });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
   }
-  return parts.join(" ");
+
+  // List all files in the output dir
+  const files = listFilesRecursive(outputDir);
+  const totalSize = files.reduce((sum, f) => sum + statSync(join(outputDir, f)).size, 0);
+
+  logger.info("output", `Collected ${files.length} files (${formatBytes(totalSize)})`);
+
+  return {
+    mode: "files",
+    dir: outputDir,
+    files,
+    totalSize,
+  };
+}
+
+function listFilesRecursive(dir: string, prefix = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(join(dir, entry.name), rel));
+    } else {
+      files.push(rel);
+    }
+  }
+  return files;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 ```
 
-### `src/container/cleanup.ts`
+### `src/output/collector.ts`
+
+Dispatch to the right collector:
 
 ```typescript
-import { rmSync } from "node:fs";
+import type Docker from "dockerode";
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { OutputResult } from "./types.js";
+import { collectGitOutput } from "./git.js";
+import { collectFileOutput } from "./files.js";
+
+export async function collectOutput(
+  container: Docker.Container,
+  plan: RunPlan,
+  logger: Logger
+): Promise<OutputResult> {
+  if (plan.output.mode === "git") {
+    return collectGitOutput(container, plan, logger);
+  }
+  return collectFileOutput(container, plan, logger);
+}
+```
+
+---
+
+## Step 7: Pre-flight Checks (`src/orchestration/preflight.ts`)
+
+Verify everything before burning tokens:
+
+```typescript
 import Docker from "dockerode";
-import { destroyContainer } from "./runner.js";
-import { removeNetwork } from "./network.js";
+import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
+import type { RunPlan } from "../workflow/types.js";
+import { getClaudeAuth } from "../auth/claude.js";
+import { getCodexAuth } from "../auth/codex.js";
+import type { Logger } from "../logging/logger.js";
 
-export interface CleanupContext {
-  container?: Docker.Container;
-  networkName?: string;
-  tempDirs: string[];
-  secretCleanups: Array<() => void>;
+export interface PreflightResult {
+  passed: boolean;
+  errors: string[];
+  warnings: string[];
 }
 
-export async function cleanupRun(ctx: CleanupContext): Promise<void> {
-  if (ctx.container) {
-    await destroyContainer(ctx.container);
+export async function runPreflightChecks(plan: RunPlan, logger: Logger): Promise<PreflightResult> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // 1. Docker available?
+  logger.debug("preflight", "Checking Docker...");
+  try {
+    const docker = new Docker();
+    await docker.ping();
+  } catch {
+    errors.push("Docker is not running. Start Docker Desktop or the Docker daemon.");
   }
-  if (ctx.networkName) {
-    await removeNetwork(ctx.networkName);
+
+  // 2. Credentials configured?
+  logger.debug("preflight", "Checking credentials...");
+  if (plan.agent.type === "claude-code") {
+    const auth = await getClaudeAuth();
+    if (!auth) {
+      errors.push('No Claude Code credentials found. Run: forgectl auth add claude-code');
+    }
+  } else if (plan.agent.type === "codex") {
+    const auth = await getCodexAuth();
+    if (!auth) {
+      errors.push('No Codex credentials found. Run: forgectl auth add codex');
+    }
   }
-  for (const dir of ctx.tempDirs) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+
+  // 3. Input files/repo exist?
+  logger.debug("preflight", "Checking inputs...");
+  for (const source of plan.input.sources) {
+    if (!existsSync(source)) {
+      errors.push(`Input not found: ${source}`);
+    }
   }
-  for (const fn of ctx.secretCleanups) {
-    try { fn(); } catch {}
+
+  // 4. For git output mode, verify we're in a git repo
+  if (plan.output.mode === "git") {
+    const repoPath = plan.input.sources[0];
+    try {
+      execSync("git rev-parse --is-inside-work-tree", { cwd: repoPath, stdio: "ignore" });
+    } catch {
+      errors.push(`Git output mode requires a git repository. ${repoPath} is not a git repo.`);
+    }
+
+    // Check for uncommitted changes
+    try {
+      const status = execSync("git status --porcelain", { cwd: repoPath, encoding: "utf-8" });
+      if (status.trim()) {
+        warnings.push("Working directory has uncommitted changes. Consider committing first.");
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 5. Context files exist?
+  for (const file of plan.context.files) {
+    if (!existsSync(file)) {
+      warnings.push(`Context file not found (will be skipped): ${file}`);
+    }
+  }
+
+  return {
+    passed: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+```
+
+---
+
+## Step 8: The Execution Engine (`src/orchestration/single.ts`)
+
+This wires everything together for single-agent mode:
+
+```typescript
+import Docker from "dockerode";
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { OutputResult } from "../output/types.js";
+import type { ValidationResult } from "../validation/runner.js";
+import { getAgentAdapter } from "../agent/registry.js";
+import { buildPrompt } from "../context/prompt.js";
+import { createContainer, execInContainer, destroyContainer } from "../container/runner.js";
+import { ensureImage } from "../container/builder.js";
+import { prepareRepoWorkspace, prepareFilesWorkspace } from "../container/workspace.js";
+import { createIsolatedNetwork, applyFirewall, removeNetwork } from "../container/network.js";
+import { getClaudeAuth } from "../auth/claude.js";
+import { getCodexAuth } from "../auth/codex.js";
+import { prepareClaudeMounts, prepareCodexMounts, type ContainerMounts } from "../auth/mount.js";
+import { runValidationLoop } from "../validation/runner.js";
+import { collectOutput } from "../output/collector.js";
+import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
+import { Timer } from "../utils/timer.js";
+import { emitRunEvent } from "../logging/events.js";
+
+export interface ExecutionResult {
+  success: boolean;
+  output?: OutputResult;
+  validation: ValidationResult;
+  durationMs: number;
+  error?: string;
+}
+
+export async function executeSingleAgent(
+  plan: RunPlan,
+  logger: Logger
+): Promise<ExecutionResult> {
+  const timer = new Timer();
+  const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
+
+  try {
+    // --- Phase: Prepare ---
+    emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "prepare" } });
+
+    // 1. Ensure Docker image exists
+    logger.info("prepare", `Ensuring image: ${plan.container.image}`);
+    const image = await ensureImage(plan.container.image, plan.container.dockerfile);
+
+    // 2. Prepare workspace
+    const binds: string[] = [];
+    if (plan.input.mode === "repo") {
+      logger.info("prepare", "Preparing repo workspace...");
+      const workspaceDir = prepareRepoWorkspace(plan.input.sources[0], plan.input.exclude);
+      cleanup.tempDirs.push(workspaceDir);
+      binds.push(`${workspaceDir}:${plan.input.mountPath}`);
+    } else {
+      logger.info("prepare", "Preparing file workspace...");
+      const { inputDir, outputDir } = prepareFilesWorkspace(plan.input.sources);
+      cleanup.tempDirs.push(inputDir, outputDir);
+      binds.push(`${inputDir}:${plan.input.mountPath}:ro`);
+      binds.push(`${outputDir}:${plan.output.path}`);
+    }
+
+    // 3. Prepare credentials
+    let mounts: ContainerMounts;
+    if (plan.agent.type === "claude-code") {
+      const auth = await getClaudeAuth();
+      if (!auth) throw new Error("No Claude Code credentials configured");
+      mounts = prepareClaudeMounts(auth, plan.runId);
+    } else {
+      const apiKey = await getCodexAuth();
+      if (!apiKey) throw new Error("No Codex credentials configured");
+      mounts = prepareCodexMounts(apiKey, plan.runId);
+    }
+    binds.push(...mounts.binds);
+    cleanup.secretCleanups.push(mounts.cleanup);
+
+    // 4. Create network (only for allowlist mode)
+    if (plan.container.network.mode === "allowlist") {
+      logger.info("prepare", "Creating isolated network...");
+      await createIsolatedNetwork(plan.container.network.dockerNetwork);
+      cleanup.networkName = plan.container.network.dockerNetwork;
+    }
+
+    // 5. Create container
+    logger.info("prepare", "Starting container...");
+    // Override the plan's image with the resolved one
+    const resolvedPlan = { ...plan, container: { ...plan.container, image } };
+    const container = await createContainer(resolvedPlan, binds);
+    cleanup.container = container;
+
+    // 6. Apply firewall (only for allowlist mode)
+    if (plan.container.network.mode === "allowlist" && plan.container.network.allow) {
+      logger.info("prepare", "Applying network firewall...");
+      await applyFirewall(container, plan.container.network.allow);
+    }
+
+    // --- Phase: Execute ---
+    emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
+
+    // 7. Build prompt and invoke agent
+    const prompt = buildPrompt(plan);
+    const adapter = getAgentAdapter(plan.agent.type);
+    const agentCmd = adapter.buildCommand(prompt, {
+      model: plan.agent.model,
+      maxTurns: plan.agent.maxTurns,
+      timeout: plan.agent.timeout,
+      flags: plan.agent.flags,
+      workingDir: plan.input.mountPath,
+    });
+    const agentEnv = adapter.buildEnv(mounts.env);
+
+    // Wrap in shell for env injection
+    const envPrefix = agentEnv.join(" ");
+    const fullCmd = envPrefix
+      ? ["sh", "-c", `${envPrefix} ${agentCmd.map(escapeShell).join(" ")}`]
+      : agentCmd;
+
+    logger.info("agent", `Running ${plan.agent.type}...`);
+    const agentResult = await execInContainer(container, fullCmd, {
+      workingDir: plan.input.mountPath,
+      timeout: plan.agent.timeout,
+    });
+
+    logger.info("agent", `Agent finished (exit ${agentResult.exitCode}, ${agentResult.durationMs}ms)`);
+    if (agentResult.exitCode !== 0) {
+      logger.warn("agent", `Agent exited with non-zero code: ${agentResult.exitCode}`);
+      if (agentResult.stderr) {
+        logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
+      }
+    }
+
+    // --- Phase: Validate ---
+    emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "validate" } });
+
+    logger.info("validate", `Running ${plan.validation.steps.length} validation steps...`);
+    const validationResult = await runValidationLoop(
+      container, plan, adapter, agentEnv, logger
+    );
+
+    // --- Phase: Collect Output ---
+    if (validationResult.passed || plan.validation.onFailure === "output-wip") {
+      emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "output" } });
+
+      logger.info("output", `Collecting ${plan.output.mode} output...`);
+      const output = await collectOutput(container, plan, logger);
+
+      emitRunEvent({
+        runId: plan.runId,
+        type: "completed",
+        timestamp: new Date().toISOString(),
+        data: { success: true, output },
+      });
+
+      return {
+        success: validationResult.passed,
+        output,
+        validation: validationResult,
+        durationMs: timer.elapsed(),
+      };
+    }
+
+    // Validation failed and on_failure = "abandon"
+    emitRunEvent({
+      runId: plan.runId,
+      type: "failed",
+      timestamp: new Date().toISOString(),
+      data: { reason: "validation_failed" },
+    });
+
+    return {
+      success: false,
+      validation: validationResult,
+      durationMs: timer.elapsed(),
+      error: "Validation failed and on_failure is set to 'abandon'",
+    };
+
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("execution", message);
+    emitRunEvent({
+      runId: plan.runId,
+      type: "failed",
+      timestamp: new Date().toISOString(),
+      data: { error: message },
+    });
+    return {
+      success: false,
+      validation: { passed: false, totalAttempts: 0, stepResults: [] },
+      durationMs: timer.elapsed(),
+      error: message,
+    };
+  } finally {
+    // Always cleanup unless --no-cleanup
+    if (!plan.agent.flags.includes("--no-cleanup")) {
+      logger.info("cleanup", "Cleaning up...");
+      await cleanupRun(cleanup);
+    } else {
+      logger.info("cleanup", "Skipping cleanup (--no-cleanup flag)");
+    }
+  }
+}
+
+function escapeShell(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+```
+
+### `src/orchestration/modes.ts`
+
+Dispatch based on orchestration mode:
+
+```typescript
+import type { RunPlan } from "../workflow/types.js";
+import type { Logger } from "../logging/logger.js";
+import type { ExecutionResult } from "./single.js";
+import { executeSingleAgent } from "./single.js";
+
+/**
+ * Dispatch execution based on orchestration mode.
+ * Phase 3 only implements "single". Review and parallel are Phase 5.
+ */
+export async function executeRun(
+  plan: RunPlan,
+  logger: Logger
+): Promise<ExecutionResult> {
+  switch (plan.orchestration.mode) {
+    case "single":
+      return executeSingleAgent(plan, logger);
+    case "review":
+      // TODO: Phase 5 — for now, fall through to single
+      logger.warn("orchestration", "Review mode not yet implemented, running as single agent");
+      return executeSingleAgent(plan, logger);
+    case "parallel":
+      // TODO: Phase 5
+      logger.warn("orchestration", "Parallel mode not yet implemented, running as single agent");
+      return executeSingleAgent(plan, logger);
+    default:
+      return executeSingleAgent(plan, logger);
   }
 }
 ```
 
 ---
 
-## Step 7: CLI Skeleton (`src/cli/` + `src/index.ts`)
+## Step 9: Wire `forgectl run` End-to-End (`src/cli/run.ts`)
 
-### `src/index.ts`
-
-```typescript
-import { Command } from "commander";
-import { runCommand } from "./cli/run.js";
-import { authCommand } from "./cli/auth.js";
-import { initCommand } from "./cli/init.js";
-import { workflowsCommand } from "./cli/workflows.js";
-
-const program = new Command();
-
-program
-  .name("forgectl")
-  .description("Run AI agents in isolated Docker containers for any workflow")
-  .version("0.1.0");
-
-// forgectl run
-program
-  .command("run")
-  .description("Run a task synchronously")
-  .requiredOption("-t, --task <string>", "Task prompt")
-  .option("-w, --workflow <string>", "Workflow type")
-  .option("-r, --repo <path>", "Repository path")
-  .option("-i, --input <paths...>", "Input files/directories")
-  .option("--context <paths...>", "Context files for agent prompt")
-  .option("-a, --agent <string>", "Agent type: claude-code | codex")
-  .option("-m, --model <string>", "Model override")
-  .option("-c, --config <path>", "Config file path")
-  .option("--review", "Enable review mode")
-  .option("--no-review", "Disable review mode")
-  .option("-o, --output-dir <path>", "Output directory for file mode")
-  .option("--timeout <duration>", "Timeout override (e.g. 30m)")
-  .option("--verbose", "Show full agent output")
-  .option("--no-cleanup", "Leave container running after run")
-  .option("--dry-run", "Show run plan without executing")
-  .action(runCommand);
-
-// forgectl auth
-const auth = program
-  .command("auth")
-  .description("Manage BYOK credentials");
-
-auth
-  .command("add <provider>")
-  .description("Add credentials (claude-code | codex)")
-  .action(async (provider: string) => { await authCommand("add", provider); });
-
-auth
-  .command("list")
-  .description("List configured credentials")
-  .action(async () => { await authCommand("list"); });
-
-auth
-  .command("remove <provider>")
-  .description("Remove credentials")
-  .action(async (provider: string) => { await authCommand("remove", provider); });
-
-// forgectl init
-program
-  .command("init")
-  .description("Generate starter config")
-  .option("--stack <string>", "Stack template: node|python|go|research|data|ops")
-  .action(initCommand);
-
-// forgectl workflows
-const workflows = program
-  .command("workflows")
-  .description("Manage workflows");
-
-workflows
-  .command("list")
-  .description("List available workflows")
-  .action(() => { workflowsCommand("list"); });
-
-workflows
-  .command("show <name>")
-  .description("Show workflow definition")
-  .action((name: string) => { workflowsCommand("show", name); });
-
-// Stub commands for later phases
-program.command("submit").description("Submit task to daemon (not yet implemented)").action(() => {
-  console.log("Not yet implemented. Use `forgectl run` for synchronous execution.");
-});
-program.command("up").description("Start daemon (not yet implemented)").action(() => {
-  console.log("Not yet implemented.");
-});
-program.command("down").description("Stop daemon (not yet implemented)").action(() => {
-  console.log("Not yet implemented.");
-});
-program.command("status").description("Show status (not yet implemented)").action(() => {
-  console.log("Not yet implemented.");
-});
-program.command("logs").description("Show run logs (not yet implemented)").action(() => {
-  console.log("Not yet implemented.");
-});
-
-program.parse();
-```
-
-### `src/cli/run.ts`
-
-For Phase 1+2, the run command resolves the RunPlan and either does a dry-run (prints the plan) or prints a "not yet implemented" message (agent execution is Phase 3):
+Replace the current stub with the full implementation:
 
 ```typescript
 import chalk from "chalk";
 import { loadConfig } from "../config/loader.js";
 import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
+import { runPreflightChecks } from "../orchestration/preflight.js";
+import { executeRun } from "../orchestration/modes.js";
+import { Logger } from "../logging/logger.js";
+import { saveRunLog, type RunLog } from "../logging/run-log.js";
+import { emitRunEvent } from "../logging/events.js";
+import { formatDuration } from "../utils/duration.js";
 
 export async function runCommand(options: CLIOptions): Promise<void> {
   const config = loadConfig(options.config);
   const plan = resolveRunPlan(config, options);
 
+  // --- Dry run ---
   if (options.dryRun) {
-    console.log(chalk.bold("\n📋 Run Plan (dry run)\n"));
-    console.log(`  Run ID:     ${plan.runId}`);
-    console.log(`  Task:       ${plan.task}`);
-    console.log(`  Workflow:   ${plan.workflow.name}`);
-    console.log(`  Agent:      ${plan.agent.type}${plan.agent.model ? ` (${plan.agent.model})` : ""}`);
-    console.log(`  Image:      ${plan.container.image}`);
-    console.log(`  Network:    ${plan.container.network.mode}`);
-    console.log(`  Input:      ${plan.input.mode} → ${plan.input.mountPath}`);
-    console.log(`  Output:     ${plan.output.mode}${plan.output.mode === "git" ? "" : ` → ${plan.output.hostDir}`}`);
-    console.log(`  Validation: ${plan.validation.steps.length} steps`);
-    for (const step of plan.validation.steps) {
-      console.log(`    - ${step.name}: \`${step.command}\` (${step.retries} retries)`);
-    }
-    console.log(`  Review:     ${plan.orchestration.review.enabled ? "enabled" : "disabled"}`);
-    console.log(`  Timeout:    ${plan.agent.timeout}ms`);
-    console.log();
+    printDryRun(plan);
     return;
   }
 
-  // Phase 3 will implement actual execution here
-  console.log(chalk.yellow("\nAgent execution not yet implemented. Use --dry-run to see the resolved plan.\n"));
+  const logger = new Logger(options.verbose);
+
+  // --- Header ---
+  console.log();
+  console.log(chalk.bold(`🔨 forgectl run`));
+  console.log(chalk.gray(`  Run ID:   ${plan.runId}`));
+  console.log(chalk.gray(`  Workflow: ${plan.workflow.name}`));
+  console.log(chalk.gray(`  Agent:    ${plan.agent.type}`));
+  console.log(chalk.gray(`  Image:    ${plan.container.image}`));
+  console.log();
+
+  // --- Pre-flight ---
+  const preflight = await runPreflightChecks(plan, logger);
+  for (const w of preflight.warnings) {
+    logger.warn("preflight", w);
+  }
+  if (!preflight.passed) {
+    for (const e of preflight.errors) {
+      logger.error("preflight", e);
+    }
+    console.log(chalk.red("\nPre-flight checks failed. Aborting.\n"));
+    process.exit(1);
+  }
+
+  // --- Execute ---
+  emitRunEvent({ runId: plan.runId, type: "started", timestamp: new Date().toISOString(), data: { task: plan.task } });
+
+  const result = await executeRun(plan, logger);
+
+  // --- Summary ---
+  console.log();
+  if (result.success) {
+    console.log(chalk.green.bold("✔ Run completed successfully"));
+  } else {
+    console.log(chalk.red.bold("✗ Run failed"));
+    if (result.error) {
+      console.log(chalk.red(`  ${result.error}`));
+    }
+  }
+
+  console.log(chalk.gray(`  Duration: ${formatDuration(result.durationMs)}`));
+
+  if (result.validation.stepResults.length > 0) {
+    console.log(chalk.gray(`  Validation: ${result.validation.totalAttempts} round(s)`));
+    for (const step of result.validation.stepResults) {
+      const icon = step.passed ? chalk.green("✔") : chalk.red("✗");
+      console.log(chalk.gray(`    ${icon} ${step.name} (${step.attempts} attempt(s))`));
+    }
+  }
+
+  if (result.output) {
+    if (result.output.mode === "git") {
+      console.log(chalk.cyan(`\n  Branch: ${result.output.branch}`));
+      console.log(chalk.gray(`  ${result.output.filesChanged} files changed, +${result.output.insertions} -${result.output.deletions}`));
+      console.log(chalk.gray(`\n  To review: git diff main...${result.output.branch}`));
+      console.log(chalk.gray(`  To merge:  git merge ${result.output.branch}`));
+    } else {
+      console.log(chalk.cyan(`\n  Output: ${result.output.dir}`));
+      console.log(chalk.gray(`  ${result.output.files.length} files (${formatBytes(result.output.totalSize)})`));
+      for (const f of result.output.files.slice(0, 10)) {
+        console.log(chalk.gray(`    ${f}`));
+      }
+      if (result.output.files.length > 10) {
+        console.log(chalk.gray(`    ... and ${result.output.files.length - 10} more`));
+      }
+    }
+  }
+  console.log();
+
+  // --- Save run log ---
+  const runLog: RunLog = {
+    runId: plan.runId,
+    task: plan.task,
+    workflow: plan.workflow.name,
+    agent: plan.agent.type,
+    status: result.success ? "success" : "failed",
+    startedAt: new Date(Date.now() - result.durationMs).toISOString(),
+    completedAt: new Date().toISOString(),
+    durationMs: result.durationMs,
+    validation: {
+      attempts: result.validation.totalAttempts,
+      steps: result.validation.stepResults,
+    },
+    output: result.output
+      ? result.output.mode === "git"
+        ? { mode: "git", branch: result.output.branch }
+        : { mode: "files", dir: result.output.dir, files: result.output.files }
+      : { mode: plan.output.mode },
+    entries: logger.getEntries(),
+  };
+  const logPath = saveRunLog(runLog, config.output.log_dir);
+  console.log(chalk.gray(`Run log: ${logPath}\n`));
+
+  if (!result.success) process.exit(1);
+}
+
+function printDryRun(plan: ReturnType<typeof resolveRunPlan>): void {
+  // Keep existing dry-run implementation
+  console.log(chalk.bold("\n📋 Run Plan (dry run)\n"));
+  console.log(`  Run ID:     ${plan.runId}`);
+  console.log(`  Task:       ${plan.task}`);
+  console.log(`  Workflow:   ${plan.workflow.name}`);
+  console.log(`  Agent:      ${plan.agent.type}${plan.agent.model ? ` (${plan.agent.model})` : ""}`);
+  console.log(`  Image:      ${plan.container.image}`);
+  console.log(`  Network:    ${plan.container.network.mode}`);
+  console.log(`  Input:      ${plan.input.mode} → ${plan.input.mountPath}`);
+  console.log(`  Output:     ${plan.output.mode}${plan.output.mode === "git" ? "" : ` → ${plan.output.hostDir}`}`);
+  console.log(`  Validation: ${plan.validation.steps.length} steps`);
+  for (const step of plan.validation.steps) {
+    console.log(`    - ${step.name}: \`${step.command}\` (${step.retries} retries)`);
+  }
+  console.log(`  Review:     ${plan.orchestration.review.enabled ? "enabled" : "disabled"}`);
+  console.log(`  Timeout:    ${plan.agent.timeout}ms`);
+  console.log();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 ```
 
-### `src/cli/auth.ts`
+---
+
+## Step 10: Daemon + API (`src/daemon/`)
+
+### `src/daemon/lifecycle.ts`
+
+Daemon PID management:
 
 ```typescript
-import chalk from "chalk";
-import { createInterface } from "node:readline";
-import { getClaudeAuth, setClaudeApiKey } from "../auth/claude.js";
-import { getCodexAuth, setCodexApiKey } from "../auth/codex.js";
-import { listCredentials, deleteCredential } from "../auth/store.js";
+import { writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
-function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
-    rl.question(question, answer => { rl.close(); resolve(answer.trim()); });
+const PID_DIR = join(process.env.HOME || "/tmp", ".forgectl");
+const PID_FILE = join(PID_DIR, "daemon.pid");
+
+export function savePid(pid: number): void {
+  writeFileSync(PID_FILE, String(pid));
+}
+
+export function readPid(): number | null {
+  if (!existsSync(PID_FILE)) return null;
+  const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+  if (isNaN(pid)) return null;
+  // Check if process is actually running
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    unlinkSync(PID_FILE);
+    return null;
+  }
+}
+
+export function removePid(): void {
+  try { unlinkSync(PID_FILE); } catch { /* ignore */ }
+}
+
+export function isDaemonRunning(): boolean {
+  return readPid() !== null;
+}
+```
+
+### `src/daemon/queue.ts`
+
+Simple in-memory run queue:
+
+```typescript
+import type { CLIOptions } from "../workflow/resolver.js";
+import type { ExecutionResult } from "../orchestration/single.js";
+
+export type QueuedRunStatus = "queued" | "running" | "completed" | "failed";
+
+export interface QueuedRun {
+  id: string;
+  options: CLIOptions;
+  status: QueuedRunStatus;
+  submittedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: ExecutionResult;
+  error?: string;
+}
+
+export class RunQueue {
+  private queue: QueuedRun[] = [];
+  private running = false;
+  private onExecute: (run: QueuedRun) => Promise<ExecutionResult>;
+
+  constructor(onExecute: (run: QueuedRun) => Promise<ExecutionResult>) {
+    this.onExecute = onExecute;
+  }
+
+  submit(id: string, options: CLIOptions): QueuedRun {
+    const run: QueuedRun = {
+      id,
+      options,
+      status: "queued",
+      submittedAt: new Date().toISOString(),
+    };
+    this.queue.push(run);
+    this.processNext();
+    return run;
+  }
+
+  get(id: string): QueuedRun | undefined {
+    return this.queue.find(r => r.id === id);
+  }
+
+  list(): QueuedRun[] {
+    return [...this.queue];
+  }
+
+  private async processNext(): Promise<void> {
+    if (this.running) return;
+    const next = this.queue.find(r => r.status === "queued");
+    if (!next) return;
+
+    this.running = true;
+    next.status = "running";
+    next.startedAt = new Date().toISOString();
+
+    try {
+      next.result = await this.onExecute(next);
+      next.status = next.result.success ? "completed" : "failed";
+    } catch (err) {
+      next.status = "failed";
+      next.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      next.completedAt = new Date().toISOString();
+      this.running = false;
+      this.processNext();
+    }
+  }
+}
+```
+
+### `src/daemon/routes.ts`
+
+REST API routes:
+
+```typescript
+import type { FastifyInstance } from "fastify";
+import type { RunQueue } from "./queue.js";
+import { runEvents } from "../logging/events.js";
+
+export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
+  // Health check
+  app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
+
+  // Submit a run
+  app.post<{ Body: { task: string; workflow?: string; input?: string[]; agent?: string } }>(
+    "/runs",
+    async (request, reply) => {
+      const { task, workflow, input, agent } = request.body;
+      const id = `forge-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const run = queue.submit(id, { task, workflow, input, agent });
+      reply.code(202);
+      return { id: run.id, status: run.status };
+    }
+  );
+
+  // List runs
+  app.get("/runs", async () => {
+    return queue.list().map(r => ({
+      id: r.id,
+      status: r.status,
+      workflow: r.options.workflow,
+      task: r.options.task,
+      submittedAt: r.submittedAt,
+      startedAt: r.startedAt,
+      completedAt: r.completedAt,
+    }));
+  });
+
+  // Get run status
+  app.get<{ Params: { id: string } }>("/runs/:id", async (request, reply) => {
+    const run = queue.get(request.params.id);
+    if (!run) { reply.code(404); return { error: "Run not found" }; }
+    return run;
+  });
+
+  // SSE stream for a run
+  app.get<{ Params: { id: string } }>("/runs/:id/events", async (request, reply) => {
+    const runId = request.params.id;
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    const handler = (event: unknown) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    runEvents.on(`run:${runId}`, handler);
+
+    request.raw.on("close", () => {
+      runEvents.off(`run:${runId}`, handler);
+    });
   });
 }
-
-export async function authCommand(action: string, provider?: string): Promise<void> {
-  if (action === "list") {
-    const creds = await listCredentials();
-    if (creds.length === 0) {
-      console.log(chalk.yellow("No credentials configured. Run `forgectl auth add <provider>`."));
-      return;
-    }
-    console.log(chalk.bold("\nConfigured credentials:\n"));
-    for (const { provider, key } of creds) {
-      console.log(`  ${chalk.green("✔")} ${provider} (${key})`);
-    }
-    console.log();
-    return;
-  }
-
-  if (action === "add") {
-    if (provider === "claude-code") {
-      const existing = await getClaudeAuth();
-      if (existing?.type === "oauth_session") {
-        console.log(chalk.green("✔ Found existing Claude Code OAuth session at ~/.claude/"));
-        const override = await prompt("Add an API key anyway? (y/N): ");
-        if (override.toLowerCase() !== "y") return;
-      }
-      const key = await prompt("Enter your Anthropic API key: ");
-      if (!key.startsWith("sk-ant-")) {
-        console.log(chalk.yellow("Warning: Key doesn't look like an Anthropic API key (expected sk-ant-...)"));
-      }
-      await setClaudeApiKey(key);
-      console.log(chalk.green("✔ Claude Code API key saved."));
-    } else if (provider === "codex") {
-      const key = await prompt("Enter your OpenAI API key: ");
-      await setCodexApiKey(key);
-      console.log(chalk.green("✔ Codex (OpenAI) API key saved."));
-    } else {
-      console.error(chalk.red(`Unknown provider: ${provider}. Use: claude-code | codex`));
-      process.exit(1);
-    }
-    return;
-  }
-
-  if (action === "remove") {
-    if (!provider) { console.error("Provider required."); process.exit(1); }
-    await deleteCredential(provider, "api_key");
-    console.log(chalk.green(`✔ Removed credentials for ${provider}.`));
-    return;
-  }
-}
 ```
 
-### `src/cli/init.ts`
+### `src/daemon/server.ts`
+
+Main daemon server:
 
 ```typescript
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import chalk from "chalk";
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import { RunQueue } from "./queue.js";
+import { registerRoutes } from "./routes.js";
+import { savePid, removePid } from "./lifecycle.js";
+import { loadConfig } from "../config/loader.js";
+import { resolveRunPlan } from "../workflow/resolver.js";
+import { executeRun } from "../orchestration/modes.js";
+import { Logger } from "../logging/logger.js";
+import type { QueuedRun } from "./queue.js";
 
-const STARTER_CONFIGS: Record<string, string> = {
-  node: `# forgectl config — Node.js project
-agent:
-  type: claude-code
+export async function startDaemon(port = 4856): Promise<void> {
+  const app = Fastify({ logger: false });
+  await app.register(cors, { origin: true });
 
-container:
-  resources:
-    memory: 4g
-    cpus: 2
+  const queue = new RunQueue(async (run: QueuedRun) => {
+    const config = loadConfig();
+    const plan = resolveRunPlan(config, run.options);
+    const logger = new Logger(false);
+    return executeRun(plan, logger);
+  });
 
-validation:
-  steps:
-    - name: lint
-      command: npm run lint
-      retries: 3
-    - name: test
-      command: npm test
-      retries: 3
-    - name: build
-      command: npm run build
-      retries: 1
-`,
-  python: `# forgectl config — Python project
-agent:
-  type: claude-code
+  registerRoutes(app, queue);
 
-container:
-  image: forgectl/code-python312
-  resources:
-    memory: 4g
-    cpus: 2
+  await app.listen({ port, host: "127.0.0.1" });
+  savePid(process.pid);
 
-validation:
-  steps:
-    - name: lint
-      command: ruff check .
-      retries: 3
-    - name: typecheck
-      command: mypy .
-      retries: 2
-    - name: test
-      command: pytest
-      retries: 3
-`,
-  go: `# forgectl config — Go project
-agent:
-  type: claude-code
+  console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
-container:
-  image: forgectl/code-go122
-  resources:
-    memory: 4g
-    cpus: 2
+  // Graceful shutdown
+  const shutdown = async () => {
+    removePid();
+    await app.close();
+    process.exit(0);
+  };
 
-validation:
-  steps:
-    - name: lint
-      command: golangci-lint run
-      retries: 3
-    - name: test
-      command: go test ./...
-      retries: 3
-    - name: build
-      command: go build ./...
-      retries: 1
-`,
-  research: `# forgectl config — Research workflow
-agent:
-  type: claude-code
-
-orchestration:
-  mode: review
-
-output:
-  dir: ./research-output
-`,
-  data: `# forgectl config — Data workflow
-agent:
-  type: claude-code
-
-output:
-  dir: ./data-output
-`,
-  ops: `# forgectl config — Ops/Infrastructure workflow
-agent:
-  type: claude-code
-
-validation:
-  steps:
-    - name: shellcheck
-      command: find . -name '*.sh' -exec shellcheck {} +
-      retries: 2
-    - name: terraform-validate
-      command: terraform validate
-      retries: 2
-`,
-};
-
-export async function initCommand(options: { stack?: string }): Promise<void> {
-  const configDir = join(process.cwd(), ".forgectl");
-  const configPath = join(configDir, "config.yaml");
-
-  if (existsSync(configPath)) {
-    console.log(chalk.yellow(`Config already exists at ${configPath}`));
-    return;
-  }
-
-  mkdirSync(configDir, { recursive: true });
-
-  const stack = options.stack || "node";
-  const content = STARTER_CONFIGS[stack] || STARTER_CONFIGS.node;
-
-  writeFileSync(configPath, content);
-  console.log(chalk.green(`✔ Created ${configPath} (stack: ${stack})`));
-  console.log(`\nNext steps:`);
-  console.log(`  1. Edit .forgectl/config.yaml to match your project`);
-  console.log(`  2. Run: forgectl auth add claude-code`);
-  console.log(`  3. Run: forgectl run --task "your task" --dry-run`);
-}
-```
-
-### `src/cli/workflows.ts`
-
-```typescript
-import chalk from "chalk";
-import yaml from "js-yaml";
-import { listWorkflows, getWorkflow } from "../workflow/registry.js";
-
-export function workflowsCommand(action: string, name?: string): void {
-  if (action === "list") {
-    const workflows = listWorkflows();
-    console.log(chalk.bold("\nAvailable workflows:\n"));
-    for (const w of workflows) {
-      console.log(`  ${chalk.cyan(w.name.padEnd(12))} ${w.description}`);
-    }
-    console.log(`\nUse ${chalk.cyan("forgectl workflows show <name>")} to see full definition.\n`);
-    return;
-  }
-
-  if (action === "show" && name) {
-    const workflow = getWorkflow(name);
-    console.log(chalk.bold(`\nWorkflow: ${workflow.name}\n`));
-    console.log(yaml.dump(workflow, { lineWidth: 120, noRefs: true }));
-    return;
-  }
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 ```
 
 ---
 
-## Step 8: Dockerfiles + Firewall Script
+## Step 11: Wire Daemon CLI Commands
 
-### `dockerfiles/init-firewall.sh`
+Update `src/index.ts` to wire up the daemon commands. Replace the stubs for `submit`, `up`, `down`, `status`, and `logs`.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+The `up` command should fork a background process running the daemon (or run in foreground with `--foreground`).
 
-# Only used when network mode = allowlist
-# For open mode (default), this script is never called
+The `submit` command should POST to the daemon's `/runs` endpoint.
 
-ALLOWED_DOMAINS="${FORGECTL_ALLOWED_DOMAINS:-}"
+The `status` command should GET from `/health` and `/runs`.
 
-iptables -F OUTPUT
-iptables -P OUTPUT DROP
+The `logs` command should GET from `/runs/:id/events` (SSE) or `/runs/:id` (status).
 
-iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# Allow DNS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-
-IFS=',' read -ra DOMAINS <<< "$ALLOWED_DOMAINS"
-for domain in "${DOMAINS[@]}"; do
-    domain=$(echo "$domain" | xargs)
-    [ -z "$domain" ] && continue
-    for ip in $(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.' || true); do
-        iptables -A OUTPUT -d "$ip" -p tcp --dport 443 -j ACCEPT
-    done
-done
-
-echo "Firewall applied. Allowed: $ALLOWED_DOMAINS"
-```
-
-### `dockerfiles/Dockerfile.code-node20`
-
-```dockerfile
-FROM node:20-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl jq iptables dnsutils ca-certificates build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -LO https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep_14.1.0-1_amd64.deb \
-    && dpkg -i ripgrep_14.1.0-1_amd64.deb && rm ripgrep_14.1.0-1_amd64.deb
-RUN curl -LO https://github.com/sharkdp/fd/releases/download/v10.1.0/fd_10.1.0_amd64.deb \
-    && dpkg -i fd_10.1.0_amd64.deb && rm fd_10.1.0_amd64.deb
-
-RUN npm install -g @anthropic-ai/claude-code
-RUN npm install -g @openai/codex
-
-COPY init-firewall.sh /usr/local/bin/init-firewall.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh
-
-RUN mkdir -p /input /output
-WORKDIR /workspace
-```
-
-Create all the other Dockerfiles from the spec (research, content, data, ops).
+The `down` command should send SIGTERM to the daemon PID.
 
 ---
 
-## Step 9: Tests
+## Step 12: Tests
 
-Create the following test files:
+### `test/unit/prompt.test.ts`
+- Test `buildPrompt` produces correct sections (system, context, tools, task, validation)
+- Test validation instructions are included when steps exist
+- Test file output instructions are added for files mode
 
-### `test/unit/utils.test.ts`
-- Test `expandTemplate` with simple vars, nested vars, missing vars
-- Test `slugify` with various strings, edge cases, max length
-- Test `parseDuration` for s/m/h, invalid input
-- Test `formatDuration` for various ms values
+### `test/unit/validation.test.ts`
+- Test `formatFeedback` produces correct output for each workflow type
+- Test truncation works for long output
+- Test `runValidationStep` mock returns correct StepResult shape
 
-### `test/unit/config.test.ts`
-- Test `ConfigSchema.parse({})` returns all defaults
-- Test loading a YAML string with overrides
-- Test validation errors for bad input
-- Test `deepMerge` — nested objects, array replacement, undefined skipping
+### `test/unit/agent.test.ts`
+- Test Claude Code adapter builds correct command array
+- Test Codex adapter builds correct command array
+- Test `getAgentAdapter` throws for unknown name
 
-### `test/unit/workflow-resolver.test.ts`
-- Test auto-detection: git repo → code, .csv input → data, .md input → content
-- Test explicit workflow override
-- Test merge priority: CLI agent flag overrides config overrides workflow default
-- Test review flag: `--review` enables review even if workflow default is false
-- Test network resolution for open, allowlist, airgapped modes
-- Test RunPlan has correct image, mount path, output mode for each built-in workflow
+### `test/unit/output.test.ts`
+- Test `listFilesRecursive` returns correct file list
+- Test `formatBytes` formats correctly
 
-### `test/unit/workflows.test.ts`
-- Test all 6 built-in workflows load correctly
-- Test `getWorkflow("code")` returns valid definition
-- Test `getWorkflow("nonexistent")` throws
-- Test `listWorkflowNames()` returns all 6
+### `test/unit/preflight.test.ts`
+- Test preflight with missing Docker produces error
+- Test preflight with missing credentials produces error
+- Test preflight with missing input files produces error
 
-### `test/integration/container.test.ts` (skip if FORGECTL_SKIP_DOCKER=true)
-- Test `createContainer` + `execInContainer` + `destroyContainer`
-- Test `exec` captures stdout and stderr separately
-- Test `exec` returns correct exit code
-- Test workspace copy into container
+### `test/unit/daemon.test.ts`
+- Test RunQueue submit/get/list
+- Test queue processes sequentially
+- Test PID lifecycle (save/read/remove)
 
 ---
 
 ## Summary of What Must Work After This Phase
 
 ```bash
-# Config
-forgectl init --stack node          # Creates .forgectl/config.yaml
-forgectl init --stack python        # Python variant
-forgectl init --stack research      # Research variant
+# End-to-end execution (requires Docker + credentials)
+forgectl run --task "Add a healthcheck endpoint to server.ts" --workflow code --repo .
 
-# Auth
-forgectl auth add claude-code       # Stores API key in keychain
-forgectl auth list                  # Shows stored creds
-forgectl auth remove claude-code    # Removes creds
+# Research workflow
+forgectl run --task "Competitive analysis of vector databases" --workflow research
 
-# Workflows
-forgectl workflows list             # Shows 6 built-in workflows
-forgectl workflows show code        # Prints full code workflow YAML
-forgectl workflows show research    # Prints full research workflow YAML
+# Data workflow
+forgectl run --task "Clean and deduplicate" --workflow data --input ./data.csv
 
-# Run (dry run only — actual execution is Phase 3)
-forgectl run --task "Add tests" --dry-run
-# Shows: run ID, task, workflow (auto-detected), agent, image, network mode,
-# input mode, output mode, validation steps, review status, timeout
+# Pre-flight catches missing Docker
+forgectl run --task "test" --workflow code
+# → Error: Docker is not running
 
-forgectl run --task "Research competitors" --workflow research --dry-run
-# Shows research workflow plan with files output mode
+# Pre-flight catches missing credentials
+forgectl run --task "test" --workflow code
+# → Error: No Claude Code credentials found
 
-forgectl run --task "Clean data" --workflow data --input data.csv --dry-run
-# Shows data workflow plan with /input mount
+# Dry run still works
+forgectl run --task "test" --workflow code --dry-run
+
+# Daemon
+forgectl up                         # Starts daemon on :4856
+forgectl status                     # Shows daemon status + runs
+forgectl submit --task "..." --workflow code  # Async submission
+forgectl logs <run-id> --follow     # Stream logs
+forgectl down                       # Stops daemon
+
+# Run log saved after each run
+cat .forgectl/runs/forge-*.json
 
 # Tests
-npm test                            # All unit tests pass
-FORGECTL_SKIP_DOCKER=false npm test # Integration tests with Docker
+npm test                            # All unit tests pass (old + new)
 ```
+
+## IMPORTANT Implementation Notes
+
+1. **The `--no-cleanup` flag** — When building `src/cli/run.ts`, make sure the `noCleanup` CLI option is threaded through. The existing `plan.agent.flags` approach in the `single.ts` won't work cleanly. Add a `noCleanup` field to the RunPlan or pass it separately.
+
+2. **Shell escaping** — The agent prompt can be very long (system prompt + context + task). When wrapping in `sh -c`, the prompt goes through shell expansion. Use proper escaping or write the prompt to a temp file in the container and read it from there:
+   ```
+   execInContainer(container, ["sh", "-c", "cat /tmp/prompt.txt | claude -p -"]);
+   ```
+   This is more robust than trying to escape a multi-kilobyte string.
+
+3. **The `require("node:child_process")` in output collectors** — The project uses ESM (`"type": "module"`). Use `import` instead of `require`. Import `spawn` and `execSync` from `"node:child_process"` at the top of the file.
+
+4. **Git output: tar extraction** — When extracting the `.git` dir from the container, use `spawn("tar", ...)` with the archive stream piped to stdin. This avoids loading the entire tar into memory.
+
+5. **Files output: container path handling** — Docker's `getArchive` returns a tar with the path component. If you request `/output`, the tar contains `output/...`. Strip the leading directory when extracting to the host output dir.
+
+6. **Agent timeout** — `execInContainer` already supports a timeout option. Make sure the agent invocation uses `plan.agent.timeout` to kill runaway agents.
+
+7. **Daemon forking** — For `forgectl up`, spawn a detached child process:
+   ```typescript
+   import { spawn } from "node:child_process";
+   const child = spawn(process.execPath, [daemonScript], {
+     detached: true, stdio: "ignore",
+   });
+   child.unref();
+   ```
