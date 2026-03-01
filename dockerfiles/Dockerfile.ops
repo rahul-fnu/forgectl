@@ -1,0 +1,33 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates \
+    python3 python3-pip \
+    shellcheck \
+    nodejs npm \
+    unzip gnupg software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# Terraform
+RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.0/terraform_1.9.0_linux_amd64.zip -o tf.zip \
+    && unzip tf.zip -d /usr/local/bin && rm tf.zip
+
+# AWS CLI
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscli.zip \
+    && unzip awscli.zip && ./aws/install && rm -rf aws awscli.zip
+
+# kubectl
+RUN curl -fsSL "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
+
+# Ansible
+RUN pip install --break-system-packages ansible ansible-lint
+
+# Agent CLIs
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+WORKDIR /workspace

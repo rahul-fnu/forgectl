@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates \
+    nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Data science stack
+RUN pip install --break-system-packages \
+    pandas numpy scipy matplotlib seaborn plotly \
+    scikit-learn duckdb pyarrow polars \
+    openpyxl xlsxwriter csvkit \
+    jupyter nbconvert
+
+# Agent CLIs
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output/data /output/scripts /output/viz
+WORKDIR /workspace

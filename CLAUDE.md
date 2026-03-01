@@ -1,0 +1,70 @@
+# CLAUDE.md — forgectl
+
+## Project Overview
+forgectl is a CLI + daemon that runs AI agents (Claude Code, Codex) inside isolated Docker containers for any workflow (code, research, content, data, ops). Users bring their own AI subscriptions (BYOK). forgectl provides the sandbox, validation, orchestration, and output collection.
+
+## Tech Stack
+- **Language:** TypeScript, targeting Node.js 20+
+- **CLI framework:** commander
+- **Config:** js-yaml (YAML parsing) + zod (runtime validation)
+- **Docker:** dockerode (Docker Engine API client for Node.js)
+- **HTTP server:** fastify (for daemon REST API)
+- **Agent messaging:** agent-relay (npm dependency, MIT licensed)
+- **Terminal output:** chalk
+- **Globs:** picomatch
+- **Credential storage:** keytar (cross-platform keychain)
+- **Testing:** vitest
+- **Build/bundle:** tsup
+- **Linting:** eslint (flat config) + prettier
+
+## Project Structure
+```
+src/
+├── index.ts              # CLI entry point (commander setup)
+├── cli/                  # CLI command handlers
+├── workflow/             # Workflow system (types, registry, resolver, built-in definitions)
+├── config/               # Config schema (zod), YAML loader, defaults
+├── auth/                 # BYOK credential management (keychain, Claude, Codex)
+├── container/            # Docker sandbox (build, run, exec, network, workspace, secrets, cleanup)
+├── agent/                # Agent adapters (Claude Code, Codex, interface)
+├── orchestration/        # Multi-agent (single, review, parallel, Agent Relay integration)
+├── validation/           # Validation retry loop (run checks, feed errors back to agent)
+├── output/               # Output collection (git branch or files directory)
+├── context/              # Prompt building (system + context + task + validation info)
+├── logging/              # Logger, terminal UI, JSON run logs, SSE events
+├── ui/                   # Web dashboard (React + Vite, served by daemon)
+└── utils/                # Template expansion, slugs, timers, hashing, duration parsing
+```
+
+## Key Architecture Decisions
+1. **Workflows are profiles, not pipelines.** A workflow configures the sandbox (image, network, tools, validation, output mode). The agent decides how to do the task.
+2. **Two output modes:** `git` (branch with commits for code/ops) and `files` (directory for research/content/data).
+3. **Validation is universal.** Same mechanism for all workflows: run command → check exit code → feed errors to agent → retry. What changes is the commands.
+4. **Agent invocations are individual CLI calls.** `claude -p "..."` each time. No persistent sessions.
+5. **Validation retries restart ALL steps** from the top after each agent fix.
+6. **Merge priority:** CLI flags > project config > workflow definition > global defaults.
+7. **Network is open by default.** Containers use standard Docker bridge networking. Optionally restricted via `allowlist` mode (iptables) or `airgapped` mode (`--network=none`).
+
+## Commands
+```bash
+npm run build         # Compile TypeScript
+npm run dev           # Watch mode
+npm test              # Run vitest
+npm run lint          # ESLint
+npm run typecheck     # tsc --noEmit
+```
+
+## Testing
+- Unit tests: `test/unit/` — config, templates, workflow resolver, prompt builder, validation logic
+- Integration tests: `test/integration/` — Docker operations (need Docker running)
+- E2E tests: `test/e2e/` — full run with real containers
+- Skip Docker tests: `FORGECTL_SKIP_DOCKER=true npm test`
+
+## Conventions
+- Use `async/await` everywhere (no callbacks)
+- All Docker operations go through `dockerode`, never shell out to `docker` CLI
+- Errors: throw typed errors with context, catch at CLI boundary
+- Logging: use the structured logger (`src/logging/logger.ts`), not console.log
+- Config values: always validate with zod before use
+- Template variables: `{{var}}` syntax, expanded via `src/utils/template.ts`
+- File paths: always use `path.join()`, never string concatenation

@@ -1,0 +1,20 @@
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates \
+    python3 python3-pip \
+    pandoc wkhtmltopdf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prose linter
+RUN curl -sfL https://install.goreleaser.com/github.com/ValeLint/vale.sh | sh -s -- -b /usr/local/bin || true
+
+# Agent CLIs
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output
+WORKDIR /workspace

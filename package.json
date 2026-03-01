@@ -1,0 +1,43 @@
+{
+  "name": "forgectl",
+  "version": "0.1.0",
+  "description": "Run AI agents in isolated Docker containers for any workflow",
+  "type": "module",
+  "bin": {
+    "forgectl": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:docker": "FORGECTL_SKIP_DOCKER=false vitest run",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.ts'"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dockerode": "^4.0.2",
+    "js-yaml": "^4.1.0",
+    "keytar": "^7.9.0",
+    "picomatch": "^4.0.2",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^3.3.31",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.0",
+    "@types/picomatch": "^3.0.1",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

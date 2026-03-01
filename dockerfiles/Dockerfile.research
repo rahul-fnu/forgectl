@@ -1,0 +1,27 @@
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates \
+    python3 python3-pip \
+    pandoc wkhtmltopdf \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# Puppeteer uses system Chromium
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+RUN npm install -g puppeteer
+
+# Agent CLIs
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+# Python tools for data extraction
+RUN pip install --break-system-packages beautifulsoup4 requests trafilatura
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output
+WORKDIR /workspace
