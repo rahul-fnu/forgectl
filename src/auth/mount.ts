@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import type { ClaudeAuth } from "./claude.js";
+import type { CodexAuth } from "./codex.js";
 
 export interface ContainerMounts {
   binds: string[];                   // Docker bind mount strings
@@ -33,16 +34,26 @@ export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerM
   };
 }
 
-export function prepareCodexMounts(apiKey: string, runId: string): ContainerMounts {
+export function prepareCodexMounts(auth: CodexAuth, runId: string): ContainerMounts {
   const secretsDir = join(tmpdir(), `forgectl-secrets-${runId}-${randomBytes(4).toString("hex")}`);
   mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
+  const binds: string[] = [];
+  const env: Record<string, string> = {};
 
-  const keyPath = join(secretsDir, "openai_api_key");
-  writeFileSync(keyPath, apiKey, { mode: 0o400 });
+  if (auth.type === "api_key" && auth.apiKey) {
+    const keyPath = join(secretsDir, "openai_api_key");
+    writeFileSync(keyPath, auth.apiKey, { mode: 0o400 });
+    binds.push(`${secretsDir}:/run/secrets:ro`);
+    env.OPENAI_API_KEY_FILE = "/run/secrets/openai_api_key";
+  } else if (auth.type === "oauth_session" && auth.sessionDir) {
+    // Mount the entire ~/.codex directory (contains auth.json + config.toml)
+    binds.push(`${auth.sessionDir}:/home/node/.codex:ro`);
+    env.CODEX_HOME = "/home/node/.codex";
+  }
 
   return {
-    binds: [`${secretsDir}:/run/secrets:ro`],
-    env: { OPENAI_API_KEY_FILE: "/run/secrets/openai_api_key" },
+    binds,
+    env,
     cleanup: () => { try { rmSync(secretsDir, { recursive: true, force: true }); } catch { /* ignore */ } },
   };
 }
