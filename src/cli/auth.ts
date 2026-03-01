@@ -41,6 +41,15 @@ export async function authCommand(action: string, provider?: string): Promise<vo
       await setClaudeApiKey(key);
       console.log(chalk.green("✔ Claude Code API key saved."));
     } else if (provider === "codex") {
+      // Check for existing OAuth session first
+      const { getCodexAuth } = await import("../auth/codex.js");
+      const existing = await getCodexAuth();
+      if (existing?.type === "oauth_session") {
+        console.log(chalk.green("✔ Found existing Codex OAuth session at ~/.codex/"));
+        console.log(chalk.gray("  (from 'codex login'). This will be used automatically."));
+        const override = await prompt("Add an API key anyway? (y/N): ");
+        if (override.toLowerCase() !== "y") return;
+      }
       const key = await prompt("Enter your OpenAI API key: ");
       await setCodexApiKey(key);
       console.log(chalk.green("✔ Codex (OpenAI) API key saved."));

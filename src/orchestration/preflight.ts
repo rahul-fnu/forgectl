@@ -35,7 +35,7 @@ export async function runPreflightChecks(plan: RunPlan, logger: Logger): Promise
   } else if (plan.agent.type === "codex") {
     const auth = await getCodexAuth();
     if (!auth) {
-      errors.push("No Codex credentials found. Run: forgectl auth add codex");
+      errors.push("No Codex credentials found. Run: codex login (OAuth) or forgectl auth add codex (API key)");
     }
   }
 

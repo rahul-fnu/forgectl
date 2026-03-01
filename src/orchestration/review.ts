@@ -102,12 +102,17 @@ async function prepareReviewerCredentials(
     }
     agentEnv.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
   } else {
-    const apiKey = await getCodexAuth();
-    if (!apiKey) throw new Error("No Codex credentials configured for reviewer");
-    const mounts = prepareCodexMounts(apiKey, `${runId}-reviewer-${round}`);
+    const auth = await getCodexAuth();
+    if (!auth) throw new Error("No Codex credentials configured for reviewer. Run: codex login (OAuth) or forgectl auth add codex (API key)");
+    const mounts = prepareCodexMounts(auth, `${runId}-reviewer-${round}`);
     binds.push(...mounts.binds);
     cleanup.secretCleanups.push(mounts.cleanup);
-    agentEnv.push(`OPENAI_API_KEY=${apiKey}`);
+    if (auth.type === "api_key" && auth.apiKey) {
+      agentEnv.push(`OPENAI_API_KEY=${auth.apiKey}`);
+    }
+    if (mounts.env.CODEX_HOME) {
+      agentEnv.push(`CODEX_HOME=${mounts.env.CODEX_HOME}`);
+    }
   }
 
   return { binds, agentEnv };
