@@ -27,6 +27,9 @@ export async function runCommand(options: CLIOptions): Promise<void> {
   console.log(chalk.gray(`  Workflow: ${plan.workflow.name}`));
   console.log(chalk.gray(`  Agent:    ${plan.agent.type}`));
   console.log(chalk.gray(`  Image:    ${plan.container.image}`));
+  if (plan.orchestration.mode === "review") {
+    console.log(chalk.gray(`  Mode:     review (max ${plan.orchestration.review.maxRounds} rounds)`));
+  }
   console.log();
 
   // --- Pre-flight ---
@@ -66,6 +69,14 @@ export async function runCommand(options: CLIOptions): Promise<void> {
     for (const step of result.validation.stepResults) {
       const icon = step.passed ? chalk.green("✔") : chalk.red("✗");
       console.log(chalk.gray(`    ${icon} ${step.name} (${step.attempts} attempt(s))`));
+    }
+  }
+
+  if (result.review) {
+    if (result.review.approved) {
+      console.log(chalk.gray(`  Review: ${result.review.totalRounds} round(s), approved on round ${result.review.approvedOnRound}`));
+    } else {
+      console.log(chalk.gray(`  Review: ${result.review.totalRounds} round(s), not approved`));
     }
   }
 
@@ -129,7 +140,7 @@ function printDryRun(plan: ReturnType<typeof resolveRunPlan>): void {
   for (const step of plan.validation.steps) {
     console.log(`    - ${step.name}: \`${step.command}\` (${step.retries} retries)`);
   }
-  console.log(`  Review:     ${plan.orchestration.review.enabled ? "enabled" : "disabled"}`);
+  console.log(`  Review:     ${plan.orchestration.review.enabled ? `enabled (max ${plan.orchestration.review.maxRounds} rounds)` : "disabled"}`);
   console.log(`  Timeout:    ${plan.agent.timeout}ms`);
   console.log();
 }
