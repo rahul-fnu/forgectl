@@ -147,6 +147,8 @@ export async function executeSingleAgent(
     );
 
     logger.info("agent", `Agent finished (exit ${agentResult.exitCode}, ${agentResult.durationMs}ms)`);
+    if (agentResult.stdout) logger.info("agent", `STDOUT: ${agentResult.stdout.slice(0, 2000)}`);
+    if (agentResult.stderr) logger.info("agent", `STDERR: ${agentResult.stderr.slice(0, 2000)}`);
     if (agentResult.exitCode !== 0) {
       logger.warn("agent", `Agent exited with non-zero code: ${agentResult.exitCode}`);
       if (agentResult.stderr) {

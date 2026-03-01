@@ -50,11 +50,11 @@ describe("claudeCodeAdapter", () => {
 });
 
 describe("codexAdapter", () => {
-  it("builds shell command with codex flags", () => {
+  it("builds shell command with codex exec flags", () => {
     const cmd = codexAdapter.buildShellCommand(PROMPT_FILE, defaultOptions);
-    expect(cmd).toContain("codex");
-    expect(cmd).toContain("--quiet");
-    expect(cmd).toContain("--approval-mode full-auto");
+    expect(cmd).toContain("codex exec");
+    expect(cmd).toContain("--yolo");
+    expect(cmd).toContain("--skip-git-repo-check");
     expect(cmd).toContain(PROMPT_FILE);
   });
 

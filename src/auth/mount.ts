@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -21,7 +21,6 @@ export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerM
     const keyPath = join(secretsDir, "anthropic_api_key");
     writeFileSync(keyPath, auth.apiKey, { mode: 0o400 });
     binds.push(`${secretsDir}:/run/secrets:ro`);
-    // Env injection happens at exec time: ANTHROPIC_API_KEY=$(cat /run/secrets/anthropic_api_key)
     env.ANTHROPIC_API_KEY_FILE = "/run/secrets/anthropic_api_key";
   } else if (auth.type === "oauth_session" && auth.sessionDir) {
     binds.push(`${auth.sessionDir}:/home/node/.claude:ro`);
@@ -46,8 +45,24 @@ export function prepareCodexMounts(auth: CodexAuth, runId: string): ContainerMou
     binds.push(`${secretsDir}:/run/secrets:ro`);
     env.OPENAI_API_KEY_FILE = "/run/secrets/openai_api_key";
   } else if (auth.type === "oauth_session" && auth.sessionDir) {
-    // Mount the entire ~/.codex directory (contains auth.json + config.toml)
-    binds.push(`${auth.sessionDir}:/home/node/.codex:ro`);
+    // Create a writable CODEX_HOME with auth.json copied in.
+    // Codex needs to write skills cache, models cache, config, etc.
+    // Mounting ~/.codex read-only breaks Codex (read-only FS errors).
+    const codexHome = join(secretsDir, "codex-home");
+    mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+
+    // Copy auth.json from host
+    const authJson = readFileSync(join(auth.sessionDir, "auth.json"), "utf-8");
+    writeFileSync(join(codexHome, "auth.json"), authJson, { mode: 0o600 });
+
+    // Copy config.toml if it exists
+    const configPath = join(auth.sessionDir, "config.toml");
+    if (existsSync(configPath)) {
+      const configToml = readFileSync(configPath, "utf-8");
+      writeFileSync(join(codexHome, "config.toml"), configToml, { mode: 0o600 });
+    }
+
+    binds.push(`${codexHome}:/home/node/.codex`);
     env.CODEX_HOME = "/home/node/.codex";
   }
 
