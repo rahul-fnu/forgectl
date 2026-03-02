@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>forgectl</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        bg: { DEFAULT: '#0f1117', card: '#161922', hover: '#1c2030' },
+        accent: { blue: '#3b82f6', green: '#22c55e', red: '#ef4444', yellow: '#eab308', gray: '#6b7280' },
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0f1117; color: #e5e7eb; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace; }
+  .log-line { font-size: 13px; line-height: 1.6; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const API = '';
+
+// --- Helpers ---
+function elapsed(start, end) {
+  const ms = (end ? new Date(end) : new Date()) - new Date(start);
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s/60)}m ${s%60}s`;
+}
+
+function StatusBadge({ status }) {
+  const colors = {
+    queued: 'bg-gray-600 text-gray-200',
+    running: 'bg-blue-600 text-blue-100',
+    completed: 'bg-green-700 text-green-100',
+    failed: 'bg-red-700 text-red-100',
+  };
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || 'bg-gray-600 text-gray-200'}`}>{status}</span>;
+}
+
+// --- Pages ---
+function DashboardPage({ navigate }) {
+  const [runs, setRuns] = useState([]);
+  const [task, setTask] = useState('');
+  const [workflow, setWorkflow] = useState('code');
+  const [agent, setAgent] = useState('codex');
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchRuns = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/runs`);
+      if (res.ok) setRuns(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchRuns();
+    const i = setInterval(fetchRuns, 3000);
+    return () => clearInterval(i);
+  }, [fetchRuns]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!task.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API}/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task, workflow, agent }),
+      });
+      if (res.ok) {
+        setTask('');
+        fetchRuns();
+      }
+    } catch {}
+    setSubmitting(false);
+  };
+
+  const active = runs.filter(r => r.status === 'running' || r.status === 'queued');
+  const recent = runs.filter(r => r.status === 'completed' || r.status === 'failed').slice(-10).reverse();
+
+  return (
+    <div className="space-y-8">
+      {/* Quick Submit */}
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <h2 className="text-lg font-semibold mb-4">Submit Run</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <textarea
+            value={task}
+            onChange={e => setTask(e.target.value)}
+            placeholder="Describe the task..."
+            className="w-full bg-bg rounded border border-gray-700 p-3 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none"
+            rows={3}
+          />
+          <div className="flex gap-4 items-end">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Workflow</label>
+              <select value={workflow} onChange={e => setWorkflow(e.target.value)} className="bg-bg border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200">
+                {['code','research','content','data','ops','general'].map(w => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Agent</label>
+              <select value={agent} onChange={e => setAgent(e.target.value)} className="bg-bg border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200">
+                <option value="claude-code">claude-code</option>
+                <option value="codex">codex</option>
+              </select>
+            </div>
+            <button
+              type="submit"
+              disabled={submitting || !task.trim()}
+              className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm font-medium"
+            >
+              {submitting ? 'Submitting...' : 'Submit'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Active Runs */}
+      {active.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold mb-3">Active Runs</h2>
+          <div className="grid gap-3">
+            {active.map(run => (
+              <div key={run.id} onClick={() => navigate('run', run.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-gray-400 font-mono">{run.id}</span>
+                  <StatusBadge status={run.status} />
+                </div>
+                <p className="text-sm truncate">{run.task}</p>
+                <div className="flex gap-4 mt-2 text-xs text-gray-500">
+                  <span>{run.workflow || 'code'}</span>
+                  <span>{elapsed(run.submittedAt)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent Runs */}
+      <div>
+        <h2 className="text-lg font-semibold mb-3">Recent Runs</h2>
+        {recent.length === 0 ? (
+          <p className="text-sm text-gray-500">No completed runs yet.</p>
+        ) : (
+          <div className="grid gap-3">
+            {recent.map(run => (
+              <div key={run.id} onClick={() => navigate('run', run.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-gray-400 font-mono">{run.id}</span>
+                  <StatusBadge status={run.status} />
+                </div>
+                <p className="text-sm truncate">{run.task}</p>
+                <div className="flex gap-4 mt-2 text-xs text-gray-500">
+                  <span>{run.workflow || 'code'}</span>
+                  {run.submittedAt && run.completedAt && <span>{elapsed(run.submittedAt, run.completedAt)}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RunViewPage({ runId, navigate }) {
+  const [run, setRun] = useState(null);
+  const [events, setEvents] = useState([]);
+  const logRef = useRef(null);
+  const esRef = useRef(null);
+
+  useEffect(() => {
+    fetch(`${API}/runs/${runId}`).then(r => r.ok ? r.json() : null).then(setRun);
+  }, [runId]);
+
+  useEffect(() => {
+    // Connect to SSE
+    const es = new EventSource(`${API}/runs/${runId}/events`);
+    esRef.current = es;
+    es.onmessage = (msg) => {
+      try {
+        const evt = JSON.parse(msg.data);
+        setEvents(prev => [...prev, evt]);
+      } catch {}
+    };
+    es.onerror = () => { es.close(); };
+    return () => es.close();
+  }, [runId]);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [events]);
+
+  // Also poll for run state updates
+  useEffect(() => {
+    const i = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/runs/${runId}`);
+        if (r.ok) setRun(await r.json());
+      } catch {}
+    }, 2000);
+    return () => clearInterval(i);
+  }, [runId]);
+
+  const eventColor = (type) => ({
+    phase: 'text-blue-400',
+    validation: 'text-green-400',
+    retry: 'text-yellow-400',
+    output: 'text-purple-400',
+    completed: 'text-green-300',
+    failed: 'text-red-400',
+    started: 'text-gray-400',
+  }[type] || 'text-gray-300');
+
+  return (
+    <div className="space-y-6">
+      <button onClick={() => navigate('dashboard')} className="text-sm text-gray-400 hover:text-gray-200">&larr; Back</button>
+
+      {/* Header */}
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-mono text-sm text-gray-400">{runId}</h2>
+          {run && <StatusBadge status={run.status} />}
+        </div>
+        {run && (
+          <>
+            <p className="text-lg mb-2">{run.task || run.options?.task}</p>
+            <div className="flex gap-6 text-xs text-gray-500">
+              <span>Workflow: {run.workflow || run.options?.workflow || 'code'}</span>
+              <span>Agent: {run.options?.agent || 'claude-code'}</span>
+              {run.submittedAt && <span>Submitted: {new Date(run.submittedAt).toLocaleString()}</span>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Output Preview */}
+      {run?.result?.output && (
+        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+          <h3 className="text-sm font-semibold mb-3">Output</h3>
+          {run.result.output.mode === 'git' ? (
+            <div className="text-sm space-y-1">
+              <p>Branch: <span className="text-blue-400 font-mono">{run.result.output.branch}</span></p>
+              <p>{run.result.output.filesChanged} file(s) changed, <span className="text-green-400">+{run.result.output.insertions}</span> <span className="text-red-400">-{run.result.output.deletions}</span></p>
+            </div>
+          ) : (
+            <div className="text-sm">
+              <p>{run.result.output.files?.length || 0} files in {run.result.output.dir}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Validation Progress */}
+      {run?.result?.validation && (
+        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+          <h3 className="text-sm font-semibold mb-3">Validation</h3>
+          <div className="space-y-2">
+            {run.result.validation.stepResults?.map((step, i) => (
+              <div key={i} className="flex items-center gap-3 text-sm">
+                <span className={step.passed ? 'text-green-400' : 'text-red-400'}>{step.passed ? '\u2713' : '\u2717'}</span>
+                <span>{step.name}</span>
+                <span className="text-gray-500 text-xs">({step.attempts} attempt{step.attempts !== 1 ? 's' : ''})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Live Log */}
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <h3 className="text-sm font-semibold mb-3">Event Log</h3>
+        <div ref={logRef} className="bg-bg rounded p-4 max-h-96 overflow-y-auto scrollbar-thin">
+          {events.length === 0 ? (
+            <p className="text-sm text-gray-500">Waiting for events...</p>
+          ) : events.map((evt, i) => (
+            <div key={i} className={`log-line ${eventColor(evt.type)}`}>
+              <span className="text-gray-600 mr-2">{new Date(evt.timestamp).toLocaleTimeString()}</span>
+              <span className="font-medium mr-2">[{evt.type}]</span>
+              <span className="text-gray-300">{JSON.stringify(evt.data)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryPage({ navigate }) {
+  const [runs, setRuns] = useState([]);
+  const [filter, setFilter] = useState({ workflow: 'all', status: 'all' });
+
+  useEffect(() => {
+    fetch(`${API}/runs`).then(r => r.ok ? r.json() : []).then(setRuns);
+  }, []);
+
+  const filtered = runs.filter(r => {
+    if (filter.workflow !== 'all' && r.workflow !== filter.workflow) return false;
+    if (filter.status !== 'all' && r.status !== filter.status) return false;
+    return true;
+  }).reverse();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-4">
+        <h2 className="text-lg font-semibold">History</h2>
+        <select value={filter.workflow} onChange={e => setFilter(f => ({...f, workflow: e.target.value}))} className="bg-bg border border-gray-700 rounded px-2 py-1 text-xs text-gray-300">
+          <option value="all">All workflows</option>
+          {['code','research','content','data','ops','general'].map(w => <option key={w} value={w}>{w}</option>)}
+        </select>
+        <select value={filter.status} onChange={e => setFilter(f => ({...f, status: e.target.value}))} className="bg-bg border border-gray-700 rounded px-2 py-1 text-xs text-gray-300">
+          <option value="all">All statuses</option>
+          <option value="completed">completed</option>
+          <option value="failed">failed</option>
+          <option value="running">running</option>
+          <option value="queued">queued</option>
+        </select>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500 border-b border-gray-800">
+              <th className="pb-2 pr-4">Run ID</th>
+              <th className="pb-2 pr-4">Task</th>
+              <th className="pb-2 pr-4">Workflow</th>
+              <th className="pb-2 pr-4">Status</th>
+              <th className="pb-2 pr-4">Duration</th>
+              <th className="pb-2">Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(run => (
+              <tr key={run.id} onClick={() => navigate('run', run.id)} className="border-b border-gray-800/50 hover:bg-bg-hover cursor-pointer">
+                <td className="py-2 pr-4 font-mono text-gray-400 text-xs">{run.id}</td>
+                <td className="py-2 pr-4 max-w-xs truncate">{run.task}</td>
+                <td className="py-2 pr-4 text-gray-400">{run.workflow || 'code'}</td>
+                <td className="py-2 pr-4"><StatusBadge status={run.status} /></td>
+                <td className="py-2 pr-4 text-gray-500">{run.submittedAt && run.completedAt ? elapsed(run.submittedAt, run.completedAt) : '-'}</td>
+                <td className="py-2 text-gray-500">{run.submittedAt ? new Date(run.submittedAt).toLocaleDateString() : '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length === 0 && <p className="text-sm text-gray-500 mt-4">No runs match filters.</p>}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage() {
+  const [auth, setAuth] = useState(null);
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/auth/status`).then(r => r.ok ? r.json() : null).then(setAuth);
+    fetch(`${API}/health`).then(r => r.ok ? r.json() : null).then(setHealth);
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-lg font-semibold">Settings</h2>
+
+      {/* Daemon Info */}
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <h3 className="text-sm font-semibold mb-3">Daemon</h3>
+        {health ? (
+          <div className="text-sm space-y-1">
+            <p>Status: <span className="text-green-400">running</span></p>
+            <p>Port: 4856</p>
+            <p>Version: 0.1.0</p>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Unable to reach daemon</p>
+        )}
+      </div>
+
+      {/* Auth Status */}
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <h3 className="text-sm font-semibold mb-3">Authentication</h3>
+        {auth ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-sm">
+              <span className={auth.claude?.configured ? 'text-green-400' : 'text-gray-500'}>{auth.claude?.configured ? '\u2713' : '\u2717'}</span>
+              <span>Claude Code</span>
+              {auth.claude?.configured && <span className="text-xs text-gray-500">({auth.claude.type})</span>}
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <span className={auth.codex?.configured ? 'text-green-400' : 'text-gray-500'}>{auth.codex?.configured ? '\u2713' : '\u2717'}</span>
+              <span>Codex</span>
+              {auth.codex?.configured && <span className="text-xs text-gray-500">({auth.codex.type})</span>}
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Loading...</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- App Shell ---
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [pageArg, setPageArg] = useState(null);
+
+  const navigate = (p, arg) => { setPage(p); setPageArg(arg || null); };
+
+  const navItems = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'history', label: 'History' },
+    { key: 'settings', label: 'Settings' },
+  ];
+
+  return (
+    <div className="min-h-screen">
+      {/* Header */}
+      <header className="border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-6">
+          <h1 className="text-lg font-bold tracking-tight">forgectl</h1>
+          <nav className="flex gap-1">
+            {navItems.map(item => (
+              <button
+                key={item.key}
+                onClick={() => navigate(item.key)}
+                className={`px-3 py-1 rounded text-sm ${page === item.key ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <span className="text-xs text-gray-600">v0.1.0</span>
+      </header>
+
+      {/* Content */}
+      <main className="max-w-5xl mx-auto px-6 py-8">
+        {page === 'dashboard' && <DashboardPage navigate={navigate} />}
+        {page === 'run' && <RunViewPage runId={pageArg} navigate={navigate} />}
+        {page === 'history' && <HistoryPage navigate={navigate} />}
+        {page === 'settings' && <SettingsPage />}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -1,3 +1,6 @@
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { RunQueue } from "./queue.js";
@@ -21,6 +24,27 @@ export async function startDaemon(port = 4856): Promise<void> {
   });
 
   registerRoutes(app, queue);
+
+  // Serve dashboard UI — find the index.html from src/ui or bundled location
+  const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
+  const uiCandidates = [
+    join(selfDir, "ui", "index.html"),         // bundled alongside dist/
+    join(selfDir, "..", "src", "ui", "index.html"), // running from dist/ in dev
+    join(selfDir, "..", "ui", "index.html"),    // alt layout
+  ];
+  const uiPath = uiCandidates.find(p => existsSync(p));
+  if (uiPath) {
+    const html = readFileSync(uiPath, "utf-8");
+    app.get("/ui", async (_req, reply) => { reply.type("text/html").send(html); });
+    // Serve at root only if no other route matched (register after API routes)
+    app.setNotFoundHandler(async (req, reply) => {
+      if (req.method === "GET" && (req.url === "/" || req.url.startsWith("/ui"))) {
+        reply.type("text/html").send(html);
+      } else {
+        reply.code(404).send({ error: "Not found" });
+      }
+    });
+  }
 
   await app.listen({ port, host: "127.0.0.1" });
   savePid(process.pid);

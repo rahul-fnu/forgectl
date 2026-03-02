@@ -2,10 +2,22 @@ import type { FastifyInstance } from "fastify";
 import type { RunQueue } from "./queue.js";
 import { runEvents } from "../logging/events.js";
 import type { RunEvent } from "../logging/events.js";
+import { getClaudeAuth } from "../auth/claude.js";
+import { getCodexAuth } from "../auth/codex.js";
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
+
+  // Auth status for dashboard settings page
+  app.get("/auth/status", async () => {
+    const claude = await getClaudeAuth();
+    const codex = await getCodexAuth();
+    return {
+      claude: claude ? { type: claude.type, configured: true } : { configured: false },
+      codex: codex ? { type: codex.type, configured: true } : { configured: false },
+    };
+  });
 
   // Submit a run
   app.post<{ Body: { task: string; workflow?: string; input?: string[]; agent?: string } }>(
