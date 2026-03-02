@@ -19,7 +19,10 @@ describe("ConfigSchema", () => {
     expect(config.repo.branch.template).toBe("forge/{{slug}}/{{ts}}");
     expect(config.repo.branch.base).toBe("main");
     expect(config.repo.exclude).toContain("node_modules/");
-    expect(config.repo.exclude).toContain(".git/objects/");
+    expect(config.repo.exclude).toContain("dist/");
+    // .git/objects/ must NOT be excluded — excluding it strips git history from the
+    // workspace copy, breaking collectGitOutput (git rev-list returns empty).
+    expect(config.repo.exclude).not.toContain(".git/objects/");
 
     expect(config.orchestration.mode).toBe("single");
     expect(config.orchestration.review.max_rounds).toBe(3);

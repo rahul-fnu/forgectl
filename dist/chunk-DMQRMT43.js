@@ -83,7 +83,6 @@ var ConfigSchema = z.object({
     }).default({}),
     exclude: z.array(z.string()).default([
       "node_modules/",
-      ".git/objects/",
       "dist/",
       "build/",
       "*.log",
@@ -175,4 +174,4 @@ export {
   loadConfig,
   deepMerge
 };
-//# sourceMappingURL=chunk-GRM5NCZS.js.map
+//# sourceMappingURL=chunk-DMQRMT43.js.map

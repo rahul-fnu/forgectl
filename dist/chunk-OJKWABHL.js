@@ -2,7 +2,7 @@
 import {
   WorkflowSchema,
   deepMerge
-} from "./chunk-GRM5NCZS.js";
+} from "./chunk-DMQRMT43.js";
 import {
   getCodexAuth,
   getCredential,
@@ -452,13 +452,14 @@ function shellEscape(s) {
 var codexAdapter = {
   name: "codex",
   buildShellCommand(promptFile, options) {
-    let cmd = `cat "${promptFile}" | codex exec --yolo --skip-git-repo-check -`;
+    let cmd = `codex exec --yolo --skip-git-repo-check`;
     if (options.model) {
       cmd += ` --model ${shellEscape2(options.model)}`;
     }
     for (const flag of options.flags) {
       cmd += ` ${shellEscape2(flag)}`;
     }
+    cmd += ` "$(cat "${promptFile}")"`;
     return cmd;
   }
 };
@@ -986,9 +987,17 @@ function slugify(text, maxLength = 50) {
 // src/output/git.ts
 async function collectGitOutput(container, plan, logger) {
   const slug = slugify(plan.task);
-  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:T]/g, "").slice(0, 15);
+  const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:T.]/g, "").slice(0, 15);
   const branch = expandTemplate("forge/{{slug}}/{{ts}}", { slug, ts });
   logger.info("output", `Creating branch: ${branch}`);
+  await execInContainer(container, [
+    "git",
+    "config",
+    "--global",
+    "--add",
+    "safe.directory",
+    "/workspace"
+  ], { workingDir: "/workspace" });
   await execInContainer(container, [
     "git",
     "config",
@@ -1001,37 +1010,56 @@ async function collectGitOutput(container, plan, logger) {
     "user.email",
     plan.commit.author.email
   ], { workingDir: "/workspace" });
+  const initialResult = await execInContainer(container, [
+    "git",
+    "rev-list",
+    "--max-parents=0",
+    "HEAD"
+  ], { workingDir: "/workspace" });
+  const initialSha = initialResult.stdout.trim().split("\n")[0];
+  const logResult = await execInContainer(container, [
+    "git",
+    "log",
+    "--oneline",
+    `${initialSha}..HEAD`
+  ], { workingDir: "/workspace" });
+  const hasAgentCommits = logResult.stdout.trim().length > 0;
   await execInContainer(container, ["git", "add", "-A"], {
     workingDir: "/workspace"
   });
-  const diffResult = await execInContainer(container, ["git", "diff", "--cached", "--stat"], {
-    workingDir: "/workspace"
-  });
-  if (!diffResult.stdout.trim()) {
+  const diffResult = await execInContainer(container, [
+    "git",
+    "diff",
+    "--cached",
+    "--stat"
+  ], { workingDir: "/workspace" });
+  const hasUnstagedChanges = diffResult.stdout.trim().length > 0;
+  if (!hasAgentCommits && !hasUnstagedChanges) {
     logger.warn("output", "No changes detected in workspace");
     return { mode: "git", branch, sha: "", filesChanged: 0, insertions: 0, deletions: 0 };
+  }
+  if (hasUnstagedChanges) {
+    const commitMsg = expandTemplate(plan.commit.message.template, {
+      prefix: plan.commit.message.prefix,
+      summary: plan.task.slice(0, 72)
+    });
+    await execInContainer(container, ["git", "commit", "-m", commitMsg], {
+      workingDir: "/workspace"
+    });
   }
   await execInContainer(container, ["git", "checkout", "-b", branch], {
     workingDir: "/workspace"
   });
-  const commitMsg = expandTemplate(plan.commit.message.template, {
-    prefix: plan.commit.message.prefix,
-    summary: plan.task.slice(0, 72)
-  });
-  const commitCmd = [
-    "git",
-    "commit",
-    "-m",
-    commitMsg
-  ];
-  await execInContainer(container, commitCmd, { workingDir: "/workspace" });
   const shaResult = await execInContainer(container, ["git", "rev-parse", "HEAD"], {
     workingDir: "/workspace"
   });
   const sha = shaResult.stdout.trim();
-  const statResult = await execInContainer(container, ["git", "diff", "--stat", "HEAD~1"], {
-    workingDir: "/workspace"
-  });
+  const statResult = await execInContainer(container, [
+    "git",
+    "diff",
+    "--stat",
+    `${initialSha}..HEAD`
+  ], { workingDir: "/workspace" });
   const statLine = statResult.stdout.trim().split("\n").pop() || "";
   const filesChanged = parseInt(statLine.match(/(\d+) file/)?.[1] || "0", 10);
   const insertions = parseInt(statLine.match(/(\d+) insertion/)?.[1] || "0", 10);
@@ -1702,4 +1730,4 @@ export {
   removePid,
   isDaemonRunning
 };
-//# sourceMappingURL=chunk-272RPIER.js.map
+//# sourceMappingURL=chunk-OJKWABHL.js.map

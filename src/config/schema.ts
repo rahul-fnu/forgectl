@@ -83,7 +83,7 @@ export const ConfigSchema = z.object({
       base: z.string().default("main"),
     }).default({}),
     exclude: z.array(z.string()).default([
-      "node_modules/", ".git/objects/", "dist/", "build/", "*.log", ".env", ".env.*",
+      "node_modules/", "dist/", "build/", "*.log", ".env", ".env.*",
     ]),
   }).default({}),
 
