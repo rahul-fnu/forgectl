@@ -1,191 +1,135 @@
-# TASK: Add Codex OAuth Session Support
+# TASK: Debug and fix git output collection — "No changes detected" despite agent making changes
 
-Add support for Codex CLI's ChatGPT OAuth login flow alongside the existing API key method. This mirrors how Claude Code auth already works (API key OR OAuth session).
+## Problem
 
-## Background
+`src/output/git.ts` `collectGitOutput()` reports "No changes detected in workspace" even though the agent (Codex) successfully modifies files, creates new files, and all validation passes. The agent's STDOUT confirms it made changes (modified `index.js`, created test files, etc.).
 
-Codex CLI supports two auth methods:
-1. **API key** — `OPENAI_API_KEY` env var (current implementation)
-2. **ChatGPT OAuth** — user runs `codex login` on their machine, which stores credentials in `~/.codex/auth.json`. The entire `~/.codex/` directory (or `$CODEX_HOME`) contains auth.json + config.toml.
+## What We Know From Previous Debugging
 
-To use OAuth in a container, mount `~/.codex/` read-only and set `CODEX_HOME` to the mount path. Codex CLI picks up the cached session automatically.
+1. **The agent DOES make changes.** STDOUT shows files modified/created. Validation (lint/test/build) passes. The agent runs for 30-60 seconds and exits 0.
 
-## Files to Change
+2. **Previous debug output showed:** `initialSha=, hasAgentCommits=false, hasUnstagedChanges=false` — meaning `git rev-list --max-parents=0 HEAD` returned EMPTY inside the container. This happened because `.git/objects/` was excluded during workspace copy.
 
-### 1. `src/auth/codex.ts`
+3. **We fixed the exclude** — removed `.git/objects/` from the default excludes in `src/config/schema.ts`. After that fix, one run showed: `initialSha=816aa14..., hasAgentCommits=false, hasUnstagedChanges=true` — proving the detection CAN work.
 
-Change `getCodexAuth()` from returning `Promise<string | null>` (just API key) to returning a typed auth object, exactly like `src/auth/claude.ts` does.
+4. **But subsequent runs still show 0 changes.** The fix is in the source, builds are clean, but it's intermittent or there's another issue.
 
-```typescript
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { getCredential, setCredential } from "./store.js";
+## Your Task
 
-const PROVIDER = "codex";
+### Step 1: Add comprehensive debug logging
 
-export interface CodexAuth {
-  type: "api_key" | "oauth_session";
-  apiKey?: string;
-  sessionDir?: string;    // Path to ~/.codex (contains auth.json, config.toml)
-}
-
-export async function getCodexAuth(): Promise<CodexAuth | null> {
-  // Check for API key first
-  const apiKey = await getCredential(PROVIDER, "api_key");
-  if (apiKey) return { type: "api_key", apiKey };
-
-  // Check for OAuth session (codex login stores credentials in ~/.codex/)
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  const codexHome = process.env.CODEX_HOME || join(home, ".codex");
-  const authJson = join(codexHome, "auth.json");
-  if (existsSync(authJson)) return { type: "oauth_session", sessionDir: codexHome };
-
-  return null;
-}
-
-export async function setCodexApiKey(key: string): Promise<void> {
-  await setCredential(PROVIDER, "api_key", key);
-}
-```
-
-### 2. `src/auth/mount.ts`
-
-Change `prepareCodexMounts` to accept `CodexAuth` instead of a raw API key string. Handle both auth types:
-
-- **API key**: same as before — write to temp file, mount as secret
-- **OAuth session**: mount `sessionDir` to `/home/node/.codex:ro` and set `CODEX_HOME=/home/node/.codex` in env
+Add temporary debug logging to `src/output/git.ts` in the `collectGitOutput` function. After each git command, log the full stdout and stderr. Specifically:
 
 ```typescript
-import type { CodexAuth } from "./codex.js";
+// After git rev-list
+logger.info("output", `DEBUG rev-list stdout: "${initialResult.stdout}" stderr: "${initialResult.stderr}" exit: ${initialResult.exitCode}`);
 
-export function prepareCodexMounts(auth: CodexAuth, runId: string): ContainerMounts {
-  const secretsDir = join(tmpdir(), `forgectl-secrets-${runId}-${randomBytes(4).toString("hex")}`);
-  mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
-  const binds: string[] = [];
-  const env: Record<string, string> = {};
+// After git log
+logger.info("output", `DEBUG git-log stdout: "${logResult.stdout}" stderr: "${logResult.stderr}" exit: ${logResult.exitCode}`);
 
-  if (auth.type === "api_key" && auth.apiKey) {
-    const keyPath = join(secretsDir, "openai_api_key");
-    writeFileSync(keyPath, auth.apiKey, { mode: 0o400 });
-    binds.push(`${secretsDir}:/run/secrets:ro`);
-    env.OPENAI_API_KEY_FILE = "/run/secrets/openai_api_key";
-  } else if (auth.type === "oauth_session" && auth.sessionDir) {
-    // Mount the entire ~/.codex directory (contains auth.json + config.toml)
-    binds.push(`${auth.sessionDir}:/home/node/.codex:ro`);
-    env.CODEX_HOME = "/home/node/.codex";
-  }
+// After git add -A  
+const addResult = await execInContainer(container, ["git", "add", "-A"], { workingDir: "/workspace" });
+logger.info("output", `DEBUG git-add exit: ${addResult.exitCode} stderr: "${addResult.stderr}"`);
 
-  return {
-    binds,
-    env,
-    cleanup: () => { try { rmSync(secretsDir, { recursive: true, force: true }); } catch { /* ignore */ } },
-  };
-}
+// After git diff --cached
+logger.info("output", `DEBUG git-diff-cached stdout: "${diffResult.stdout}" stderr: "${diffResult.stderr}" exit: ${diffResult.exitCode}`);
+
+// Also log git status and git log --all for full picture
+const statusResult = await execInContainer(container, ["git", "status"], { workingDir: "/workspace" });
+logger.info("output", `DEBUG git-status: "${statusResult.stdout}"`);
+
+const fullLogResult = await execInContainer(container, ["git", "log", "--oneline", "--all"], { workingDir: "/workspace" });
+logger.info("output", `DEBUG git-log-all: "${fullLogResult.stdout}"`);
+
+// Also check what files exist
+const lsResult = await execInContainer(container, ["ls", "-la", "/workspace"], { workingDir: "/workspace" });
+logger.info("output", `DEBUG ls-workspace: "${lsResult.stdout}"`);
 ```
 
-### 3. `src/orchestration/single.ts`
-
-Update the codex auth block (around line 82) to use the new `CodexAuth` type:
-
-```typescript
-// Replace this:
-    } else {
-      const apiKey = await getCodexAuth();
-      if (!apiKey) throw new Error("No Codex credentials configured");
-      const mounts = prepareCodexMounts(apiKey, plan.runId);
-      binds.push(...mounts.binds);
-      cleanup.secretCleanups.push(mounts.cleanup);
-      agentEnv.push(`OPENAI_API_KEY=${apiKey}`);
-    }
-
-// With this:
-    } else {
-      const auth = await getCodexAuth();
-      if (!auth) throw new Error("No Codex credentials configured. Run: codex login (OAuth) or forgectl auth add codex (API key)");
-      const mounts = prepareCodexMounts(auth, plan.runId);
-      binds.push(...mounts.binds);
-      cleanup.secretCleanups.push(mounts.cleanup);
-      if (auth.type === "api_key" && auth.apiKey) {
-        agentEnv.push(`OPENAI_API_KEY=${auth.apiKey}`);
-      }
-      if (mounts.env.CODEX_HOME) {
-        agentEnv.push(`CODEX_HOME=${mounts.env.CODEX_HOME}`);
-      }
-    }
-```
-
-### 4. `src/orchestration/review.ts`
-
-Same pattern change in the `prepareReviewerCredentials` function (around line 104):
-
-```typescript
-// Replace this:
-    const apiKey = await getCodexAuth();
-    if (!apiKey) throw new Error("No Codex credentials configured for reviewer");
-    const mounts = prepareCodexMounts(apiKey, `${runId}-reviewer-${round}`);
-    binds.push(...mounts.binds);
-    cleanup.secretCleanups.push(mounts.cleanup);
-    agentEnv.push(`OPENAI_API_KEY=${apiKey}`);
-
-// With this:
-    const auth = await getCodexAuth();
-    if (!auth) throw new Error("No Codex credentials configured for reviewer. Run: codex login (OAuth) or forgectl auth add codex (API key)");
-    const mounts = prepareCodexMounts(auth, `${runId}-reviewer-${round}`);
-    binds.push(...mounts.binds);
-    cleanup.secretCleanups.push(mounts.cleanup);
-    if (auth.type === "api_key" && auth.apiKey) {
-      agentEnv.push(`OPENAI_API_KEY=${auth.apiKey}`);
-    }
-    if (mounts.env.CODEX_HOME) {
-      agentEnv.push(`CODEX_HOME=${mounts.env.CODEX_HOME}`);
-    }
-```
-
-### 5. `src/orchestration/preflight.ts`
-
-Update the preflight error message (around line 38):
-
-```typescript
-// Replace:
-      errors.push("No Codex credentials found. Run: forgectl auth add codex");
-// With:
-      errors.push("No Codex credentials found. Run: codex login (OAuth) or forgectl auth add codex (API key)");
-```
-
-### 6. `src/cli/auth.ts`
-
-Update the `auth add codex` flow to detect existing OAuth sessions (mirror the claude-code pattern):
-
-```typescript
-    } else if (provider === "codex") {
-      // Check for existing OAuth session first
-      const { getCodexAuth } = await import("../auth/codex.js");
-      const existing = await getCodexAuth();
-      if (existing?.type === "oauth_session") {
-        console.log(chalk.green("✔ Found existing Codex OAuth session at ~/.codex/"));
-        console.log(chalk.gray("  (from 'codex login'). This will be used automatically."));
-        const override = await prompt("Add an API key anyway? (y/N): ");
-        if (override.toLowerCase() !== "y") return;
-      }
-      const key = await prompt("Enter your OpenAI API key: ");
-      await setCodexApiKey(key);
-      console.log(chalk.green("✔ Codex (OpenAI) API key saved."));
-    }
-```
-
-Also add the `getCodexAuth` import at the top or use dynamic import as shown above.
-
-## Verification
-
-After making changes:
+### Step 2: Build and run E2E test
 
 ```bash
-npm run typecheck   # Must pass clean
-npm test            # All existing tests must pass
+npm run build
+
+rm -rf /tmp/forge-test && mkdir /tmp/forge-test && cd /tmp/forge-test
+git init
+cat > package.json << 'EOF'
+{"name":"forge-test","scripts":{"lint":"echo ok","typecheck":"echo ok","test":"echo ok","build":"echo ok"}}
+EOF
+cat > index.js << 'EOF'
+const express = require("express");
+const app = express();
+app.get("/", (req, res) => res.json({ message: "hello" }));
+module.exports = app;
+EOF
+git add -A && git commit -m "init"
+
+cd ~/forgectl
+node dist/index.js run \
+  --task "Add a GET /health endpoint that returns { status: 'ok' }" \
+  --workflow code \
+  --agent codex \
+  --repo /tmp/forge-test \
+  --no-review \
+  --verbose
 ```
 
-No new test files needed — the changes are small and the auth detection logic is straightforward (existsSync on a known path). The existing preflight tests may need minor updates if they mock getCodexAuth.
+### Step 3: Analyze the debug output
 
-## Summary
+Read ALL the DEBUG lines carefully. They will tell you:
+- Whether `.git` history is intact (`rev-list` should return a SHA)
+- Whether the agent committed (`git log initial..HEAD` should show commits) or left files uncommitted (`git status` should show modified/untracked files)
+- Whether `git add -A` actually stages anything
+- What files actually exist in `/workspace`
 
-6 files changed, all following the same pattern: replace raw `string` API key with `CodexAuth` union type that supports both `api_key` and `oauth_session`, exactly mirroring the existing `ClaudeAuth` pattern.
+### Step 4: Fix the root cause
+
+Based on the debug output, fix the issue. Possible causes:
+
+**A) The workspace `.git` directory is still incomplete.** Check if `src/config/schema.ts` still excludes `.git/objects/`. The default excludes should be:
+```typescript
+exclude: z.array(z.string()).default([
+  "node_modules/", "dist/", "build/", "*.log", ".env", ".env.*",
+]),
+```
+Do NOT exclude any `.git` subdirectories.
+
+**B) The agent's changes happen in a different location.** Maybe Codex runs `git init` and creates a new repo, or changes are in a subdirectory.
+
+**C) `execInContainer` workingDir doesn't match the bind mount.** The workspace is bind-mounted at `/workspace` but maybe the container's actual working directory is different.
+
+**D) The rsync/copy excludes more than expected.** Check `src/container/workspace.ts` — the `picomatch` patterns might be matching `.git` subdirectories unexpectedly. Test by adding debug logging to `prepareRepoWorkspace` to see what's being excluded.
+
+**E) The agent's sandbox/approval settings cause it to not write.** But STDOUT says it did write, so this is unlikely.
+
+### Step 5: Remove debug logging and verify
+
+After fixing the root cause:
+1. Remove ALL debug logging you added
+2. Rebuild: `npm run build`
+3. Run the E2E test again
+4. Verify output shows `N files changed, +N -N` (not 0)
+5. Verify the branch exists on the host: `cd /tmp/forge-test && git log --oneline --all`
+6. Run all tests: `npm run typecheck && npm test`
+
+## Key Files
+
+- `src/output/git.ts` — Output collection (the bug is here or in data flowing into it)
+- `src/config/schema.ts` — Default excludes (previously had `.git/objects/` which broke things)
+- `src/container/workspace.ts` — `prepareRepoWorkspace()` copies repo to temp dir
+- `src/container/runner.ts` — `execInContainer()` runs commands in Docker
+- `src/orchestration/single.ts` — Orchestration flow that calls collectGitOutput
+
+## Success Criteria
+
+The E2E test must show actual file changes in the output:
+```
+  Branch: forge/add-a-get-health-endpoint-...
+  N files changed, +N -N    ← NOT 0 files changed
+```
+
+And the branch must exist on the host repo:
+```bash
+cd /tmp/forge-test
+git log --oneline --all    ← must show the forge/* branch with commits
+```

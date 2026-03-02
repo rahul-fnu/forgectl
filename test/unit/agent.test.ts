@@ -56,12 +56,25 @@ describe("codexAdapter", () => {
     expect(cmd).toContain("--yolo");
     expect(cmd).toContain("--skip-git-repo-check");
     expect(cmd).toContain(PROMPT_FILE);
+    // Prompt must be passed as a positional argument via command substitution,
+    // not piped via stdin — codex exec does not reliably support the `-` stdin flag.
+    expect(cmd).not.toContain("| codex exec");
+    expect(cmd).toContain(`"$(cat "${PROMPT_FILE}")"`);
   });
 
   it("includes model when specified", () => {
     const cmd = codexAdapter.buildShellCommand(PROMPT_FILE, { ...defaultOptions, model: "gpt-4o" });
     expect(cmd).toContain("--model");
     expect(cmd).toContain("gpt-4o");
+  });
+
+  it("places flags before the prompt argument", () => {
+    const cmd = codexAdapter.buildShellCommand(PROMPT_FILE, { ...defaultOptions, model: "gpt-4o" });
+    const modelIdx = cmd.indexOf("--model");
+    const promptIdx = cmd.indexOf(`"$(cat`);
+    expect(modelIdx).toBeGreaterThan(-1);
+    expect(promptIdx).toBeGreaterThan(-1);
+    expect(modelIdx).toBeLessThan(promptIdx);
   });
 });
 

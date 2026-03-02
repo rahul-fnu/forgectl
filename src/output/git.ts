@@ -17,10 +17,17 @@ export async function collectGitOutput(
   logger: Logger
 ): Promise<GitResult> {
   const slug = slugify(plan.task);
-  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
+  const ts = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 15);
   const branch = expandTemplate("forge/{{slug}}/{{ts}}", { slug, ts });
 
   logger.info("output", `Creating branch: ${branch}`);
+
+  // Trust the workspace mount regardless of ownership.
+  // The container runs as root but /workspace is bind-mounted from a temp dir owned
+  // by the host user (e.g. uid=node), so git refuses all operations without this.
+  await execInContainer(container, [
+    "git", "config", "--global", "--add", "safe.directory", "/workspace",
+  ], { workingDir: "/workspace" });
 
   // Configure git identity in container
   await execInContainer(container, [
@@ -30,49 +37,58 @@ export async function collectGitOutput(
     "git", "config", "user.email", plan.commit.author.email,
   ], { workingDir: "/workspace" });
 
-  // Stage all changes
+  // Get the initial commit SHA (the root commit, representing the state before the agent ran)
+  const initialResult = await execInContainer(container, [
+    "git", "rev-list", "--max-parents=0", "HEAD",
+  ], { workingDir: "/workspace" });
+  const initialSha = initialResult.stdout.trim().split("\n")[0];
+
+  // Check whether the agent made any commits on top of the initial state
+  const logResult = await execInContainer(container, [
+    "git", "log", "--oneline", `${initialSha}..HEAD`,
+  ], { workingDir: "/workspace" });
+  const hasAgentCommits = logResult.stdout.trim().length > 0;
+
+  // Also check for any unstaged/untracked changes the agent left behind (without committing)
   await execInContainer(container, ["git", "add", "-A"], {
     workingDir: "/workspace",
   });
+  const diffResult = await execInContainer(container, [
+    "git", "diff", "--cached", "--stat",
+  ], { workingDir: "/workspace" });
+  const hasUnstagedChanges = diffResult.stdout.trim().length > 0;
 
-  // Check if there are staged changes
-  const diffResult = await execInContainer(container, ["git", "diff", "--cached", "--stat"], {
-    workingDir: "/workspace",
-  });
-
-  if (!diffResult.stdout.trim()) {
+  if (!hasAgentCommits && !hasUnstagedChanges) {
     logger.warn("output", "No changes detected in workspace");
     return { mode: "git", branch, sha: "", filesChanged: 0, insertions: 0, deletions: 0 };
   }
 
-  // Create branch from HEAD
+  // If there are staged changes (agent left uncommitted work), commit them now
+  if (hasUnstagedChanges) {
+    const commitMsg = expandTemplate(plan.commit.message.template, {
+      prefix: plan.commit.message.prefix,
+      summary: plan.task.slice(0, 72),
+    });
+    await execInContainer(container, ["git", "commit", "-m", commitMsg], {
+      workingDir: "/workspace",
+    });
+  }
+
+  // Create the branch at current HEAD (includes agent commits and/or the forge commit)
   await execInContainer(container, ["git", "checkout", "-b", branch], {
     workingDir: "/workspace",
   });
 
-  // Commit
-  const commitMsg = expandTemplate(plan.commit.message.template, {
-    prefix: plan.commit.message.prefix,
-    summary: plan.task.slice(0, 72),
-  });
-
-  const commitCmd = [
-    "git", "commit",
-    "-m", commitMsg,
-  ];
-
-  await execInContainer(container, commitCmd, { workingDir: "/workspace" });
-
-  // Get commit SHA
+  // Get final commit SHA
   const shaResult = await execInContainer(container, ["git", "rev-parse", "HEAD"], {
     workingDir: "/workspace",
   });
   const sha = shaResult.stdout.trim();
 
-  // Get diff stats
-  const statResult = await execInContainer(container, ["git", "diff", "--stat", "HEAD~1"], {
-    workingDir: "/workspace",
-  });
+  // Get diff stats: compare all changes from the initial commit to current HEAD
+  const statResult = await execInContainer(container, [
+    "git", "diff", "--stat", `${initialSha}..HEAD`,
+  ], { workingDir: "/workspace" });
 
   const statLine = statResult.stdout.trim().split("\n").pop() || "";
   const filesChanged = parseInt(statLine.match(/(\d+) file/)?.[1] || "0", 10);

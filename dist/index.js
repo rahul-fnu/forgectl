@@ -11,10 +11,10 @@ import {
   readPid,
   resolveRunPlan,
   setClaudeApiKey
-} from "./chunk-272RPIER.js";
+} from "./chunk-OJKWABHL.js";
 import {
   loadConfig
-} from "./chunk-GRM5NCZS.js";
+} from "./chunk-DMQRMT43.js";
 import {
   deleteCredential,
   getCodexAuth,
@@ -468,7 +468,7 @@ program.command("up").description("Start the forgectl daemon").option("-p, --por
     return;
   }
   if (opts.foreground) {
-    const { startDaemon } = await import("./server-EQF7HS3B.js");
+    const { startDaemon } = await import("./server-VJEB5URL.js");
     await startDaemon(port);
   } else {
     const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port)], {
@@ -573,7 +573,7 @@ program.command("logs <runId>").description("Show logs for a run").option("--fol
       const res = await fetch(`http://127.0.0.1:4856/runs/${runId}`);
       if (!res.ok) {
         const { readFileSync, existsSync: existsSync3 } = await import("fs");
-        const { loadConfig: loadConfig2 } = await import("./loader-O6NH4T4W.js");
+        const { loadConfig: loadConfig2 } = await import("./loader-SHPNPOKX.js");
         const config = loadConfig2();
         const logPath = `${config.output.log_dir}/${runId}.json`;
         if (existsSync3(logPath)) {
