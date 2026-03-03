@@ -181,7 +181,7 @@ describe("workflow resolver", () => {
 
     it("research workflow has correct output mode", () => {
       const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "research" }));
-      expect(plan.container.image).toBe("forgectl/research");
+      expect(plan.container.image).toBe("forgectl/research-browser");
       expect(plan.input.mountPath).toBe("/input");
       expect(plan.output.mode).toBe("files");
       expect(plan.output.path).toBe("/output");

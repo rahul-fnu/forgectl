@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq ca-certificates \
+    nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# browser-use + LLM integrations
+RUN pip install --break-system-packages \
+    browser-use \
+    langchain-openai \
+    langchain-anthropic \
+    beautifulsoup4 \
+    trafilatura \
+    markdownify
+
+# Agent CLIs
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+# Playwright browsers for browser-use
+RUN pip install --break-system-packages playwright
+RUN playwright install --with-deps chromium
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output
+WORKDIR /workspace

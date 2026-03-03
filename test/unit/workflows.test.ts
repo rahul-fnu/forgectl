@@ -37,7 +37,7 @@ describe("workflow registry", () => {
   it("getWorkflow('research') returns valid definition", () => {
     const workflow = getWorkflow("research");
     expect(workflow.name).toBe("research");
-    expect(workflow.container.image).toBe("forgectl/research");
+    expect(workflow.container.image).toBe("forgectl/research-browser");
     expect(workflow.input.mode).toBe("files");
     expect(workflow.output.mode).toBe("files");
     expect(workflow.output.path).toBe("/output");

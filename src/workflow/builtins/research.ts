@@ -4,7 +4,7 @@ export const researchWorkflow: WorkflowDefinition = {
   name: "research",
   description: "Research a topic, synthesize findings, produce a report",
   container: {
-    image: "forgectl/research",
+    image: "forgectl/research-browser",
     network: { mode: "open", allow: [] },
   },
   input: { mode: "files", mountPath: "/input" },
