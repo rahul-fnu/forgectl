@@ -4,6 +4,13 @@ import { runCommand } from "./cli/run.js";
 import { authCommand } from "./cli/auth.js";
 import { initCommand } from "./cli/init.js";
 import { workflowsCommand } from "./cli/workflows.js";
+import {
+  pipelineShowCommand,
+  pipelineRunCommand,
+  pipelineStatusCommand,
+  pipelineRerunCommand,
+  pipelineRevertCommand,
+} from "./cli/pipeline.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -249,5 +256,50 @@ program
       }
     }
   });
+
+// forgectl pipeline
+const pipelineCmd = program
+  .command("pipeline")
+  .description("DAG pipeline orchestration");
+
+pipelineCmd
+  .command("show")
+  .description("Display the pipeline DAG")
+  .requiredOption("-f, --file <path>", "Pipeline YAML file")
+  .action(pipelineShowCommand);
+
+pipelineCmd
+  .command("run")
+  .description("Execute a pipeline")
+  .requiredOption("-f, --file <path>", "Pipeline YAML file")
+  .option("-r, --repo <path>", "Repository path override")
+  .option("--dry-run", "Show execution plan without running")
+  .option("--verbose", "Show detailed output")
+  .option("--max-parallel <n>", "Max parallel nodes")
+  .option("--from <node>", "Resume from this node")
+  .action(pipelineRunCommand);
+
+pipelineCmd
+  .command("status")
+  .description("Show pipeline status")
+  .requiredOption("-f, --file <path>", "Pipeline YAML file")
+  .action(pipelineStatusCommand);
+
+pipelineCmd
+  .command("rerun")
+  .description("Re-run pipeline from a specific node")
+  .requiredOption("-f, --file <path>", "Pipeline YAML file")
+  .requiredOption("--from <node>", "Node to start from")
+  .option("-r, --repo <path>", "Repository path override")
+  .option("--verbose", "Show detailed output")
+  .action(pipelineRerunCommand);
+
+pipelineCmd
+  .command("revert")
+  .description("Revert to a checkpoint")
+  .requiredOption("-f, --file <path>", "Pipeline YAML file")
+  .requiredOption("--to <node>", "Node to revert to")
+  .option("--pipeline-run <id>", "Pipeline run ID")
+  .action(pipelineRevertCommand);
 
 program.parse();
