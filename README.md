@@ -116,6 +116,73 @@ forgectl run \
   --workflow ops
 ```
 
+## Pipelines (v2)
+
+Pipelines let you define multi-step DAGs where each node is a forgectl run. Outputs chain between nodes, and you can checkpoint/revert to any point.
+
+### Pipeline YAML Format
+
+```yaml
+name: add-auth-system
+description: Add authentication to an Express app
+
+defaults:
+  workflow: code
+  agent: codex
+  repo: ./my-project
+
+nodes:
+  - id: user-model
+    task: "Create a User model with Prisma ORM."
+
+  - id: auth-routes
+    task: "Add POST /auth/register and POST /auth/login."
+    depends_on: [user-model]
+
+  - id: auth-middleware
+    task: "Create auth middleware that verifies JWT tokens."
+    depends_on: [user-model]
+
+  - id: protect-routes
+    task: "Add auth middleware to all routes except /health."
+    depends_on: [auth-routes, auth-middleware]
+
+  - id: auth-tests
+    task: "Write integration tests for the auth system."
+    depends_on: [protect-routes]
+```
+
+### Pipeline Commands
+
+```bash
+# Visualize the DAG
+forgectl pipeline show --file pipeline.yaml
+
+# Execute the pipeline
+forgectl pipeline run --file pipeline.yaml --repo ./my-project
+
+# Dry-run (show execution plan)
+forgectl pipeline run --file pipeline.yaml --dry-run
+
+# Re-run from a specific node (skips upstream)
+forgectl pipeline rerun --file pipeline.yaml --from auth-routes
+
+# Revert to a checkpoint
+forgectl pipeline revert --file pipeline.yaml --to user-model --pipeline-run <run-id>
+
+# Show pipeline status
+forgectl pipeline status --file pipeline.yaml
+```
+
+### How It Works
+
+- **Git-mode workflows:** Each node starts from the previous node's branch. Fan-in merges upstream branches.
+- **Files-mode workflows:** Upstream output files become downstream input files.
+- **Parallel execution:** Independent nodes run simultaneously (up to `--max-parallel`).
+- **Checkpointing:** Each completed node saves a checkpoint. Resume from any point without re-executing upstream tasks.
+
+See `examples/` for sample pipelines.
+
 ## CLI Reference
 
 ```
@@ -148,6 +215,17 @@ forgectl down                 Stop the daemon
 forgectl status               Show daemon status and recent runs
 forgectl submit [options]     Submit a run to the daemon
 forgectl logs <runId>         Show run logs (--follow for SSE stream)
+
+forgectl pipeline show -f <path>     Visualize the DAG
+forgectl pipeline run -f <path>      Execute a pipeline
+  --dry-run                          Show plan without executing
+  --max-parallel <n>                 Max concurrent nodes
+  --from <node>                      Resume from node
+forgectl pipeline status -f <path>   Show pipeline status
+forgectl pipeline rerun -f <path>    Re-run from a node
+  --from <node>                      Node to start from
+forgectl pipeline revert -f <path>   Revert to checkpoint
+  --to <node>                        Target node
 ```
 
 ## Configuration
@@ -279,6 +357,11 @@ When the daemon is running:
 | GET | /runs | List all runs |
 | GET | /runs/:id | Get run details |
 | GET | /runs/:id/events | SSE event stream |
+| POST | /pipelines | Submit a pipeline |
+| GET | /pipelines | List pipeline runs |
+| GET | /pipelines/:id | Get pipeline status |
+| GET | /pipelines/:id/events | Pipeline SSE stream |
+| POST | /pipelines/:id/rerun | Re-run from a node |
 
 ## Development
 

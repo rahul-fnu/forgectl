@@ -1,0 +1,27 @@
+name: sales-etl
+description: ETL pipeline for sales data analysis
+defaults:
+  workflow: data
+  agent: codex
+
+nodes:
+  - id: clean
+    task: "Clean sales-raw.csv: remove duplicates, fix date formats, handle nulls."
+    input: [./data/sales-raw.csv]
+
+  - id: enrich
+    task: "Enrich the cleaned data: add region from zip code, calculate total per order."
+    depends_on: [clean]
+
+  - id: aggregate
+    task: "Produce summary stats: revenue by region, top 10 products, monthly trend."
+    depends_on: [enrich]
+
+  - id: visualize
+    task: "Create matplotlib charts: revenue trend, regional breakdown pie, top products bar."
+    depends_on: [aggregate]
+
+  - id: report
+    task: "Write a markdown executive summary with embedded chart references."
+    workflow: content
+    depends_on: [aggregate, visualize]

@@ -1,0 +1,23 @@
+name: competitive-analysis
+description: Research competitors and synthesize findings
+defaults:
+  workflow: research
+  agent: codex
+
+nodes:
+  - id: datadog-research
+    task: "Research Datadog: pricing, features, market position, recent changes, customer sentiment."
+
+  - id: grafana-research
+    task: "Research Grafana Cloud: pricing, features, market position, recent changes, customer sentiment."
+
+  - id: newrelic-research
+    task: "Research New Relic: pricing, features, market position, recent changes, customer sentiment."
+
+  - id: synthesis
+    task: |
+      Synthesize the three research reports into a competitive analysis.
+      Include: feature comparison table, pricing comparison, strengths/weaknesses,
+      recommendation for a startup with 50 engineers.
+    workflow: content
+    depends_on: [datadog-research, grafana-research, newrelic-research]

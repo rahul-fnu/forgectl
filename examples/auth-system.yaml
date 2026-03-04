@@ -1,0 +1,49 @@
+name: add-auth-system
+description: Add authentication to an Express app
+defaults:
+  workflow: code
+  agent: codex
+  repo: ./my-api
+
+nodes:
+  - id: user-model
+    task: |
+      Create a User model with Prisma ORM.
+      Fields: id (uuid), email (unique), passwordHash, createdAt, updatedAt.
+      Create and run the migration.
+
+  - id: auth-routes
+    task: |
+      Add POST /auth/register and POST /auth/login.
+      Use bcrypt for password hashing, JWT for tokens.
+      Register: validate email/password, hash password, create user, return JWT.
+      Login: find user by email, verify password, return JWT.
+    depends_on: [user-model]
+
+  - id: auth-middleware
+    task: |
+      Create requireAuth middleware.
+      Extract JWT from Authorization: Bearer <token> header.
+      Verify token, attach user to request.
+      Return 401 if missing/invalid.
+    depends_on: [user-model]
+
+  - id: protect-routes
+    task: |
+      Add requireAuth middleware to all existing routes except:
+      - GET /health
+      - POST /auth/register
+      - POST /auth/login
+    depends_on: [auth-routes, auth-middleware]
+
+  - id: auth-tests
+    task: |
+      Write integration tests for the auth system:
+      - Register with valid data -> 201 + JWT
+      - Register with duplicate email -> 409
+      - Login with valid creds -> 200 + JWT
+      - Login with wrong password -> 401
+      - Access protected route with valid JWT -> 200
+      - Access protected route without JWT -> 401
+      - Access protected route with expired JWT -> 401
+    depends_on: [protect-routes]
