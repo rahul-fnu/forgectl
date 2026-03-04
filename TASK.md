@@ -1,176 +1,576 @@
-# TASK: Complete forgectl — Phase 6 Dashboard + Phase 7 Polish + Full E2E Verification
+# TASK: Build forgectl v2 — DAG Pipeline Orchestration
 
-You are finishing forgectl, a CLI + daemon that runs AI agents in isolated Docker containers. The core engine works end-to-end (Phases 1-5 are complete and tested). Your job is to build the web dashboard, polish the project, and verify everything works.
+You are adding DAG workflow orchestration to forgectl. The core engine (single-task execution) already works. You are building a pipeline layer on top that lets users define multi-step DAGs where each node is a forgectl run, outputs chain between nodes, and you can checkpoint/revert.
 
-**Read SPEC.md first** — it contains the full architecture, all workflow definitions, and the dashboard spec.
+**Read SPEC.md first** — it has the full v2 specification, examples, and architecture.
 
-**IMPORTANT: This is an unattended overnight run. You must be thorough and self-verifying. After each phase, run tests and verify your work before moving on. At the end, run a comprehensive E2E verification. Do NOT leave anything broken.**
+**IMPORTANT: This is an unattended overnight run. Be thorough and self-verifying. After each phase, run tests and verify your work before moving on.**
 
 ---
 
-## Phase 6: Web Dashboard
+## Phase 0: Cleanup
 
-Build a React dashboard served by the daemon at http://127.0.0.1:4857. The daemon already has a REST API at :4856 with these endpoints:
+### 0A: Remove Ideon integration artifacts
 
-```
-GET  /health                → { status: "ok" }
-POST /runs                  → Submit a run (body: { task, workflow?, input?, agent? })
-GET  /runs                  → List all runs
-GET  /runs/:id              → Get run details
-GET  /runs/:id/events       → SSE stream of run events
-```
+The previous overnight run added Ideon-specific changes. Clean them up:
 
-Events are typed: `started | phase | validation | retry | output | completed | failed`
+```bash
+cd ~/forgectl
 
-### 6A: Project Setup
+# Remove Ideon fork if it exists
+rm -rf ~/ideon
+rm -rf ~/ideon-forgectl
 
-Create the dashboard as a single-page React app that gets bundled and served by the daemon as static files.
-
-**Option 1 (simpler, preferred):** Build as a single `src/ui/index.html` file with inline React via CDN (React, ReactDOM, Tailwind CDN). The daemon serves this file directly. No Vite build step needed.
-
-**Option 2:** If you prefer a proper build pipeline, use Vite with React+TypeScript, output to `dist/ui/`, and have the daemon serve from there. But Option 1 is fine for V1.
-
-The daemon server (`src/daemon/server.ts`) needs to be updated to serve the UI. Add a static file route:
-
-```typescript
-// Serve dashboard UI
-import { join } from "node:path";
-app.register(import("@fastify/static"), {
-  root: join(import.meta.dirname, "ui"),  // or wherever the built UI lives
-  prefix: "/",
-});
+# Check if Ideon API extensions were pushed to main
+git log --oneline -10
 ```
 
-Or for the simpler approach, just serve the single HTML file at `/` and `/ui`.
+If commits like "Extend daemon API: inline context" or "Add AI Task block" exist on main, do NOT revert them — the inline context and /auth/status endpoints are useful for pipelines too. Just leave them.
 
-### 6B: Dashboard Page
+Remove only Ideon-specific files that don't belong:
+- Any FORGECTL_INTEGRATION_NOTES.md in the forgectl repo
+- Any references to Ideon in README.md
 
-The main dashboard at `/` shows:
+### 0B: Verify v1 still works
 
-1. **Active Runs** — cards for currently running tasks showing: task name, workflow type, agent, elapsed time, current phase (prepare/execute/validate/output), live validation status
-2. **Recent Runs** — last 10 completed runs showing: task, workflow, status (success/failed), duration, files changed
-3. **Quick Submit** — form to submit a new run: task (textarea), workflow (dropdown: code/research/content/data/ops/general), agent (dropdown: claude-code/codex), repo path or input files, submit button
-
-Data comes from `GET /runs` (poll every 3s for active runs, or use SSE).
-
-### 6C: Run View Page
-
-Clicking a run card navigates to `/runs/:id` showing:
-
-1. **Header** — run ID, task, workflow, agent, status badge, duration
-2. **Live Log** — SSE connection to `/runs/:id/events`, streaming log entries in a terminal-style scrolling view. Color-code by type: phase headers in blue, validation pass in green, failures in red, agent output in white
-3. **Validation Progress** — visual checklist of validation steps, updating live as each completes
-4. **Output Preview** — after completion, show the output: for git mode, show the branch name and diff stats; for files mode, list output files
-
-### 6D: History Page
-
-`/history` — filterable table of all runs:
-- Columns: Run ID, Task, Workflow, Agent, Status, Duration, Date
-- Filters: workflow type dropdown, status dropdown (all/success/failed), date range
-- Click row → navigate to run view
-
-### 6E: Settings Page
-
-`/settings` — show:
-- Auth status: which providers are configured (read from a new `/auth/status` API endpoint)
-- Daemon info: uptime, port, version
-
-Add a new route to `src/daemon/routes.ts`:
-```typescript
-app.get("/auth/status", async () => {
-  const claude = await getClaudeAuth();
-  const codex = await getCodexAuth();
-  return {
-    claude: claude ? { type: claude.type, configured: true } : { configured: false },
-    codex: codex ? { type: codex.type, configured: true } : { configured: false },
-  };
-});
-```
-
-### 6F: Styling
-
-Use Tailwind CSS (CDN is fine). Design should be:
-- Dark theme (dark gray backgrounds, white text, colored accents)
-- Clean, minimal, developer-focused
-- Responsive but optimized for desktop
-- Status colors: green for success, red for failed, blue for running, gray for queued
-
-### 6G: Wire Up Daemon
-
-Update `src/daemon/server.ts` to:
-1. Serve the dashboard UI at the root path
-2. Add the `/auth/status` endpoint
-3. Add CORS headers for local development
-
-### Verification for Phase 6:
 ```bash
 npm run build
-forgectl up --foreground &
-sleep 2
-# Test API
-curl http://127.0.0.1:4856/health
-curl http://127.0.0.1:4856/auth/status
-# Test UI serves
-curl -s http://127.0.0.1:4856/ | head -5  # Should return HTML
-forgectl down
+npm run typecheck
+FORGECTL_SKIP_DOCKER=true npm test
+node dist/index.js --help
+node dist/index.js workflows list
+```
+
+ALL tests must pass before proceeding. Fix any issues.
+
+Commit:
+```bash
+git add -A && git commit -m "Cleanup: remove Ideon integration artifacts"
 ```
 
 ---
 
-## Phase 7: Polish
+## Phase 1: Pipeline Types and Parser
 
-### 7A: README
+### 1A: Pipeline types (`src/pipeline/types.ts`)
 
-Create a comprehensive `README.md` with:
-- What forgectl is (one paragraph)
-- Quick start (install, auth setup, first run)
-- Usage examples for each workflow type (code, research, content, data, ops)
-- Configuration reference
-- Custom workflows guide
-- Dashboard screenshot placeholder
-- Architecture overview (text, not image)
+Define the core interfaces:
 
-### 7B: Cleanup
+```typescript
+// Pipeline definition (from YAML)
+interface PipelineDefinition {
+  name: string;
+  description?: string;
+  defaults?: {
+    workflow?: string;
+    agent?: string;
+    repo?: string;
+    review?: boolean;
+    model?: string;
+  };
+  nodes: PipelineNode[];
+}
 
-- Remove any debug logging, TODO comments, or dead code
-- Ensure all TypeScript compiles cleanly: `npm run typecheck`
-- Ensure all tests pass: `npm test`
-- Ensure build is clean: `npm run build`
+interface PipelineNode {
+  id: string;
+  task: string;
+  depends_on?: string[];
+  workflow?: string;
+  agent?: string;
+  repo?: string;
+  review?: boolean;
+  model?: string;
+  input?: string[];
+  context?: string[];
+  pipe?: {
+    mode: "branch" | "files" | "context";
+  };
+}
 
-### 7C: Missing Small Features
+// Pipeline execution state
+interface PipelineRun {
+  id: string;
+  pipeline: PipelineDefinition;
+  status: "running" | "completed" | "failed";
+  nodes: Map<string, NodeExecution>;
+  startedAt: string;
+  completedAt?: string;
+}
 
-Check if these work and fix if broken:
-- `forgectl init` — generates a starter `.forgectl/config.yaml`
-- `forgectl workflows list` — lists all built-in workflows
-- `forgectl workflows show code` — shows the code workflow definition
-- `forgectl auth list` — shows configured credentials
+interface NodeExecution {
+  nodeId: string;
+  runId?: string;
+  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  startedAt?: string;
+  completedAt?: string;
+  result?: ExecutionResult;  // From src/orchestration/single.ts
+  checkpoint?: CheckpointRef;
+  error?: string;
+}
 
----
+interface CheckpointRef {
+  nodeId: string;
+  pipelineRunId: string;
+  timestamp: string;
+  branch?: string;
+  commitSha?: string;
+  outputDir?: string;
+}
+```
 
-## Phase 8: Full E2E Verification (CRITICAL — DO NOT SKIP)
+### 1B: Pipeline parser (`src/pipeline/parser.ts`)
 
-**This is the most important phase. You MUST run these verifications and fix any issues before finishing.**
+Load and validate pipeline YAML files using zod:
 
-### 8A: Unit Tests
+```typescript
+import { z } from "zod";
+import { readFileSync } from "node:fs";
+import { load } from "js-yaml";
+
+const PipelineNodeSchema = z.object({
+  id: z.string().regex(/^[a-z0-9-]+$/, "Node IDs must be lowercase alphanumeric with hyphens"),
+  task: z.string().min(1),
+  depends_on: z.array(z.string()).optional(),
+  workflow: z.string().optional(),
+  agent: z.string().optional(),
+  repo: z.string().optional(),
+  review: z.boolean().optional(),
+  model: z.string().optional(),
+  input: z.array(z.string()).optional(),
+  context: z.array(z.string()).optional(),
+  pipe: z.object({
+    mode: z.enum(["branch", "files", "context"]),
+  }).optional(),
+});
+
+const PipelineSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  defaults: z.object({
+    workflow: z.string().optional(),
+    agent: z.string().optional(),
+    repo: z.string().optional(),
+    review: z.boolean().optional(),
+    model: z.string().optional(),
+  }).optional(),
+  nodes: z.array(PipelineNodeSchema).min(1),
+});
+
+export function parsePipeline(filePath: string): PipelineDefinition {
+  const raw = readFileSync(filePath, "utf-8");
+  const data = load(raw);
+  return PipelineSchema.parse(data);
+}
+```
+
+### 1C: DAG validation (`src/pipeline/dag.ts`)
+
+```typescript
+// Validate the DAG:
+// 1. No duplicate node IDs
+// 2. All depends_on references point to existing nodes
+// 3. No cycles (use DFS-based cycle detection)
+// 4. At least one root node (no dependencies)
+
+// Topological sort:
+// Return nodes in execution order (Kahn's algorithm)
+// Nodes at the same "level" (same depth) can run in parallel
+
+export function validateDAG(pipeline: PipelineDefinition): { valid: boolean; errors: string[] };
+export function topologicalSort(pipeline: PipelineDefinition): string[];
+export function getParallelGroups(pipeline: PipelineDefinition): string[][];
+```
+
+### Verification:
 ```bash
 npm run typecheck
-npm test
+FORGECTL_SKIP_DOCKER=true npm test
 ```
-ALL tests must pass. Fix any failures.
 
-### 8B: Build Verification
+Write tests in `test/unit/pipeline-dag.test.ts`:
+- Valid linear DAG (A → B → C)
+- Valid fan-out (A → B, A → C)
+- Valid fan-in (A + B → C)
+- Valid diamond (A → B, A → C, B + C → D)
+- Invalid: cycle (A → B → A)
+- Invalid: missing dependency reference
+- Invalid: duplicate node IDs
+- Topological sort produces valid order
+- Parallel groups are correct
+
+Commit:
+```bash
+git add -A && git commit -m "Add pipeline types, parser, and DAG validation"
+```
+
+---
+
+## Phase 2: Pipeline Executor
+
+### 2A: Node input resolver (`src/pipeline/resolver.ts`)
+
+Determine what each node receives as input based on its upstream nodes:
+
+```typescript
+interface ResolvedNodeInput {
+  repo?: string;           // For git mode: path to repo (possibly on a merged branch)
+  branch?: string;         // For git mode: branch to checkout before running
+  files?: string[];        // For files mode: paths to upstream output files
+  contextFiles?: string[]; // Context to inject into prompt
+}
+
+export async function resolveNodeInput(
+  node: PipelineNode,
+  pipeline: PipelineDefinition,
+  nodeStates: Map<string, NodeExecution>,
+): Promise<ResolvedNodeInput>;
+```
+
+For git-mode upstream:
+- Single dependency: checkout upstream's branch, run from there
+- Multiple dependencies: merge upstream branches into a temp branch
+
+For files-mode upstream:
+- Collect output files from all upstream nodes into the new node's input
+
+### 2B: Branch merge utility (`src/pipeline/merge.ts`)
+
+```typescript
+export async function mergeUpstreamBranches(
+  repoPath: string,
+  upstreamBranches: string[],
+  targetBranch: string,
+): Promise<{ success: boolean; conflicts?: string }>;
+```
+
+### 2C: Pipeline executor (`src/pipeline/executor.ts`)
+
+The main orchestrator:
+
+```typescript
+export class PipelineExecutor {
+  constructor(pipeline: PipelineDefinition, options?: {
+    maxParallel?: number;
+    fromNode?: string;       // Resume from this node
+    verbose?: boolean;
+  });
+  
+  async execute(): Promise<PipelineRun>;
+}
+```
+
+The executor:
+1. Validates the DAG
+2. Computes topological order
+3. Iterates through nodes in order
+4. Waits for each node's dependencies to complete before starting it
+5. Runs independent nodes in parallel (up to maxParallel)
+6. For each node, calls the existing `executeRun()` from `src/orchestration/modes.ts`
+7. Saves checkpoints after each successful node
+8. Emits pipeline-level events via the existing event system
+9. Handles failures: skip downstream nodes if upstream fails
+
+### 2D: CLI command (`src/cli/pipeline.ts`)
+
+Add the `forgectl pipeline` subcommands:
+
+```bash
+forgectl pipeline show --file pipeline.yaml      # Display DAG in terminal
+forgectl pipeline run --file pipeline.yaml        # Execute the pipeline
+forgectl pipeline run --file pipeline.yaml --dry-run  # Show execution plan
+forgectl pipeline status --file pipeline.yaml     # Show last run status
+```
+
+Register in `src/index.ts`.
+
+### Verification:
+
+Write tests in `test/unit/pipeline-executor.test.ts`:
+- Linear pipeline executes in order
+- Parallel nodes run concurrently
+- Failed node skips downstream
+- Fan-in waits for all upstream
+- Dry-run shows plan without executing
+- Resume from node skips upstream
+
+```bash
+npm run typecheck
+FORGECTL_SKIP_DOCKER=true npm test
+npm run build
+node dist/index.js pipeline --help
+```
+
+Commit:
+```bash
+git add -A && git commit -m "Add pipeline executor with parallel execution and branch piping"
+```
+
+---
+
+## Phase 3: Checkpointing
+
+### 3A: Checkpoint storage (`src/pipeline/checkpoint.ts`)
+
+```typescript
+export async function saveCheckpoint(
+  pipelineRunId: string,
+  nodeId: string,
+  result: ExecutionResult,
+): Promise<CheckpointRef>;
+
+export async function loadCheckpoint(
+  pipelineRunId: string,
+  nodeId: string,
+): Promise<CheckpointRef | null>;
+
+export async function listCheckpoints(
+  pipelineRunId: string,
+): Promise<CheckpointRef[]>;
+```
+
+Checkpoints stored at `.forgectl/checkpoints/<pipeline-run-id>/<node-id>/`:
+- `checkpoint.json` — metadata (timestamp, branch, sha, etc.)
+- For git mode: `repo.bundle` — git bundle of the branch
+- For files mode: `output/` — copy of the output files
+
+### 3B: Rerun command
+
+`forgectl pipeline rerun --file pipeline.yaml --from <node-id>`:
+1. Load checkpoints for all nodes upstream of `<node-id>`
+2. Skip those nodes (mark as "skipped", use checkpoint data)
+3. Execute from `<node-id>` onwards
+4. For the target node, resolve input from upstream checkpoints (not live execution)
+
+### 3C: Revert command
+
+`forgectl pipeline revert --file pipeline.yaml --to <node-id>`:
+1. Load the checkpoint for `<node-id>`
+2. For git mode: checkout the checkpoint's branch in the repo
+3. For files mode: copy checkpoint files to the output directory
+4. Print what was reverted
+
+### Verification:
+
+Write tests in `test/unit/pipeline-checkpoint.test.ts`:
+- Save and load checkpoint
+- Rerun skips upstream nodes
+- Rerun executes from target node
+- Revert restores git branch
+- Revert restores output files
+
+```bash
+npm run typecheck
+FORGECTL_SKIP_DOCKER=true npm test
+```
+
+Commit:
+```bash
+git add -A && git commit -m "Add pipeline checkpointing with save/load/rerun/revert"
+```
+
+---
+
+## Phase 4: Terminal Visualization
+
+### 4A: DAG renderer (`src/pipeline/visualize.ts`)
+
+Render the DAG in the terminal using chalk and box-drawing characters:
+
+```
+Pipeline: add-auth-system (6 nodes)
+
+  ┌─────────────┐
+  │ user-model   │
+  │ ✅ 45s       │
+  └──────┬───────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌──────────┐ ┌────────────────┐
+│auth-routes│ │auth-middleware  │
+│ ✅ 62s    │ │ ✅ 38s          │
+└────┬──────┘ └───────┬────────┘
+     └───────┬────────┘
+             ▼
+     ┌───────────────┐
+     │protect-routes  │
+     │ 🔄 running...  │
+     └───────┬────────┘
+             ▼
+     ┌───────────────┐
+     │auth-tests      │
+     │ ⏳ pending      │
+     └────────────────┘
+```
+
+Status indicators:
+- ✅ completed (green)
+- 🔄 running (blue)  
+- ⏳ pending (gray)
+- ❌ failed (red)
+- ⏭️ skipped (dim)
+
+For complex DAGs with many parallel branches, use a simpler list-based view as fallback:
+
+```
+Pipeline: add-auth-system
+
+Level 0: user-model ✅ (45s)
+Level 1: auth-routes ✅ (62s) | auth-middleware ✅ (38s)
+Level 2: protect-routes 🔄 running...
+Level 3: auth-tests ⏳ pending
+```
+
+### Verification:
 ```bash
 npm run build
+
+# Create a test pipeline file
+cat > /tmp/test-pipeline.yaml << 'EOF'
+name: test-pipeline
+defaults:
+  workflow: code
+  agent: codex
+  repo: /tmp/forge-test
+nodes:
+  - id: step-1
+    task: "First step"
+  - id: step-2a
+    task: "Parallel step A"
+    depends_on: [step-1]
+  - id: step-2b
+    task: "Parallel step B"
+    depends_on: [step-1]
+  - id: step-3
+    task: "Final step"
+    depends_on: [step-2a, step-2b]
+EOF
+
+node dist/index.js pipeline show --file /tmp/test-pipeline.yaml
+```
+
+Commit:
+```bash
+git add -A && git commit -m "Add terminal DAG visualization for pipelines"
+```
+
+---
+
+## Phase 5: Daemon API + Dashboard
+
+### 5A: Pipeline API routes
+
+Add to `src/daemon/routes.ts`:
+
+```typescript
+// POST /pipelines — submit a pipeline
+// GET /pipelines — list pipeline runs
+// GET /pipelines/:id — get pipeline run status
+// GET /pipelines/:id/events — SSE stream of pipeline events
+// POST /pipelines/:id/rerun — rerun from a specific node
+```
+
+### 5B: Update dashboard
+
+Update `src/ui/index.html` to show:
+- Pipeline runs in addition to single runs
+- A simple DAG visualization for each pipeline (nodes as boxes, edges as lines)
+- Per-node status (color-coded)
+- Click a node to see its run details
+- Pipeline submit form (paste YAML)
+
+### Verification:
+```bash
+npm run build
+node dist/index.js up --foreground &
+sleep 2
+
+# Submit a pipeline
+curl -s -X POST http://127.0.0.1:4856/pipelines \
+  -H "Content-Type: application/json" \
+  -d "{\"pipeline\":$(cat /tmp/test-pipeline.yaml | python3 -c 'import sys,yaml,json; print(json.dumps(yaml.safe_load(sys.stdin)))')}"
+
+# List pipelines
+curl -s http://127.0.0.1:4856/pipelines
+
+# Dashboard
+curl -s http://127.0.0.1:4856/ | head -5
+
+node dist/index.js down
+```
+
+Commit:
+```bash
+git add -A && git commit -m "Add pipeline API routes and update dashboard"
+```
+
+---
+
+## Phase 6: Examples and Polish
+
+### 6A: Example pipelines
+
+Create `examples/` directory with the pipeline files from SPEC.md:
+- `examples/auth-system.yaml`
+- `examples/research-report.yaml`
+- `examples/data-pipeline.yaml`
+
+### 6B: Update README
+
+Add pipeline documentation:
+- What pipelines are
+- Pipeline YAML format
+- CLI commands (pipeline show/run/rerun/revert/status)
+- Example pipelines
+- Checkpointing and revert
+
+### 6C: browser-use Dockerfile
+
+Create `dockerfiles/Dockerfile.research-browser`:
+```dockerfile
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq ca-certificates nodejs npm && rm -rf /var/lib/apt/lists/*
+RUN pip install --break-system-packages browser-use langchain-openai langchain-anthropic \
+    beautifulsoup4 trafilatura markdownify playwright
+RUN playwright install --with-deps chromium
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN mkdir -p /input /output
+WORKDIR /workspace
+```
+
+Try to build it:
+```bash
+docker build -f dockerfiles/Dockerfile.research-browser -t forgectl/research-browser dockerfiles/
+```
+
+If it fails due to network restrictions, that's OK — commit the Dockerfile anyway.
+
+Commit:
+```bash
+git add -A && git commit -m "Add example pipelines, browser-use Dockerfile, update README"
+```
+
+---
+
+## Phase 7: Full E2E Verification (DO NOT SKIP)
+
+### 7A: All tests pass
+```bash
+npm run typecheck
+FORGECTL_SKIP_DOCKER=true npm test
+npm run build
+```
+
+### 7B: v1 still works
+```bash
 node dist/index.js --help
 node dist/index.js workflows list
 node dist/index.js auth list
-```
 
-### 8C: Dry Run Test
-```bash
+# Dry run
 rm -rf /tmp/forge-test && mkdir /tmp/forge-test && cd /tmp/forge-test
-git init
-cat > package.json << 'EOF'
+git init && cat > package.json << 'EOF'
 {"name":"forge-test","scripts":{"lint":"echo ok","typecheck":"echo ok","test":"echo ok","build":"echo ok"}}
 EOF
 cat > index.js << 'EOF'
@@ -180,140 +580,88 @@ app.get("/", (req, res) => res.json({ message: "hello" }));
 module.exports = app;
 EOF
 git add -A && git commit -m "init"
-
 cd ~/forgectl
-node dist/index.js run \
-  --task "Add a GET /health endpoint" \
-  --workflow code \
-  --agent codex \
-  --repo /tmp/forge-test \
-  --dry-run
+node dist/index.js run --task "Add a health endpoint" --workflow code --agent codex --repo /tmp/forge-test --dry-run
 ```
-This should print the run plan without executing. Verify it looks correct.
 
-### 8D: Live E2E Test (if Codex auth is available)
+### 7C: Pipeline commands work
+```bash
+# Show DAG
+node dist/index.js pipeline show --file examples/auth-system.yaml
+
+# Dry-run pipeline
+node dist/index.js pipeline run --file examples/auth-system.yaml --dry-run
+
+# Validate a bad pipeline (should show errors)
+cat > /tmp/bad-pipeline.yaml << 'EOF'
+name: bad
+nodes:
+  - id: a
+    task: "do something"
+    depends_on: [b]
+  - id: b
+    task: "do something"
+    depends_on: [a]
+EOF
+node dist/index.js pipeline show --file /tmp/bad-pipeline.yaml 2>&1 | grep -i "cycle\|error"
+```
+
+### 7D: Daemon + API
+```bash
+node dist/index.js up --foreground &
+sleep 2
+curl -s http://127.0.0.1:4856/health
+curl -s http://127.0.0.1:4856/pipelines
+curl -s http://127.0.0.1:4856/ | head -5
+node dist/index.js down
+```
+
+### 7E: Live E2E test (if Codex auth available)
 ```bash
 cd ~/forgectl
 node dist/index.js run \
   --task "Add a GET /health endpoint that returns { status: 'ok' }" \
-  --workflow code \
-  --agent codex \
-  --repo /tmp/forge-test \
-  --no-review \
-  --verbose
+  --workflow code --agent codex --repo /tmp/forge-test --no-review --verbose
 ```
 
-**Success criteria:**
-- Agent runs and exits 0
-- All validation steps pass
-- Output shows `N files changed, +N -N` (NOT 0)
-- Branch exists on host: `cd /tmp/forge-test && git log --oneline --all`
+Expected: `N files changed, +N -N` (not 0).
 
-If Codex auth is not available, skip this step but note it in the summary.
-
-### 8E: Daemon Test
+### 7F: Final state
 ```bash
-cd ~/forgectl
-node dist/index.js up --foreground &
-DAEMON_PID=$!
-sleep 2
-
-# Health check
-curl -s http://127.0.0.1:4856/health | jq .
-
-# Auth status
-curl -s http://127.0.0.1:4856/auth/status | jq .
-
-# UI serves
-curl -s http://127.0.0.1:4856/ | head -3
-
-# Submit a run (will fail without agent, but should accept the request)
-curl -s -X POST http://127.0.0.1:4856/runs \
-  -H "Content-Type: application/json" \
-  -d '{"task":"test","workflow":"code"}' | jq .
-
-# List runs
-curl -s http://127.0.0.1:4856/runs | jq .
-
-# Shutdown
-kill $DAEMON_PID
-wait $DAEMON_PID 2>/dev/null
+npm run typecheck    # Zero errors
+FORGECTL_SKIP_DOCKER=true npm test  # All pass
+npm run build        # Clean
+git status           # Note uncommitted changes
 ```
 
-### 8F: Final State Check
-```bash
-# Everything must be clean
-npm run typecheck   # Zero errors
-npm test            # All tests pass  
-npm run build       # Clean build
-
-# Git status
-git status          # Note any uncommitted changes
-```
-
----
-
-## Commit Strategy
-
-Make atomic commits after each sub-phase:
-1. After 6A-6G (dashboard): `git add -A && git commit -m "Add Phase 6: web dashboard"`
-2. After 7A-7C (polish): `git add -A && git commit -m "Add Phase 7: README, cleanup, polish"`
-3. After 8 (verification fixes): `git add -A && git commit -m "Fix issues found in E2E verification"`
-
-Push when done:
+Push:
 ```bash
 git push origin main
 ```
 
-Or if on a branch:
-```bash
-git checkout -b feat/phase-6-7-dashboard-polish
-git push -u origin feat/phase-6-7-dashboard-polish
-```
-
 ---
 
-## Key Files Reference
+## Final Checklist
 
-**Daemon (add UI serving here):**
-- `src/daemon/server.ts` — Fastify server, add static file serving
-- `src/daemon/routes.ts` — REST API routes, add `/auth/status`
-
-**Events (dashboard consumes these via SSE):**
-- `src/logging/events.ts` — RunEvent type and emitter
-
-**Auth (for settings page):**
-- `src/auth/claude.ts` — `getClaudeAuth()`
-- `src/auth/codex.ts` — `getCodexAuth()`
-
-**Existing working features:**
-- `src/cli/run.ts` — `forgectl run` command
-- `src/orchestration/single.ts` — Single agent execution
-- `src/orchestration/review.ts` — Review mode
-- `src/output/git.ts` — Git output collection
-- `src/validation/runner.ts` — Validation loop with retry
-
-**Config:**
-- `src/config/schema.ts` — Zod schema with defaults
-- `.forgectl/config.yaml` — Project config (if exists)
-
----
-
-## Final Checklist (verify ALL before finishing)
-
-- [ ] Dashboard serves at daemon root URL
-- [ ] Dashboard shows runs list from API
-- [ ] Dashboard has submit form that works
-- [ ] Dashboard has run detail view with log
-- [ ] Dashboard has history page
-- [ ] Dashboard has settings page with auth status
-- [ ] README.md exists and is comprehensive
-- [ ] `npm run typecheck` — zero errors
-- [ ] `npm test` — all tests pass
-- [ ] `npm run build` — clean
-- [ ] `forgectl run --dry-run` works
-- [ ] `forgectl workflows list` works
-- [ ] `forgectl auth list` works
-- [ ] Daemon starts and serves API + UI
-- [ ] No debug logging, TODOs, or dead code remain
+- [ ] Pipeline YAML parser with zod validation
+- [ ] DAG validation: cycles, missing refs, duplicates
+- [ ] Topological sort
+- [ ] Pipeline executor with parallel node execution
+- [ ] Node input resolver (branch piping for git, file piping for files)
+- [ ] Branch merging for fan-in nodes
+- [ ] Checkpoint save/load
+- [ ] `forgectl pipeline show` — terminal DAG visualization
+- [ ] `forgectl pipeline run` — execute DAG
+- [ ] `forgectl pipeline run --dry-run` — show execution plan
+- [ ] `forgectl pipeline rerun --from <node>` — resume from checkpoint
+- [ ] `forgectl pipeline revert --to <node>` — restore checkpoint state
+- [ ] `forgectl pipeline status` — show run status
+- [ ] Pipeline API routes in daemon
+- [ ] Dashboard updated with pipeline DAG view
+- [ ] Example pipeline files
+- [ ] browser-use Dockerfile
+- [ ] README updated
+- [ ] All existing v1 tests still pass
+- [ ] New pipeline tests pass
+- [ ] v1 `forgectl run` still works
 - [ ] All changes committed and pushed
