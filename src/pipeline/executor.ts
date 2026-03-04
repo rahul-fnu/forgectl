@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { execSync } from "node:child_process";
 import chalk from "chalk";
 import type {
   PipelineDefinition,
@@ -189,6 +190,20 @@ export class PipelineExecutor {
       if (result.success) {
         const checkpoint = await saveCheckpoint(this.pipelineRunId, node.id, result);
         state.checkpoint = checkpoint;
+
+        // For git-mode output, merge the branch back into the host repo's current branch
+        // so downstream nodes see the changes when their workspace is created
+        if (result.output?.mode === "git" && result.output.branch) {
+          const repoPath = this.options.repo ?? node.repo ?? this.pipeline.defaults?.repo;
+          if (repoPath) {
+            try {
+              execSync(`git merge ${result.output.branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+              console.log(chalk.gray(`    Merged ${result.output.branch} into working branch`));
+            } catch (mergeErr) {
+              console.log(chalk.yellow(`    Warning: Could not auto-merge ${result.output.branch}: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`));
+            }
+          }
+        }
       }
 
       state.runId = plan.runId;
