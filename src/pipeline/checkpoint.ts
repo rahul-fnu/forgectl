@@ -4,10 +4,12 @@ import { homedir } from "node:os";
 import type { CheckpointRef } from "./types.js";
 import type { ExecutionResult } from "../orchestration/single.js";
 
-const CHECKPOINT_BASE = join(homedir(), ".forgectl", "checkpoints");
+function getCheckpointBase(): string {
+  return join(homedir(), ".forgectl", "checkpoints");
+}
 
 function checkpointDir(pipelineRunId: string, nodeId: string): string {
-  return join(CHECKPOINT_BASE, pipelineRunId, nodeId);
+  return join(getCheckpointBase(), pipelineRunId, nodeId);
 }
 
 /** Save a checkpoint after a successful node execution */
@@ -63,7 +65,7 @@ export async function loadCheckpoint(
 export async function listCheckpoints(
   pipelineRunId: string,
 ): Promise<CheckpointRef[]> {
-  const dir = join(CHECKPOINT_BASE, pipelineRunId);
+  const dir = join(getCheckpointBase(), pipelineRunId);
   if (!existsSync(dir)) return [];
 
   const entries = readdirSync(dir, { withFileTypes: true });
