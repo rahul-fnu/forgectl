@@ -16,6 +16,14 @@ interface InlineContext {
   content: string;
 }
 
+interface PipelineRunEntry {
+  pipeline: PipelineDefinition;
+  executor: PipelineExecutor;
+  result?: PipelineRun;
+  promise?: Promise<PipelineRun>;
+  createdAt: string;
+}
+
 export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -125,7 +133,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   });
 
   // --- Pipeline API ---
-  const pipelineRuns = new Map<string, { executor: PipelineExecutor; result?: PipelineRun; promise?: Promise<PipelineRun> }>();
+  const pipelineRuns = new Map<string, PipelineRunEntry>();
 
   // Submit a pipeline
   app.post<{
@@ -133,9 +141,17 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
       pipeline: PipelineDefinition;
       repo?: string;
       fromNode?: string;
+      dryRun?: boolean;
+      verbose?: boolean;
     };
   }>("/pipelines", async (request, reply) => {
-    const { pipeline: pipelineDef, repo, fromNode } = request.body;
+    const {
+      pipeline: pipelineDef,
+      repo,
+      fromNode,
+      dryRun,
+      verbose,
+    } = request.body;
     if (!pipelineDef) {
       reply.code(400);
       return { error: "pipeline is required" };
@@ -148,8 +164,14 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
       return { error: "Invalid pipeline", details: validation.errors };
     }
 
-    const executor = new PipelineExecutor(pipelineDef, { repo, fromNode });
-    const entry = { executor, result: undefined as PipelineRun | undefined, promise: undefined as Promise<PipelineRun> | undefined };
+    const executor = new PipelineExecutor(pipelineDef, { repo, fromNode, dryRun, verbose });
+    const entry: PipelineRunEntry = {
+      pipeline: pipelineDef,
+      executor,
+      result: undefined,
+      promise: undefined,
+      createdAt: new Date().toISOString(),
+    };
 
     entry.promise = executor.execute().then(result => {
       entry.result = result;
@@ -173,7 +195,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
     return {
       id: executor.runId,
       status: "running",
-      nodes: serializeNodeStates(executor.getNodeStates()),
+      nodes: serializeNodeStates(executor.getNodeStates(), false),
     };
   });
 
@@ -182,8 +204,16 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
     return [...pipelineRuns.entries()].map(([id, entry]) => ({
       id,
       status: entry.result?.status ?? "running",
-      pipeline: entry.executor ? { name: entry.result?.pipeline.name ?? "unknown" } : undefined,
-      startedAt: entry.result?.startedAt,
+      pipeline: {
+        name: entry.pipeline.name,
+        description: entry.pipeline.description,
+        nodes: entry.pipeline.nodes.map(node => ({
+          id: node.id,
+          depends_on: node.depends_on ?? [],
+          workflow: node.workflow ?? entry.pipeline.defaults?.workflow ?? "code",
+        })),
+      },
+      startedAt: entry.result?.startedAt ?? entry.createdAt,
       completedAt: entry.result?.completedAt,
     }));
   });
@@ -199,9 +229,9 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
     return {
       id: request.params.id,
       status: entry.result?.status ?? "running",
-      pipeline: entry.result?.pipeline ?? {},
-      nodes: serializeNodeStates(entry.executor.getNodeStates()),
-      startedAt: entry.result?.startedAt,
+      pipeline: entry.result?.pipeline ?? entry.pipeline,
+      nodes: serializeNodeStates(entry.executor.getNodeStates(), true),
+      startedAt: entry.result?.startedAt ?? entry.createdAt,
       completedAt: entry.result?.completedAt,
     };
   });
@@ -234,7 +264,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   // Re-run pipeline from a node
   app.post<{
     Params: { id: string };
-    Body: { fromNode: string };
+    Body: { fromNode: string; repo?: string; verbose?: boolean };
   }>("/pipelines/:id/rerun", async (request, reply) => {
     const entry = pipelineRuns.get(request.params.id);
     if (!entry) {
@@ -248,14 +278,19 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
       return { error: "fromNode is required" };
     }
 
-    const pipeline = entry.result?.pipeline;
-    if (!pipeline) {
-      reply.code(400);
-      return { error: "Original pipeline definition not available" };
-    }
-
-    const newExecutor = new PipelineExecutor(pipeline, { fromNode });
-    const newEntry = { executor: newExecutor, result: undefined as PipelineRun | undefined, promise: undefined as Promise<PipelineRun> | undefined };
+    const pipeline = entry.pipeline;
+    const newExecutor = new PipelineExecutor(pipeline, {
+      fromNode,
+      repo: request.body.repo,
+      verbose: request.body.verbose,
+    });
+    const newEntry: PipelineRunEntry = {
+      pipeline,
+      executor: newExecutor,
+      result: undefined,
+      promise: undefined,
+      createdAt: new Date().toISOString(),
+    };
 
     newEntry.promise = newExecutor.execute().then(result => {
       newEntry.result = result;
@@ -269,10 +304,13 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   });
 }
 
-function serializeNodeStates(states: Map<string, NodeExecution>): Record<string, NodeExecution> {
+function serializeNodeStates(
+  states: Map<string, NodeExecution>,
+  includeResults: boolean,
+): Record<string, NodeExecution> {
   const obj: Record<string, NodeExecution> = {};
   for (const [key, value] of states) {
-    obj[key] = { ...value, result: undefined }; // Don't serialize full results in list views
+    obj[key] = includeResults ? { ...value } : { ...value, result: undefined };
   }
   return obj;
 }

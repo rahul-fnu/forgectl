@@ -140,6 +140,18 @@ export class PipelineExecutor {
       pipelineStatus = "completed";
     }
 
+    emitRunEvent({
+      runId: this.pipelineRunId,
+      type: pipelineStatus === "completed" ? "completed" : "failed",
+      timestamp: new Date().toISOString(),
+      data: {
+        status: pipelineStatus,
+        completed: allStatuses.filter(s => s === "completed").length,
+        failed: allStatuses.filter(s => s === "failed").length,
+        skipped: allStatuses.filter(s => s === "skipped").length,
+      },
+    });
+
     return {
       id: this.pipelineRunId,
       pipeline: this.pipeline,
@@ -162,7 +174,7 @@ export class PipelineExecutor {
       runId: this.pipelineRunId,
       type: "phase",
       timestamp: new Date().toISOString(),
-      data: { phase: `node:${node.id}:started` },
+      data: { phase: "node:started", nodeId: node.id, status: "running" },
     });
 
     console.log(chalk.blue(`  ▶ Starting node: ${node.id}`));
@@ -239,6 +251,42 @@ export class PipelineExecutor {
       state.result = result;
       state.completedAt = new Date().toISOString();
 
+      emitRunEvent({
+        runId: this.pipelineRunId,
+        type: "phase",
+        timestamp: new Date().toISOString(),
+        data: {
+          phase: result.success ? "node:completed" : "node:failed",
+          nodeId: node.id,
+          status: state.status,
+          runId: plan.runId,
+          durationMs: result.durationMs,
+        },
+      });
+
+      if (result.validation) {
+        emitRunEvent({
+          runId: this.pipelineRunId,
+          type: "validation",
+          timestamp: new Date().toISOString(),
+          data: {
+            nodeId: node.id,
+            validation: result.validation,
+          },
+        });
+      }
+      if (result.output) {
+        emitRunEvent({
+          runId: this.pipelineRunId,
+          type: "output",
+          timestamp: new Date().toISOString(),
+          data: {
+            nodeId: node.id,
+            output: result.output,
+          },
+        });
+      }
+
       if (result.success) {
         console.log(chalk.green(`  ✔ Node completed: ${node.id}`));
       } else {
@@ -248,6 +296,17 @@ export class PipelineExecutor {
       state.status = "failed";
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
+      emitRunEvent({
+        runId: this.pipelineRunId,
+        type: "phase",
+        timestamp: new Date().toISOString(),
+        data: {
+          phase: "node:failed",
+          nodeId: node.id,
+          status: "failed",
+          error: state.error,
+        },
+      });
       console.log(chalk.red(`  ✗ Node error: ${node.id} — ${state.error}`));
     } finally {
       if (tempContextDir) {

@@ -1,616 +1,1205 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>forgectl</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script>
-tailwind.config = {
-  darkMode: 'class',
-  theme: {
-    extend: {
-      colors: {
-        bg: { DEFAULT: '#0f1117', card: '#161922', hover: '#1c2030' },
-        accent: { blue: '#3b82f6', green: '#22c55e', red: '#ef4444', yellow: '#eab308', gray: '#6b7280' },
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>forgectl</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            shell: "#0a0a0b",
+            panel: "#111215",
+            panel2: "#15171b",
+            line: "#2a2d33",
+            muted: "#8f97a5",
+            code: "#4da3ff",
+            research: "#a78bfa",
+            content: "#4ade80",
+            data: "#fb923c",
+            ops: "#f87171",
+            general: "#7dd3fc"
+          },
+          boxShadow: {
+            glow: "0 0 0 1px rgba(255,255,255,0.05), 0 12px 40px rgba(0,0,0,0.35)"
+          }
+        }
       }
+    };
+  </script>
+
+  <style>
+    :root {
+      color-scheme: dark;
     }
-  }
-}
-</script>
-<style>
-  body { background: #0f1117; color: #e5e7eb; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace; }
-  .log-line { font-size: 13px; line-height: 1.6; }
-  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
-  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
-</style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 600px at 90% -10%, rgba(77, 163, 255, 0.09), transparent 60%),
+        radial-gradient(900px 600px at 0% 100%, rgba(74, 222, 128, 0.07), transparent 60%),
+        #0a0a0b;
+      color: #eef2f8;
+      font-family: "Space Grotesk", sans-serif;
+    }
+    .mono {
+      font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .grid-noise::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 36px 36px;
+      opacity: 0.3;
+    }
+    .pulse {
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(77, 163, 255, 0.35); }
+      50% { box-shadow: 0 0 0 8px rgba(77, 163, 255, 0); }
+    }
+  </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+  <div id="root"></div>
 
-const API = '';
+  <script type="text/babel">
+    const { useEffect, useMemo, useState, useRef } = React;
 
-// --- Helpers ---
-function elapsed(start, end) {
-  const ms = (end ? new Date(end) : new Date()) - new Date(start);
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s/60)}m ${s%60}s`;
-}
+    const API = "";
 
-function StatusBadge({ status }) {
-  const colors = {
-    queued: 'bg-gray-600 text-gray-200',
-    running: 'bg-blue-600 text-blue-100',
-    completed: 'bg-green-700 text-green-100',
-    failed: 'bg-red-700 text-red-100',
-  };
-  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || 'bg-gray-600 text-gray-200'}`}>{status}</span>;
-}
-
-// --- Pages ---
-function DashboardPage({ navigate }) {
-  const [runs, setRuns] = useState([]);
-  const [task, setTask] = useState('');
-  const [workflow, setWorkflow] = useState('code');
-  const [agent, setAgent] = useState('codex');
-  const [submitting, setSubmitting] = useState(false);
-
-  const fetchRuns = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/runs`);
-      if (res.ok) setRuns(await res.json());
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    fetchRuns();
-    const i = setInterval(fetchRuns, 3000);
-    return () => clearInterval(i);
-  }, [fetchRuns]);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!task.trim()) return;
-    setSubmitting(true);
-    try {
-      const res = await fetch(`${API}/runs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, workflow, agent }),
-      });
-      if (res.ok) {
-        setTask('');
-        fetchRuns();
-      }
-    } catch {}
-    setSubmitting(false);
-  };
-
-  const active = runs.filter(r => r.status === 'running' || r.status === 'queued');
-  const recent = runs.filter(r => r.status === 'completed' || r.status === 'failed').slice(-10).reverse();
-
-  return (
-    <div className="space-y-8">
-      {/* Quick Submit */}
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <h2 className="text-lg font-semibold mb-4">Submit Run</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <textarea
-            value={task}
-            onChange={e => setTask(e.target.value)}
-            placeholder="Describe the task..."
-            className="w-full bg-bg rounded border border-gray-700 p-3 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none"
-            rows={3}
-          />
-          <div className="flex gap-4 items-end">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Workflow</label>
-              <select value={workflow} onChange={e => setWorkflow(e.target.value)} className="bg-bg border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200">
-                {['code','research','content','data','ops','general'].map(w => <option key={w} value={w}>{w}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Agent</label>
-              <select value={agent} onChange={e => setAgent(e.target.value)} className="bg-bg border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200">
-                <option value="claude-code">claude-code</option>
-                <option value="codex">codex</option>
-              </select>
-            </div>
-            <button
-              type="submit"
-              disabled={submitting || !task.trim()}
-              className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm font-medium"
-            >
-              {submitting ? 'Submitting...' : 'Submit'}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Active Runs */}
-      {active.length > 0 && (
-        <div>
-          <h2 className="text-lg font-semibold mb-3">Active Runs</h2>
-          <div className="grid gap-3">
-            {active.map(run => (
-              <div key={run.id} onClick={() => navigate('run', run.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-400 font-mono">{run.id}</span>
-                  <StatusBadge status={run.status} />
-                </div>
-                <p className="text-sm truncate">{run.task}</p>
-                <div className="flex gap-4 mt-2 text-xs text-gray-500">
-                  <span>{run.workflow || 'code'}</span>
-                  <span>{elapsed(run.submittedAt)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Recent Runs */}
-      <div>
-        <h2 className="text-lg font-semibold mb-3">Recent Runs</h2>
-        {recent.length === 0 ? (
-          <p className="text-sm text-gray-500">No completed runs yet.</p>
-        ) : (
-          <div className="grid gap-3">
-            {recent.map(run => (
-              <div key={run.id} onClick={() => navigate('run', run.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-400 font-mono">{run.id}</span>
-                  <StatusBadge status={run.status} />
-                </div>
-                <p className="text-sm truncate">{run.task}</p>
-                <div className="flex gap-4 mt-2 text-xs text-gray-500">
-                  <span>{run.workflow || 'code'}</span>
-                  {run.submittedAt && run.completedAt && <span>{elapsed(run.submittedAt, run.completedAt)}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RunViewPage({ runId, navigate }) {
-  const [run, setRun] = useState(null);
-  const [events, setEvents] = useState([]);
-  const logRef = useRef(null);
-  const esRef = useRef(null);
-
-  useEffect(() => {
-    fetch(`${API}/runs/${runId}`).then(r => r.ok ? r.json() : null).then(setRun);
-  }, [runId]);
-
-  useEffect(() => {
-    // Connect to SSE
-    const es = new EventSource(`${API}/runs/${runId}/events`);
-    esRef.current = es;
-    es.onmessage = (msg) => {
-      try {
-        const evt = JSON.parse(msg.data);
-        setEvents(prev => [...prev, evt]);
-      } catch {}
+    const WORKFLOW_COLORS = {
+      code: "#4da3ff",
+      research: "#a78bfa",
+      content: "#4ade80",
+      data: "#fb923c",
+      ops: "#f87171",
+      general: "#7dd3fc",
     };
-    es.onerror = () => { es.close(); };
-    return () => es.close();
-  }, [runId]);
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [events]);
+    const STATUS_COLORS = {
+      pending: "#4b5563",
+      queued: "#4b5563",
+      running: "#4da3ff",
+      completed: "#22c55e",
+      failed: "#ef4444",
+      skipped: "#6b7280",
+    };
 
-  // Also poll for run state updates
-  useEffect(() => {
-    const i = setInterval(async () => {
-      try {
-        const r = await fetch(`${API}/runs/${runId}`);
-        if (r.ok) setRun(await r.json());
-      } catch {}
-    }, 2000);
-    return () => clearInterval(i);
-  }, [runId]);
+    const WORKFLOWS = ["code", "research", "content", "data", "ops", "general"];
+    const AGENTS = ["codex", "claude-code"];
 
-  const eventColor = (type) => ({
-    phase: 'text-blue-400',
-    validation: 'text-green-400',
-    retry: 'text-yellow-400',
-    output: 'text-purple-400',
-    completed: 'text-green-300',
-    failed: 'text-red-400',
-    started: 'text-gray-400',
-  }[type] || 'text-gray-300');
+    function fetchJson(path, options) {
+      return fetch(`${API}${path}`, options).then(async (res) => {
+        const text = await res.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = text;
+        }
+        if (!res.ok) {
+          const message = data?.error || data?.message || `HTTP ${res.status}`;
+          throw new Error(message);
+        }
+        return data;
+      });
+    }
 
-  return (
-    <div className="space-y-6">
-      <button onClick={() => navigate('dashboard')} className="text-sm text-gray-400 hover:text-gray-200">&larr; Back</button>
+    function formatTime(ts) {
+      if (!ts) return "-";
+      return new Date(ts).toLocaleTimeString();
+    }
 
-      {/* Header */}
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-mono text-sm text-gray-400">{runId}</h2>
-          {run && <StatusBadge status={run.status} />}
-        </div>
-        {run && (
-          <>
-            <p className="text-lg mb-2">{run.task || run.options?.task}</p>
-            <div className="flex gap-6 text-xs text-gray-500">
-              <span>Workflow: {run.workflow || run.options?.workflow || 'code'}</span>
-              <span>Agent: {run.options?.agent || 'claude-code'}</span>
-              {run.submittedAt && <span>Submitted: {new Date(run.submittedAt).toLocaleString()}</span>}
-            </div>
-          </>
-        )}
-      </div>
+    function durationMs(node) {
+      if (node?.result?.durationMs != null) return `${Math.round(node.result.durationMs / 1000)}s`;
+      if (!node?.startedAt) return "-";
+      const end = node.completedAt ? new Date(node.completedAt) : new Date();
+      const ms = end - new Date(node.startedAt);
+      return `${Math.max(0, Math.round(ms / 1000))}s`;
+    }
 
-      {/* Output Preview */}
-      {run?.result?.output && (
-        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-          <h3 className="text-sm font-semibold mb-3">Output</h3>
-          {run.result.output.mode === 'git' ? (
-            <div className="text-sm space-y-1">
-              <p>Branch: <span className="text-blue-400 font-mono">{run.result.output.branch}</span></p>
-              <p>{run.result.output.filesChanged} file(s) changed, <span className="text-green-400">+{run.result.output.insertions}</span> <span className="text-red-400">-{run.result.output.deletions}</span></p>
-            </div>
-          ) : (
-            <div className="text-sm">
-              <p>{run.result.output.files?.length || 0} files in {run.result.output.dir}</p>
-            </div>
-          )}
-        </div>
-      )}
+    function slugify(value) {
+      const base = (value || "node").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      return base || "node";
+    }
 
-      {/* Validation Progress */}
-      {run?.result?.validation && (
-        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-          <h3 className="text-sm font-semibold mb-3">Validation</h3>
-          <div className="space-y-2">
-            {run.result.validation.stepResults?.map((step, i) => (
-              <div key={i} className="flex items-center gap-3 text-sm">
-                <span className={step.passed ? 'text-green-400' : 'text-red-400'}>{step.passed ? '\u2713' : '\u2717'}</span>
-                <span>{step.name}</span>
-                <span className="text-gray-500 text-xs">({step.attempts} attempt{step.attempts !== 1 ? 's' : ''})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+    function normalizePipeline(input) {
+      const pipeline = input && typeof input === "object" ? input : {};
+      const defaults = pipeline.defaults && typeof pipeline.defaults === "object" ? pipeline.defaults : {};
+      const rawNodes = Array.isArray(pipeline.nodes) ? pipeline.nodes : [];
+      return {
+        name: pipeline.name || "new-pipeline",
+        description: pipeline.description || "",
+        defaults: {
+          workflow: defaults.workflow || "code",
+          agent: defaults.agent || "codex",
+          repo: defaults.repo || "",
+        },
+        nodes: rawNodes.map((node, idx) => ({
+          id: node.id || `node-${idx + 1}`,
+          task: node.task || "",
+          workflow: node.workflow || defaults.workflow || "code",
+          agent: node.agent || defaults.agent || "codex",
+          repo: node.repo || "",
+          depends_on: Array.isArray(node.depends_on) ? node.depends_on : [],
+        }))
+      };
+    }
 
-      {/* Live Log */}
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <h3 className="text-sm font-semibold mb-3">Event Log</h3>
-        <div ref={logRef} className="bg-bg rounded p-4 max-h-96 overflow-y-auto scrollbar-thin">
-          {events.length === 0 ? (
-            <p className="text-sm text-gray-500">Waiting for events...</p>
-          ) : events.map((evt, i) => (
-            <div key={i} className={`log-line ${eventColor(evt.type)}`}>
-              <span className="text-gray-600 mr-2">{new Date(evt.timestamp).toLocaleTimeString()}</span>
-              <span className="font-medium mr-2">[{evt.type}]</span>
-              <span className="text-gray-300">{JSON.stringify(evt.data)}</span>
+    function toPipelineDefinition(builderState) {
+      const defaults = {};
+      if (builderState.defaults.workflow) defaults.workflow = builderState.defaults.workflow;
+      if (builderState.defaults.agent) defaults.agent = builderState.defaults.agent;
+      if (builderState.defaults.repo) defaults.repo = builderState.defaults.repo;
+
+      const nodes = builderState.nodes.map((n) => {
+        const item = {
+          id: n.id,
+          task: n.task,
+          workflow: n.workflow,
+          agent: n.agent,
+        };
+        if (n.depends_on && n.depends_on.length > 0) item.depends_on = n.depends_on;
+        if (n.repo) item.repo = n.repo;
+        return item;
+      });
+
+      const out = {
+        name: builderState.name,
+        description: builderState.description || undefined,
+        defaults,
+        nodes,
+      };
+      if (!out.description) delete out.description;
+      return out;
+    }
+
+    function validateBuilder(state) {
+      const errors = [];
+      if (!state.name.trim()) errors.push("Pipeline name is required");
+      if (state.nodes.length === 0) errors.push("Add at least one node");
+
+      const seen = new Set();
+      for (const node of state.nodes) {
+        if (!node.id.trim()) {
+          errors.push("Each node needs an ID");
+          continue;
+        }
+        if (seen.has(node.id)) errors.push(`Duplicate node ID: ${node.id}`);
+        seen.add(node.id);
+        if (!/^[a-z0-9-]+$/.test(node.id)) {
+          errors.push(`Invalid node ID "${node.id}" (use lowercase letters, numbers, hyphens)`);
+        }
+        if (!node.task.trim()) errors.push(`Node ${node.id} is missing a task`);
+      }
+
+      for (const node of state.nodes) {
+        for (const dep of node.depends_on || []) {
+          if (!seen.has(dep)) errors.push(`Node ${node.id} depends on unknown node ${dep}`);
+          if (dep === node.id) errors.push(`Node ${node.id} cannot depend on itself`);
+        }
+      }
+
+      return errors;
+    }
+
+    function topologicalLevels(nodes) {
+      const ids = nodes.map((n) => n.id);
+      const indegree = {};
+      const edges = {};
+      const level = {};
+
+      for (const id of ids) {
+        indegree[id] = 0;
+        edges[id] = [];
+        level[id] = 0;
+      }
+
+      for (const node of nodes) {
+        const deps = node.depends_on || [];
+        for (const dep of deps) {
+          if (!edges[dep]) continue;
+          edges[dep].push(node.id);
+          indegree[node.id] += 1;
+        }
+      }
+
+      const queue = ids.filter((id) => indegree[id] === 0).sort();
+      const order = [];
+
+      while (queue.length > 0) {
+        const id = queue.shift();
+        order.push(id);
+        const outgoing = edges[id] || [];
+        for (const next of outgoing) {
+          level[next] = Math.max(level[next] || 0, (level[id] || 0) + 1);
+          indegree[next] -= 1;
+          if (indegree[next] === 0) queue.push(next);
+        }
+        queue.sort();
+      }
+
+      if (order.length !== nodes.length) {
+        let row = 0;
+        for (const id of ids) {
+          if (!order.includes(id)) {
+            level[id] = row;
+            row += 1;
+          }
+        }
+      }
+
+      return level;
+    }
+
+    function computeLayout(nodes) {
+      const levelMap = topologicalLevels(nodes);
+      const grouped = {};
+      for (const node of nodes) {
+        const lvl = levelMap[node.id] || 0;
+        if (!grouped[lvl]) grouped[lvl] = [];
+        grouped[lvl].push(node);
+      }
+
+      const levels = Object.keys(grouped).map((n) => Number(n)).sort((a, b) => a - b);
+      for (const lvl of levels) grouped[lvl].sort((a, b) => a.id.localeCompare(b.id));
+
+      const xGap = 280;
+      const yGap = 180;
+      const nodeW = 220;
+      const nodeH = 112;
+
+      const positions = {};
+      for (const lvl of levels) {
+        grouped[lvl].forEach((node, idx) => {
+          positions[node.id] = {
+            x: 40 + idx * xGap,
+            y: 40 + lvl * yGap,
+            width: nodeW,
+            height: nodeH,
+          };
+        });
+      }
+
+      const maxCols = Math.max(1, ...levels.map((lvl) => grouped[lvl].length));
+      const width = 80 + maxCols * xGap;
+      const height = 120 + Math.max(1, levels.length) * yGap;
+
+      const edges = [];
+      for (const node of nodes) {
+        for (const dep of node.depends_on || []) {
+          if (positions[dep] && positions[node.id]) {
+            edges.push({ from: dep, to: node.id });
+          }
+        }
+      }
+
+      return { positions, edges, width, height, levelMap };
+    }
+
+    function StatusPill({ status }) {
+      const color = STATUS_COLORS[status] || STATUS_COLORS.pending;
+      return (
+        <span
+          className="mono text-xs px-2 py-1 rounded border"
+          style={{ borderColor: `${color}66`, color }}
+        >
+          {status || "pending"}
+        </span>
+      );
+    }
+
+    function MiniDagPreview({ pipeline }) {
+      const nodes = pipeline?.nodes || [];
+      if (nodes.length === 0) return <p className="text-xs text-muted">No nodes</p>;
+      const levels = topologicalLevels(nodes);
+      const grouped = {};
+      for (const node of nodes) {
+        const lvl = levels[node.id] || 0;
+        if (!grouped[lvl]) grouped[lvl] = [];
+        grouped[lvl].push(node);
+      }
+      const rows = Object.keys(grouped).map((n) => Number(n)).sort((a, b) => a - b);
+      return (
+        <div className="space-y-1">
+          {rows.map((row) => (
+            <div key={row} className="flex flex-wrap gap-1">
+              {grouped[row].map((node) => (
+                <span key={node.id} className="mono text-[10px] px-2 py-0.5 rounded border border-line bg-panel2 text-slate-300">
+                  {node.id}
+                </span>
+              ))}
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function HistoryPage({ navigate }) {
-  const [runs, setRuns] = useState([]);
-  const [filter, setFilter] = useState({ workflow: 'all', status: 'all' });
-
-  useEffect(() => {
-    fetch(`${API}/runs`).then(r => r.ok ? r.json() : []).then(setRuns);
-  }, []);
-
-  const filtered = runs.filter(r => {
-    if (filter.workflow !== 'all' && r.workflow !== filter.workflow) return false;
-    if (filter.status !== 'all' && r.status !== filter.status) return false;
-    return true;
-  }).reverse();
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <h2 className="text-lg font-semibold">History</h2>
-        <select value={filter.workflow} onChange={e => setFilter(f => ({...f, workflow: e.target.value}))} className="bg-bg border border-gray-700 rounded px-2 py-1 text-xs text-gray-300">
-          <option value="all">All workflows</option>
-          {['code','research','content','data','ops','general'].map(w => <option key={w} value={w}>{w}</option>)}
-        </select>
-        <select value={filter.status} onChange={e => setFilter(f => ({...f, status: e.target.value}))} className="bg-bg border border-gray-700 rounded px-2 py-1 text-xs text-gray-300">
-          <option value="all">All statuses</option>
-          <option value="completed">completed</option>
-          <option value="failed">failed</option>
-          <option value="running">running</option>
-          <option value="queued">queued</option>
-        </select>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500 border-b border-gray-800">
-              <th className="pb-2 pr-4">Run ID</th>
-              <th className="pb-2 pr-4">Task</th>
-              <th className="pb-2 pr-4">Workflow</th>
-              <th className="pb-2 pr-4">Status</th>
-              <th className="pb-2 pr-4">Duration</th>
-              <th className="pb-2">Date</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(run => (
-              <tr key={run.id} onClick={() => navigate('run', run.id)} className="border-b border-gray-800/50 hover:bg-bg-hover cursor-pointer">
-                <td className="py-2 pr-4 font-mono text-gray-400 text-xs">{run.id}</td>
-                <td className="py-2 pr-4 max-w-xs truncate">{run.task}</td>
-                <td className="py-2 pr-4 text-gray-400">{run.workflow || 'code'}</td>
-                <td className="py-2 pr-4"><StatusBadge status={run.status} /></td>
-                <td className="py-2 pr-4 text-gray-500">{run.submittedAt && run.completedAt ? elapsed(run.submittedAt, run.completedAt) : '-'}</td>
-                <td className="py-2 text-gray-500">{run.submittedAt ? new Date(run.submittedAt).toLocaleDateString() : '-'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filtered.length === 0 && <p className="text-sm text-gray-500 mt-4">No runs match filters.</p>}
-      </div>
-    </div>
-  );
-}
-
-function PipelinesPage({ navigate }) {
-  const [pipelines, setPipelines] = useState([]);
-  const [yamlInput, setYamlInput] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const fetchPipelines = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/pipelines`);
-      if (res.ok) setPipelines(await res.json());
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    fetchPipelines();
-    const i = setInterval(fetchPipelines, 3000);
-    return () => clearInterval(i);
-  }, [fetchPipelines]);
-
-  const submitPipeline = async (e) => {
-    e.preventDefault();
-    if (!yamlInput.trim()) return;
-    setSubmitting(true);
-    try {
-      // Parse YAML on client side (simple JSON parse if it's JSON, otherwise send raw)
-      const res = await fetch(`${API}/pipelines`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pipeline: JSON.parse(yamlInput) }),
-      });
-      if (res.ok) {
-        setYamlInput('');
-        fetchPipelines();
-      }
-    } catch (err) {
-      alert('Error: ' + err.message);
+      );
     }
-    setSubmitting(false);
-  };
 
-  return (
-    <div className="space-y-8">
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <h2 className="text-lg font-semibold mb-4">Submit Pipeline (JSON)</h2>
-        <form onSubmit={submitPipeline} className="space-y-4">
-          <textarea
-            value={yamlInput}
-            onChange={e => setYamlInput(e.target.value)}
-            placeholder='Paste pipeline definition as JSON...'
-            className="w-full bg-bg rounded border border-gray-700 p-3 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none font-mono"
-            rows={8}
-          />
-          <button type="submit" disabled={submitting || !yamlInput.trim()} className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm font-medium">
-            {submitting ? 'Submitting...' : 'Run Pipeline'}
-          </button>
-        </form>
-      </div>
+    function DagPreview({ nodes, nodeStates, selectedNodeId, onSelectNode }) {
+      const layout = useMemo(() => computeLayout(nodes), [nodes]);
 
-      <div>
-        <h2 className="text-lg font-semibold mb-3">Pipeline Runs</h2>
-        {pipelines.length === 0 ? (
-          <p className="text-sm text-gray-500">No pipeline runs yet.</p>
-        ) : (
-          <div className="grid gap-3">
-            {pipelines.map(p => (
-              <div key={p.id} onClick={() => navigate('pipeline-view', p.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-400 font-mono">{p.id}</span>
-                  <StatusBadge status={p.status} />
-                </div>
-                <p className="text-sm">{p.pipeline?.name || 'Pipeline'}</p>
-                {p.startedAt && <span className="text-xs text-gray-500">{new Date(p.startedAt).toLocaleString()}</span>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+      if (!nodes || nodes.length === 0) {
+        return <div className="rounded-xl border border-line bg-panel p-6 text-sm text-muted">Add nodes to preview the DAG.</div>;
+      }
 
-function PipelineViewPage({ pipelineId, navigate }) {
-  const [pipeline, setPipeline] = useState(null);
+      return (
+        <div className="rounded-xl border border-line bg-panel overflow-auto">
+          <div className="relative" style={{ width: layout.width, height: layout.height }}>
+            <svg className="absolute inset-0 pointer-events-none" width={layout.width} height={layout.height}>
+              {layout.edges.map((edge, idx) => {
+                const from = layout.positions[edge.from];
+                const to = layout.positions[edge.to];
+                if (!from || !to) return null;
+                const x1 = from.x + from.width / 2;
+                const y1 = from.y + from.height;
+                const x2 = to.x + to.width / 2;
+                const y2 = to.y;
+                const midY = y1 + (y2 - y1) / 2;
+                const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+                return <path key={`${edge.from}-${edge.to}-${idx}`} d={d} stroke="#3b4250" strokeWidth="2" fill="none" />;
+              })}
+            </svg>
 
-  useEffect(() => {
-    const fetchPipeline = async () => {
-      try {
-        const res = await fetch(`${API}/pipelines/${pipelineId}`);
-        if (res.ok) setPipeline(await res.json());
-      } catch {}
-    };
-    fetchPipeline();
-    const i = setInterval(fetchPipeline, 2000);
-    return () => clearInterval(i);
-  }, [pipelineId]);
+            {nodes.map((node) => {
+              const pos = layout.positions[node.id];
+              if (!pos) return null;
+              const state = nodeStates?.[node.id] || {};
+              const status = state.status || "pending";
+              const workflowColor = WORKFLOW_COLORS[node.workflow || "general"] || WORKFLOW_COLORS.general;
+              const statusColor = STATUS_COLORS[status] || STATUS_COLORS.pending;
+              const selected = selectedNodeId === node.id;
 
-  const nodeStatusColor = (status) => ({
-    completed: 'border-green-500 bg-green-900/20',
-    running: 'border-blue-500 bg-blue-900/20',
-    failed: 'border-red-500 bg-red-900/20',
-    skipped: 'border-gray-600 bg-gray-900/20',
-    pending: 'border-gray-700 bg-bg-card',
-  }[status] || 'border-gray-700 bg-bg-card');
-
-  const nodeStatusIcon = (status) => ({
-    completed: '\u2705',
-    running: '\u{1F504}',
-    failed: '\u274C',
-    skipped: '\u23ED',
-    pending: '\u23F3',
-  }[status] || '\u23F3');
-
-  return (
-    <div className="space-y-6">
-      <button onClick={() => navigate('pipelines')} className="text-sm text-gray-400 hover:text-gray-200">&larr; Back</button>
-
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-mono text-sm text-gray-400">{pipelineId}</h2>
-          {pipeline && <StatusBadge status={pipeline.status} />}
-        </div>
-        {pipeline?.pipeline?.name && <p className="text-lg mb-2">{pipeline.pipeline.name}</p>}
-      </div>
-
-      {pipeline?.nodes && (
-        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-          <h3 className="text-sm font-semibold mb-4">Nodes</h3>
-          <div className="space-y-3">
-            {Object.entries(pipeline.nodes).map(([nodeId, node]) => (
-              <div key={nodeId} className={`rounded-lg p-4 border-2 ${nodeStatusColor(node.status)}`}>
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-sm">{nodeStatusIcon(node.status)} {nodeId}</span>
-                  <StatusBadge status={node.status} />
-                </div>
-                {node.error && <p className="text-xs text-red-400 mt-1">{node.error}</p>}
-              </div>
-            ))}
+              return (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => onSelectNode && onSelectNode(node.id)}
+                  className={`absolute text-left rounded-xl border bg-panel2 p-3 transition ${status === "running" ? "pulse" : ""} ${selected ? "ring-2 ring-code" : ""}`}
+                  style={{
+                    left: pos.x,
+                    top: pos.y,
+                    width: pos.width,
+                    height: pos.height,
+                    borderColor: `${statusColor}66`,
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="mono text-xs font-semibold" style={{ color: workflowColor }}>{node.id}</span>
+                    <span className="mono text-[10px] uppercase tracking-wide" style={{ color: statusColor }}>{status}</span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-2 line-clamp-2">{node.task || "No task"}</p>
+                  <div className="flex items-center justify-between mt-3">
+                    <span className="mono text-[10px] text-muted">{node.workflow || "code"}</span>
+                    <span className="mono text-[10px] text-muted">{node.agent || "codex"}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
-      )}
-    </div>
-  );
-}
+      );
+    }
 
-function SettingsPage() {
-  const [auth, setAuth] = useState(null);
-  const [health, setHealth] = useState(null);
+    function TaskSubmitModal({ open, onClose, onSubmitted }) {
+      const [task, setTask] = useState("");
+      const [workflow, setWorkflow] = useState("code");
+      const [agent, setAgent] = useState("codex");
+      const [repo, setRepo] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetch(`${API}/auth/status`).then(r => r.ok ? r.json() : null).then(setAuth);
-    fetch(`${API}/health`).then(r => r.ok ? r.json() : null).then(setHealth);
-  }, []);
+      useEffect(() => {
+        if (!open) return;
+        setError("");
+      }, [open]);
 
-  return (
-    <div className="space-y-6">
-      <h2 className="text-lg font-semibold">Settings</h2>
+      if (!open) return null;
 
-      {/* Daemon Info */}
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <h3 className="text-sm font-semibold mb-3">Daemon</h3>
-        {health ? (
-          <div className="text-sm space-y-1">
-            <p>Status: <span className="text-green-400">running</span></p>
-            <p>Port: 4856</p>
-            <p>Version: 0.1.0</p>
-          </div>
-        ) : (
-          <p className="text-sm text-gray-500">Unable to reach daemon</p>
-        )}
-      </div>
+      async function submit(e) {
+        e.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          const body = { task, workflow, agent };
+          if (repo.trim()) body.repo = repo.trim();
+          await fetchJson("/runs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          setTask("");
+          setRepo("");
+          onSubmitted && onSubmitted();
+          onClose();
+        } catch (err) {
+          setError(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
 
-      {/* Auth Status */}
-      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
-        <h3 className="text-sm font-semibold mb-3">Authentication</h3>
-        {auth ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 text-sm">
-              <span className={auth.claude?.configured ? 'text-green-400' : 'text-gray-500'}>{auth.claude?.configured ? '\u2713' : '\u2717'}</span>
-              <span>Claude Code</span>
-              {auth.claude?.configured && <span className="text-xs text-gray-500">({auth.claude.type})</span>}
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={submit} className="w-full max-w-2xl rounded-2xl border border-line bg-panel p-6 shadow-glow space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Submit Task</h3>
+              <button type="button" onClick={onClose} className="text-muted hover:text-white">Close</button>
             </div>
-            <div className="flex items-center gap-3 text-sm">
-              <span className={auth.codex?.configured ? 'text-green-400' : 'text-gray-500'}>{auth.codex?.configured ? '\u2713' : '\u2717'}</span>
-              <span>Codex</span>
-              {auth.codex?.configured && <span className="text-xs text-gray-500">({auth.codex.type})</span>}
+            <textarea
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              rows={5}
+              className="w-full rounded-lg border border-line bg-shell p-3 text-sm"
+              placeholder="Describe the task..."
+            />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="text-xs text-muted">Workflow
+                <select value={workflow} onChange={(e) => setWorkflow(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                  {WORKFLOWS.map((w) => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted">Agent
+                <select value={agent} onChange={(e) => setAgent(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                  {AGENTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted">Repo (optional)
+                <input value={repo} onChange={(e) => setRepo(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono" />
+              </label>
             </div>
-          </div>
-        ) : (
-          <p className="text-sm text-gray-500">Loading...</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// --- App Shell ---
-function App() {
-  const [page, setPage] = useState('dashboard');
-  const [pageArg, setPageArg] = useState(null);
-
-  const navigate = (p, arg) => { setPage(p); setPageArg(arg || null); };
-
-  const navItems = [
-    { key: 'dashboard', label: 'Dashboard' },
-    { key: 'pipelines', label: 'Pipelines' },
-    { key: 'history', label: 'History' },
-    { key: 'settings', label: 'Settings' },
-  ];
-
-  return (
-    <div className="min-h-screen">
-      {/* Header */}
-      <header className="border-b border-gray-800 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <h1 className="text-lg font-bold tracking-tight">forgectl</h1>
-          <nav className="flex gap-1">
-            {navItems.map(item => (
-              <button
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                className={`px-3 py-1 rounded text-sm ${page === item.key ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                {item.label}
+            {error && <p className="text-sm text-red-300">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} className="rounded-lg border border-line px-4 py-2 text-sm">Cancel</button>
+              <button type="submit" disabled={busy || !task.trim()} className="rounded-lg bg-code px-4 py-2 text-sm font-medium text-black disabled:opacity-40">
+                {busy ? "Submitting..." : "Submit"}
               </button>
-            ))}
-          </nav>
+            </div>
+          </form>
         </div>
-        <span className="text-xs text-gray-600">v0.1.0</span>
-      </header>
+      );
+    }
 
-      {/* Content */}
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        {page === 'dashboard' && <DashboardPage navigate={navigate} />}
-        {page === 'run' && <RunViewPage runId={pageArg} navigate={navigate} />}
-        {page === 'pipelines' && <PipelinesPage navigate={navigate} />}
-        {page === 'pipeline-view' && <PipelineViewPage pipelineId={pageArg} navigate={navigate} />}
-        {page === 'history' && <HistoryPage navigate={navigate} />}
-        {page === 'settings' && <SettingsPage />}
-      </main>
-    </div>
-  );
-}
+    function DashboardView({ onOpenBuilder, onOpenExecution }) {
+      const [health, setHealth] = useState(null);
+      const [runs, setRuns] = useState([]);
+      const [pipelines, setPipelines] = useState([]);
+      const [submitOpen, setSubmitOpen] = useState(false);
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
+      useEffect(() => {
+        let stopped = false;
+        async function tick() {
+          try {
+            const [h, r, p] = await Promise.all([
+              fetchJson("/health"),
+              fetchJson("/runs"),
+              fetchJson("/pipelines"),
+            ]);
+            if (stopped) return;
+            setHealth(h);
+            setRuns(Array.isArray(r) ? r : []);
+            setPipelines(Array.isArray(p) ? p : []);
+          } catch {
+            if (!stopped) setHealth(null);
+          }
+        }
+        tick();
+        const id = setInterval(tick, 3000);
+        return () => {
+          stopped = true;
+          clearInterval(id);
+        };
+      }, []);
+
+      const activeRuns = runs.filter((r) => r.status === "queued" || r.status === "running");
+      const activePipelines = pipelines.slice().reverse().slice(0, 8);
+
+      return (
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-line bg-panel p-5 shadow-glow">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold">forgectl</h2>
+                <p className="text-sm text-muted mt-1">Local orchestration dashboard for agent runs and DAG pipelines</p>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className={`h-2.5 w-2.5 rounded-full ${health ? "bg-content" : "bg-red-400"}`}></span>
+                <span className="mono text-muted">{health ? "daemon healthy" : "daemon unavailable"}</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3 mt-5">
+              <button onClick={onOpenBuilder} className="rounded-lg bg-code px-4 py-2 text-sm font-semibold text-black">New Pipeline</button>
+              <button onClick={() => setSubmitOpen(true)} className="rounded-lg border border-line px-4 py-2 text-sm">Submit Task</button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <section className="rounded-2xl border border-line bg-panel p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold">Active Pipelines</h3>
+                <span className="mono text-xs text-muted">{activePipelines.length}</span>
+              </div>
+              <div className="space-y-3 max-h-[480px] overflow-auto pr-1">
+                {activePipelines.length === 0 && <p className="text-sm text-muted">No pipeline runs yet.</p>}
+                {activePipelines.map((pipeline) => (
+                  <button
+                    key={pipeline.id}
+                    onClick={() => onOpenExecution(pipeline.id)}
+                    className="w-full text-left rounded-xl border border-line bg-panel2 p-3 hover:border-code/60 transition"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="mono text-xs text-slate-300">{pipeline.id}</span>
+                      <StatusPill status={pipeline.status || "pending"} />
+                    </div>
+                    <p className="text-sm mt-2">{pipeline.pipeline?.name || "pipeline"}</p>
+                    <p className="mono text-[11px] text-muted mt-1">started {formatTime(pipeline.startedAt)}</p>
+                    <div className="mt-2">
+                      <MiniDagPreview pipeline={pipeline.pipeline} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-line bg-panel p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold">Active Runs</h3>
+                <span className="mono text-xs text-muted">{activeRuns.length}</span>
+              </div>
+              <div className="space-y-3 max-h-[480px] overflow-auto pr-1">
+                {activeRuns.length === 0 && <p className="text-sm text-muted">No active single runs.</p>}
+                {activeRuns.map((run) => (
+                  <div key={run.id} className="rounded-xl border border-line bg-panel2 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="mono text-xs text-slate-300">{run.id}</span>
+                      <StatusPill status={run.status || "pending"} />
+                    </div>
+                    <p className="text-sm mt-2 line-clamp-2">{run.task}</p>
+                    <div className="mono text-[11px] text-muted mt-2 flex gap-3">
+                      <span>{run.workflow || "code"}</span>
+                      <span>{formatTime(run.submittedAt)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <TaskSubmitModal open={submitOpen} onClose={() => setSubmitOpen(false)} onSubmitted={() => {}} />
+        </div>
+      );
+    }
+
+    function PipelineNodeEditor({ node, nodeIds, onChange, onDelete }) {
+      const deps = node.depends_on || [];
+      const workflowColor = WORKFLOW_COLORS[node.workflow] || WORKFLOW_COLORS.general;
+
+      function setField(field, value) {
+        onChange({ ...node, [field]: value });
+      }
+
+      return (
+        <div className="rounded-xl border border-line bg-panel2 p-4 space-y-3" style={{ borderLeftColor: workflowColor, borderLeftWidth: 3 }}>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-muted w-full">Node ID
+              <input
+                value={node.id}
+                onChange={(e) => setField("id", slugify(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono"
+              />
+            </label>
+            <button onClick={onDelete} className="h-9 px-3 rounded-lg border border-red-400/40 text-red-200 text-xs">Delete</button>
+          </div>
+
+          <label className="text-xs text-muted block">Task
+            <textarea
+              value={node.task}
+              onChange={(e) => setField("task", e.target.value)}
+              rows={4}
+              className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono"
+              placeholder="Prompt for this node"
+            />
+          </label>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="text-xs text-muted">Workflow
+              <select value={node.workflow} onChange={(e) => setField("workflow", e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                {WORKFLOWS.map((w) => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-muted">Agent
+              <select value={node.agent} onChange={(e) => setField("agent", e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                {AGENTS.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <label className="text-xs text-muted block">Dependencies (multi-select)
+            <select
+              multiple
+              value={deps}
+              onChange={(e) => {
+                const selected = Array.from(e.target.options).filter((opt) => opt.selected).map((opt) => opt.value);
+                setField("depends_on", selected);
+              }}
+              className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono min-h-[96px]"
+            >
+              {nodeIds.filter((id) => id !== node.id).map((id) => <option key={id} value={id}>{id}</option>)}
+            </select>
+          </label>
+
+          {(node.workflow === "code" || node.workflow === "ops") && (
+            <label className="text-xs text-muted block">Repo path
+              <input
+                value={node.repo}
+                onChange={(e) => setField("repo", e.target.value)}
+                className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono"
+                placeholder="/path/to/repo"
+              />
+            </label>
+          )}
+        </div>
+      );
+    }
+
+    function PipelineBuilderView({ initialPipeline, onBack, onRunPipeline }) {
+      const [state, setState] = useState(() => normalizePipeline(initialPipeline || {
+        name: "new-pipeline",
+        description: "",
+        defaults: { workflow: "code", agent: "codex", repo: "" },
+        nodes: [],
+      }));
+      const [errors, setErrors] = useState([]);
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState("");
+      const [selectedNode, setSelectedNode] = useState(null);
+      const [importText, setImportText] = useState("");
+
+      useEffect(() => {
+        if (initialPipeline) {
+          setState(normalizePipeline(initialPipeline));
+        }
+      }, [initialPipeline]);
+
+      const nodeIds = state.nodes.map((n) => n.id);
+      const nodeStatusMap = useMemo(() => {
+        const out = {};
+        for (const n of state.nodes) out[n.id] = { status: "pending" };
+        return out;
+      }, [state.nodes]);
+
+      function addNode() {
+        const index = state.nodes.length + 1;
+        const base = slugify(`node-${index}`);
+        let id = base;
+        let i = 2;
+        while (nodeIds.includes(id)) {
+          id = `${base}-${i}`;
+          i += 1;
+        }
+
+        setState((prev) => ({
+          ...prev,
+          nodes: [...prev.nodes, {
+            id,
+            task: "",
+            workflow: prev.defaults.workflow || "code",
+            agent: prev.defaults.agent || "codex",
+            repo: "",
+            depends_on: [],
+          }],
+        }));
+      }
+
+      function updateNode(index, nextNode) {
+        setState((prev) => {
+          const nodes = prev.nodes.slice();
+          nodes[index] = nextNode;
+          return { ...prev, nodes };
+        });
+      }
+
+      function removeNode(index) {
+        setState((prev) => {
+          const removedId = prev.nodes[index]?.id;
+          const nodes = prev.nodes.filter((_, i) => i !== index).map((node) => ({
+            ...node,
+            depends_on: (node.depends_on || []).filter((id) => id !== removedId),
+          }));
+          return { ...prev, nodes };
+        });
+      }
+
+      function runValidation() {
+        const issues = validateBuilder(state);
+        setErrors(issues);
+        return issues.length === 0;
+      }
+
+      async function runPipeline() {
+        if (!runValidation()) return;
+        setBusy(true);
+        setMessage("");
+        try {
+          const payload = { pipeline: toPipelineDefinition(state) };
+          const result = await fetchJson("/pipelines", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          setMessage(`Pipeline submitted: ${result.id}`);
+          onRunPipeline(result.id, payload.pipeline);
+        } catch (err) {
+          setMessage(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function dryRun() {
+        const ok = runValidation();
+        if (!ok) return;
+        const levels = topologicalLevels(state.nodes);
+        const ordered = state.nodes.slice().sort((a, b) => {
+          const la = levels[a.id] || 0;
+          const lb = levels[b.id] || 0;
+          if (la !== lb) return la - lb;
+          return a.id.localeCompare(b.id);
+        });
+        const lines = ordered.map((node, idx) => `${idx + 1}. ${node.id} [${node.workflow}/${node.agent}] deps: ${(node.depends_on || []).join(", ") || "(root)"}`);
+        setMessage(`Dry run plan\n${lines.join("\n")}`);
+      }
+
+      function exportYaml() {
+        if (!runValidation()) return;
+        const yaml = window.jsyaml.dump(toPipelineDefinition(state), { lineWidth: 100 });
+        const blob = new Blob([yaml], { type: "text/yaml" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${state.name || "pipeline"}.yaml`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function importYamlText(yamlText) {
+        try {
+          const parsed = window.jsyaml.load(yamlText);
+          const next = normalizePipeline(parsed);
+          setState(next);
+          setErrors([]);
+          setMessage("Pipeline imported from YAML");
+        } catch (err) {
+          setMessage(`Import failed: ${err.message || String(err)}`);
+        }
+      }
+
+      return (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <button onClick={onBack} className="rounded-lg border border-line px-3 py-2 text-sm">Back to Dashboard</button>
+            <div className="flex items-center gap-2">
+              <button onClick={addNode} className="rounded-lg border border-line px-3 py-2 text-sm">+ Add Node</button>
+            </div>
+          </div>
+
+          <section className="rounded-2xl border border-line bg-panel p-5 space-y-4">
+            <h2 className="text-xl font-semibold">Pipeline Builder</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <label className="text-xs text-muted">Pipeline Name
+                <input value={state.name} onChange={(e) => setState((s) => ({ ...s, name: slugify(e.target.value) }))} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono" />
+              </label>
+              <label className="text-xs text-muted">Description
+                <input value={state.description} onChange={(e) => setState((s) => ({ ...s, description: e.target.value }))} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm" />
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="text-xs text-muted">Default Workflow
+                <select value={state.defaults.workflow} onChange={(e) => setState((s) => ({ ...s, defaults: { ...s.defaults, workflow: e.target.value } }))} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                  {WORKFLOWS.map((w) => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted">Default Agent
+                <select value={state.defaults.agent} onChange={(e) => setState((s) => ({ ...s, defaults: { ...s.defaults, agent: e.target.value } }))} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                  {AGENTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted">Default Repo (optional)
+                <input value={state.defaults.repo} onChange={(e) => setState((s) => ({ ...s, defaults: { ...s.defaults, repo: e.target.value } }))} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono" />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button onClick={runPipeline} disabled={busy} className="rounded-lg bg-code px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{busy ? "Running..." : "Run Pipeline"}</button>
+              <button onClick={dryRun} className="rounded-lg border border-line px-4 py-2 text-sm">Dry Run</button>
+              <button onClick={exportYaml} className="rounded-lg border border-line px-4 py-2 text-sm">Export YAML</button>
+              <label className="rounded-lg border border-line px-4 py-2 text-sm cursor-pointer">
+                Import YAML
+                <input
+                  type="file"
+                  accept=".yaml,.yml,text/yaml,text/plain"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files && e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => importYamlText(String(reader.result || ""));
+                    reader.readAsText(file);
+                  }}
+                />
+              </label>
+            </div>
+
+            <label className="text-xs text-muted block">Import/Paste YAML
+              <textarea
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                rows={5}
+                className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono"
+                placeholder="Paste YAML here and click Parse YAML"
+              />
+            </label>
+            <button onClick={() => importYamlText(importText)} className="rounded-lg border border-line px-3 py-2 text-sm">Parse YAML</button>
+
+            {errors.length > 0 && (
+              <div className="rounded-lg border border-red-400/30 bg-red-500/10 p-3">
+                {errors.map((err, idx) => <p key={idx} className="text-sm text-red-200">- {err}</p>)}
+              </div>
+            )}
+            {message && <pre className="mono text-xs whitespace-pre-wrap rounded-lg border border-line bg-shell p-3 text-slate-300">{message}</pre>}
+          </section>
+
+          <section className="rounded-2xl border border-line bg-panel p-5 space-y-3">
+            <h3 className="font-semibold">DAG Preview</h3>
+            <DagPreview nodes={state.nodes} nodeStates={nodeStatusMap} selectedNodeId={selectedNode} onSelectNode={setSelectedNode} />
+          </section>
+
+          <section className="space-y-3">
+            {state.nodes.length === 0 && (
+              <div className="rounded-xl border border-dashed border-line bg-panel p-5 text-sm text-muted">Add your first node to start building the DAG.</div>
+            )}
+            {state.nodes.map((node, index) => (
+              <PipelineNodeEditor
+                key={`${node.id}-${index}`}
+                node={node}
+                nodeIds={nodeIds}
+                onChange={(next) => updateNode(index, next)}
+                onDelete={() => removeNode(index)}
+              />
+            ))}
+          </section>
+        </div>
+      );
+    }
+
+    function PipelineExecutionView({ pipelineId, onBack, onOpenExecution }) {
+      const [pipeline, setPipeline] = useState(null);
+      const [events, setEvents] = useState([]);
+      const [liveStates, setLiveStates] = useState({});
+      const [selectedNode, setSelectedNode] = useState(null);
+      const [rerunNode, setRerunNode] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState("");
+      const logRef = useRef(null);
+
+      useEffect(() => {
+        let stopped = false;
+        async function load() {
+          try {
+            const data = await fetchJson(`/pipelines/${pipelineId}`);
+            if (!stopped) {
+              setPipeline(data);
+              const nodeIds = Object.keys(data.nodes || {});
+              if (!selectedNode && nodeIds.length > 0) setSelectedNode(nodeIds[0]);
+              if (!rerunNode && nodeIds.length > 0) setRerunNode(nodeIds[0]);
+            }
+          } catch (err) {
+            if (!stopped) setMessage(err.message || String(err));
+          }
+        }
+        load();
+        const id = setInterval(load, 2500);
+        return () => {
+          stopped = true;
+          clearInterval(id);
+        };
+      }, [pipelineId]);
+
+      useEffect(() => {
+        const es = new EventSource(`${API}/pipelines/${pipelineId}/events`);
+        es.onmessage = (msg) => {
+          try {
+            const event = JSON.parse(msg.data);
+            setEvents((prev) => {
+              const next = [...prev, event];
+              return next.slice(-600);
+            });
+
+            const nodeId = event?.data?.nodeId;
+            if (nodeId) {
+              setLiveStates((prev) => {
+                const current = prev[nodeId] || {};
+                const next = { ...current };
+                if (event.type === "phase" && event.data.phase && String(event.data.phase).startsWith("node:")) {
+                  next.status = event.data.status || current.status || "pending";
+                  if (event.data.error) next.error = event.data.error;
+                }
+                if (event.type === "validation") next.validation = event.data.validation;
+                if (event.type === "output") next.output = event.data.output;
+                return { ...prev, [nodeId]: next };
+              });
+            }
+          } catch {
+            // ignore malformed events
+          }
+        };
+        es.onerror = () => {};
+        return () => es.close();
+      }, [pipelineId]);
+
+      useEffect(() => {
+        if (!logRef.current) return;
+        logRef.current.scrollTop = logRef.current.scrollHeight;
+      }, [events, selectedNode]);
+
+      const pipelineNodes = useMemo(() => pipeline?.pipeline?.nodes || [], [pipeline]);
+
+      const mergedNodeStates = useMemo(() => {
+        const base = { ...(pipeline?.nodes || {}) };
+        for (const [id, state] of Object.entries(liveStates)) {
+          base[id] = { ...(base[id] || {}), ...state };
+        }
+        return base;
+      }, [pipeline, liveStates]);
+
+      const selectedNodeState = selectedNode ? mergedNodeStates[selectedNode] : null;
+      const selectedNodeDef = selectedNode ? pipelineNodes.find((n) => n.id === selectedNode) : null;
+      const nodeEvents = selectedNode ? events.filter((evt) => evt?.data?.nodeId === selectedNode) : events;
+
+      async function rerunFromNode() {
+        if (!rerunNode) return;
+        setBusy(true);
+        setMessage("");
+        try {
+          const data = await fetchJson(`/pipelines/${pipelineId}/rerun`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fromNode: rerunNode }),
+          });
+          onOpenExecution(data.id);
+        } catch (err) {
+          setMessage(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function revertHint() {
+        setMessage("Revert checkpoints are available from CLI: forgectl pipeline revert --file <pipeline.yaml> --to <node> --pipeline-run <id>");
+      }
+
+      return (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <button onClick={onBack} className="rounded-lg border border-line px-3 py-2 text-sm">Back</button>
+            <div className="mono text-xs text-muted">pipeline {pipelineId}</div>
+          </div>
+
+          <section className="rounded-2xl border border-line bg-panel p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold">{pipeline?.pipeline?.name || "Pipeline execution"}</h2>
+                <p className="text-sm text-muted mt-1">Live status from SSE events</p>
+              </div>
+              <StatusPill status={pipeline?.status || "running"} />
+            </div>
+            <div className="flex flex-wrap gap-2 mt-4">
+              <select value={rerunNode} onChange={(e) => setRerunNode(e.target.value)} className="rounded-lg border border-line bg-shell px-3 py-2 text-sm mono">
+                {pipelineNodes.map((n) => <option key={n.id} value={n.id}>{n.id}</option>)}
+              </select>
+              <button onClick={rerunFromNode} disabled={busy} className="rounded-lg bg-code px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">Rerun from...</button>
+              <button onClick={revertHint} className="rounded-lg border border-line px-4 py-2 text-sm">Revert to...</button>
+            </div>
+            {message && <p className="text-sm text-amber-200 mt-3">{message}</p>}
+          </section>
+
+          <section className="rounded-2xl border border-line bg-panel p-5">
+            <h3 className="font-semibold mb-3">Execution DAG</h3>
+            <DagPreview nodes={pipelineNodes} nodeStates={mergedNodeStates} selectedNodeId={selectedNode} onSelectNode={setSelectedNode} />
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <div className="rounded-2xl border border-line bg-panel p-5 space-y-3">
+              <h3 className="font-semibold">Node Detail</h3>
+              {!selectedNode && <p className="text-sm text-muted">Select a node.</p>}
+              {selectedNode && (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="mono text-sm">{selectedNode}</p>
+                      <p className="text-xs text-muted">{selectedNodeDef?.workflow || "code"} / {selectedNodeDef?.agent || "codex"}</p>
+                    </div>
+                    <StatusPill status={selectedNodeState?.status || "pending"} />
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted mb-1">Task Prompt</p>
+                    <pre className="mono text-xs whitespace-pre-wrap rounded-lg border border-line bg-shell p-3 text-slate-300">{selectedNodeDef?.task || "-"}</pre>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted mb-1">Validation</p>
+                    <div className="rounded-lg border border-line bg-shell p-3 text-xs">
+                      {(selectedNodeState?.result?.validation?.stepResults || selectedNodeState?.validation?.stepResults || []).length === 0 && <p className="text-muted">No validation data</p>}
+                      {(selectedNodeState?.result?.validation?.stepResults || selectedNodeState?.validation?.stepResults || []).map((step, idx) => (
+                        <p key={idx} className={step.passed ? "text-content" : "text-red-300"}>
+                          {step.passed ? "PASS" : "FAIL"} {step.name} ({step.attempts} attempts)
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted mb-1">Output Summary</p>
+                    <div className="rounded-lg border border-line bg-shell p-3 text-xs mono text-slate-300 space-y-1">
+                      {!selectedNodeState?.result?.output && !selectedNodeState?.output && <p className="text-muted">No output yet</p>}
+                      {(selectedNodeState?.result?.output?.mode === "git" || selectedNodeState?.output?.mode === "git") && (
+                        <>
+                          <p>mode: git</p>
+                          <p>branch: {(selectedNodeState?.result?.output?.branch || selectedNodeState?.output?.branch || "-")}</p>
+                          <p>files changed: {(selectedNodeState?.result?.output?.filesChanged ?? selectedNodeState?.output?.filesChanged ?? "-")}</p>
+                        </>
+                      )}
+                      {(selectedNodeState?.result?.output?.mode === "files" || selectedNodeState?.output?.mode === "files") && (
+                        <>
+                          <p>mode: files</p>
+                          <p>dir: {(selectedNodeState?.result?.output?.dir || selectedNodeState?.output?.dir || "-")}</p>
+                          <p>files: {(selectedNodeState?.result?.output?.files || selectedNodeState?.output?.files || []).length}</p>
+                        </>
+                      )}
+                      <p>duration: {durationMs(selectedNodeState)}</p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-line bg-panel p-5">
+              <h3 className="font-semibold mb-3">Agent Output / Events</h3>
+              <div ref={logRef} className="h-[420px] overflow-auto rounded-lg border border-line bg-shell p-3 space-y-2">
+                {nodeEvents.length === 0 && <p className="text-sm text-muted">Waiting for events...</p>}
+                {nodeEvents.map((evt, idx) => (
+                  <div key={idx} className="mono text-[11px] text-slate-300 border-b border-line/60 pb-2">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-muted">{formatTime(evt.timestamp)}</span>
+                      <span className="uppercase tracking-wide" style={{ color: STATUS_COLORS[evt?.data?.status] || "#94a3b8" }}>{evt.type}</span>
+                    </div>
+                    <pre className="whitespace-pre-wrap break-words">{JSON.stringify(evt.data, null, 2)}</pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    function App() {
+      const [view, setView] = useState("dashboard");
+      const [activePipelineId, setActivePipelineId] = useState(null);
+      const [builderPipeline, setBuilderPipeline] = useState(null);
+      const [health, setHealth] = useState(null);
+
+      useEffect(() => {
+        let stop = false;
+        async function ping() {
+          try {
+            const data = await fetchJson("/health");
+            if (!stop) setHealth(data);
+          } catch {
+            if (!stop) setHealth(null);
+          }
+        }
+        ping();
+        const id = setInterval(ping, 4000);
+        return () => {
+          stop = true;
+          clearInterval(id);
+        };
+      }, []);
+
+      function openExecution(id) {
+        setActivePipelineId(id);
+        setView("execution");
+      }
+
+      return (
+        <div className="grid-noise min-h-screen">
+          <header className="sticky top-0 z-30 border-b border-line bg-shell/90 backdrop-blur px-5 py-3">
+            <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <button onClick={() => setView("dashboard")} className="text-lg font-bold tracking-tight">forgectl</button>
+                <span className="mono text-xs px-2 py-1 rounded border border-line bg-panel2 text-muted">pipeline builder</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-2 mono text-xs text-muted">
+                  <span className={`h-2 w-2 rounded-full ${health ? "bg-content" : "bg-red-400"}`}></span>
+                  {health ? "healthy" : "offline"}
+                </span>
+                <button onClick={() => setView("dashboard")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "dashboard" ? "bg-panel2 border border-line" : "text-muted"}`}>Dashboard</button>
+                <button onClick={() => setView("builder")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "builder" ? "bg-panel2 border border-line" : "text-muted"}`}>Builder</button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-[1400px] mx-auto p-5">
+            {view === "dashboard" && (
+              <DashboardView
+                onOpenBuilder={() => setView("builder")}
+                onOpenExecution={openExecution}
+              />
+            )}
+
+            {view === "builder" && (
+              <PipelineBuilderView
+                initialPipeline={builderPipeline}
+                onBack={() => setView("dashboard")}
+                onRunPipeline={(id, pipelineDef) => {
+                  setBuilderPipeline(pipelineDef);
+                  openExecution(id);
+                }}
+              />
+            )}
+
+            {view === "execution" && activePipelineId && (
+              <PipelineExecutionView
+                pipelineId={activePipelineId}
+                onBack={() => setView("dashboard")}
+                onOpenExecution={openExecution}
+              />
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
 </body>
 </html>
