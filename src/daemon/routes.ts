@@ -7,6 +7,9 @@ import { runEvents } from "../logging/events.js";
 import type { RunEvent } from "../logging/events.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
+import { validateDAG } from "../pipeline/dag.js";
+import { PipelineExecutor } from "../pipeline/executor.js";
+import type { PipelineDefinition, PipelineRun, NodeExecution } from "../pipeline/types.js";
 
 interface InlineContext {
   name: string;
@@ -120,4 +123,156 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
       runEvents.off(`run:${runId}`, handler);
     });
   });
+
+  // --- Pipeline API ---
+  const pipelineRuns = new Map<string, { executor: PipelineExecutor; result?: PipelineRun; promise?: Promise<PipelineRun> }>();
+
+  // Submit a pipeline
+  app.post<{
+    Body: {
+      pipeline: PipelineDefinition;
+      repo?: string;
+      fromNode?: string;
+    };
+  }>("/pipelines", async (request, reply) => {
+    const { pipeline: pipelineDef, repo, fromNode } = request.body;
+    if (!pipelineDef) {
+      reply.code(400);
+      return { error: "pipeline is required" };
+    }
+
+    // Validate
+    const validation = validateDAG(pipelineDef);
+    if (!validation.valid) {
+      reply.code(400);
+      return { error: "Invalid pipeline", details: validation.errors };
+    }
+
+    const executor = new PipelineExecutor(pipelineDef, { repo, fromNode });
+    const entry = { executor, result: undefined as PipelineRun | undefined, promise: undefined as Promise<PipelineRun> | undefined };
+
+    entry.promise = executor.execute().then(result => {
+      entry.result = result;
+      return result;
+    }).catch(() => {
+      const failedResult: PipelineRun = {
+        id: executor.runId,
+        pipeline: pipelineDef,
+        status: "failed",
+        nodes: executor.getNodeStates(),
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      };
+      entry.result = failedResult;
+      return failedResult;
+    });
+
+    pipelineRuns.set(executor.runId, entry);
+
+    reply.code(202);
+    return {
+      id: executor.runId,
+      status: "running",
+      nodes: serializeNodeStates(executor.getNodeStates()),
+    };
+  });
+
+  // List pipeline runs
+  app.get("/pipelines", async () => {
+    return [...pipelineRuns.entries()].map(([id, entry]) => ({
+      id,
+      status: entry.result?.status ?? "running",
+      pipeline: entry.executor ? { name: entry.result?.pipeline.name ?? "unknown" } : undefined,
+      startedAt: entry.result?.startedAt,
+      completedAt: entry.result?.completedAt,
+    }));
+  });
+
+  // Get pipeline run status
+  app.get<{ Params: { id: string } }>("/pipelines/:id", async (request, reply) => {
+    const entry = pipelineRuns.get(request.params.id);
+    if (!entry) {
+      reply.code(404);
+      return { error: "Pipeline run not found" };
+    }
+
+    return {
+      id: request.params.id,
+      status: entry.result?.status ?? "running",
+      pipeline: entry.result?.pipeline ?? {},
+      nodes: serializeNodeStates(entry.executor.getNodeStates()),
+      startedAt: entry.result?.startedAt,
+      completedAt: entry.result?.completedAt,
+    };
+  });
+
+  // Pipeline SSE events
+  app.get<{ Params: { id: string } }>("/pipelines/:id/events", async (request, reply) => {
+    const entry = pipelineRuns.get(request.params.id);
+    if (!entry) {
+      reply.code(404);
+      return { error: "Pipeline run not found" };
+    }
+
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+
+    const handler = (event: RunEvent) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    runEvents.on(`run:${request.params.id}`, handler);
+
+    request.raw.on("close", () => {
+      runEvents.off(`run:${request.params.id}`, handler);
+    });
+  });
+
+  // Re-run pipeline from a node
+  app.post<{
+    Params: { id: string };
+    Body: { fromNode: string };
+  }>("/pipelines/:id/rerun", async (request, reply) => {
+    const entry = pipelineRuns.get(request.params.id);
+    if (!entry) {
+      reply.code(404);
+      return { error: "Pipeline run not found" };
+    }
+
+    const { fromNode } = request.body;
+    if (!fromNode) {
+      reply.code(400);
+      return { error: "fromNode is required" };
+    }
+
+    const pipeline = entry.result?.pipeline;
+    if (!pipeline) {
+      reply.code(400);
+      return { error: "Original pipeline definition not available" };
+    }
+
+    const newExecutor = new PipelineExecutor(pipeline, { fromNode });
+    const newEntry = { executor: newExecutor, result: undefined as PipelineRun | undefined, promise: undefined as Promise<PipelineRun> | undefined };
+
+    newEntry.promise = newExecutor.execute().then(result => {
+      newEntry.result = result;
+      return result;
+    });
+
+    pipelineRuns.set(newExecutor.runId, newEntry);
+
+    reply.code(202);
+    return { id: newExecutor.runId, status: "running" };
+  });
+}
+
+function serializeNodeStates(states: Map<string, NodeExecution>): Record<string, NodeExecution> {
+  const obj: Record<string, NodeExecution> = {};
+  for (const [key, value] of states) {
+    obj[key] = { ...value, result: undefined }; // Don't serialize full results in list views
+  }
+  return obj;
 }

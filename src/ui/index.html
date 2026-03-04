@@ -368,6 +368,149 @@ function HistoryPage({ navigate }) {
   );
 }
 
+function PipelinesPage({ navigate }) {
+  const [pipelines, setPipelines] = useState([]);
+  const [yamlInput, setYamlInput] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchPipelines = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/pipelines`);
+      if (res.ok) setPipelines(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchPipelines();
+    const i = setInterval(fetchPipelines, 3000);
+    return () => clearInterval(i);
+  }, [fetchPipelines]);
+
+  const submitPipeline = async (e) => {
+    e.preventDefault();
+    if (!yamlInput.trim()) return;
+    setSubmitting(true);
+    try {
+      // Parse YAML on client side (simple JSON parse if it's JSON, otherwise send raw)
+      const res = await fetch(`${API}/pipelines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline: JSON.parse(yamlInput) }),
+      });
+      if (res.ok) {
+        setYamlInput('');
+        fetchPipelines();
+      }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <h2 className="text-lg font-semibold mb-4">Submit Pipeline (JSON)</h2>
+        <form onSubmit={submitPipeline} className="space-y-4">
+          <textarea
+            value={yamlInput}
+            onChange={e => setYamlInput(e.target.value)}
+            placeholder='Paste pipeline definition as JSON...'
+            className="w-full bg-bg rounded border border-gray-700 p-3 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none font-mono"
+            rows={8}
+          />
+          <button type="submit" disabled={submitting || !yamlInput.trim()} className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm font-medium">
+            {submitting ? 'Submitting...' : 'Run Pipeline'}
+          </button>
+        </form>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold mb-3">Pipeline Runs</h2>
+        {pipelines.length === 0 ? (
+          <p className="text-sm text-gray-500">No pipeline runs yet.</p>
+        ) : (
+          <div className="grid gap-3">
+            {pipelines.map(p => (
+              <div key={p.id} onClick={() => navigate('pipeline-view', p.id)} className="bg-bg-card hover:bg-bg-hover rounded-lg p-4 border border-gray-800 cursor-pointer transition-colors">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-gray-400 font-mono">{p.id}</span>
+                  <StatusBadge status={p.status} />
+                </div>
+                <p className="text-sm">{p.pipeline?.name || 'Pipeline'}</p>
+                {p.startedAt && <span className="text-xs text-gray-500">{new Date(p.startedAt).toLocaleString()}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PipelineViewPage({ pipelineId, navigate }) {
+  const [pipeline, setPipeline] = useState(null);
+
+  useEffect(() => {
+    const fetchPipeline = async () => {
+      try {
+        const res = await fetch(`${API}/pipelines/${pipelineId}`);
+        if (res.ok) setPipeline(await res.json());
+      } catch {}
+    };
+    fetchPipeline();
+    const i = setInterval(fetchPipeline, 2000);
+    return () => clearInterval(i);
+  }, [pipelineId]);
+
+  const nodeStatusColor = (status) => ({
+    completed: 'border-green-500 bg-green-900/20',
+    running: 'border-blue-500 bg-blue-900/20',
+    failed: 'border-red-500 bg-red-900/20',
+    skipped: 'border-gray-600 bg-gray-900/20',
+    pending: 'border-gray-700 bg-bg-card',
+  }[status] || 'border-gray-700 bg-bg-card');
+
+  const nodeStatusIcon = (status) => ({
+    completed: '\u2705',
+    running: '\u{1F504}',
+    failed: '\u274C',
+    skipped: '\u23ED',
+    pending: '\u23F3',
+  }[status] || '\u23F3');
+
+  return (
+    <div className="space-y-6">
+      <button onClick={() => navigate('pipelines')} className="text-sm text-gray-400 hover:text-gray-200">&larr; Back</button>
+
+      <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-mono text-sm text-gray-400">{pipelineId}</h2>
+          {pipeline && <StatusBadge status={pipeline.status} />}
+        </div>
+        {pipeline?.pipeline?.name && <p className="text-lg mb-2">{pipeline.pipeline.name}</p>}
+      </div>
+
+      {pipeline?.nodes && (
+        <div className="bg-bg-card rounded-lg p-6 border border-gray-800">
+          <h3 className="text-sm font-semibold mb-4">Nodes</h3>
+          <div className="space-y-3">
+            {Object.entries(pipeline.nodes).map(([nodeId, node]) => (
+              <div key={nodeId} className={`rounded-lg p-4 border-2 ${nodeStatusColor(node.status)}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-sm">{nodeStatusIcon(node.status)} {nodeId}</span>
+                  <StatusBadge status={node.status} />
+                </div>
+                {node.error && <p className="text-xs text-red-400 mt-1">{node.error}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsPage() {
   const [auth, setAuth] = useState(null);
   const [health, setHealth] = useState(null);
@@ -428,6 +571,7 @@ function App() {
 
   const navItems = [
     { key: 'dashboard', label: 'Dashboard' },
+    { key: 'pipelines', label: 'Pipelines' },
     { key: 'history', label: 'History' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -457,6 +601,8 @@ function App() {
       <main className="max-w-5xl mx-auto px-6 py-8">
         {page === 'dashboard' && <DashboardPage navigate={navigate} />}
         {page === 'run' && <RunViewPage runId={pageArg} navigate={navigate} />}
+        {page === 'pipelines' && <PipelinesPage navigate={navigate} />}
+        {page === 'pipeline-view' && <PipelineViewPage pipelineId={pageArg} navigate={navigate} />}
         {page === 'history' && <HistoryPage navigate={navigate} />}
         {page === 'settings' && <SettingsPage />}
       </main>
