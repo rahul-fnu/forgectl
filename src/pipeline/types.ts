@@ -62,10 +62,17 @@ export interface CheckpointRef {
   outputDir?: string;
 }
 
+export interface ResolvedContextContent {
+  name: string;
+  content: string;
+}
+
 /** Resolved input for a node based on upstream outputs */
 export interface ResolvedNodeInput {
   repo?: string;
   branch?: string;
-  files?: string[];
-  contextFiles?: string[];
+  files: string[];
+  contextFiles: string[];
+  contextContent: ResolvedContextContent[];
+  upstreamBranches: string[];
 }

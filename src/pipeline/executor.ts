@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import type {
@@ -8,9 +9,10 @@ import type {
   PipelineNode,
   PipelineRun,
   NodeExecution,
+  ResolvedContextContent,
 } from "./types.js";
 import { validateDAG, topologicalSort } from "./dag.js";
-import { resolveNodeInput } from "./resolver.js";
+import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
 import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
@@ -165,28 +167,40 @@ export class PipelineExecutor {
 
     console.log(chalk.blue(`  ▶ Starting node: ${node.id}`));
 
+    let tempContextDir: string | null = null;
     try {
       // Resolve input from upstream outputs
-      const input = await resolveNodeInput(node, this.pipeline, this.nodeStates);
+      const input = await resolveNodeInput(node, this.pipeline, this.nodeStates, {
+        repo: this.options.repo,
+      });
 
       // For fan-in nodes with multiple git-mode upstream branches,
       // merge all upstream branches into the host repo so the workspace includes all changes
       const deps = node.depends_on ?? [];
-      if (deps.length > 0) {
+      const workflowName = node.workflow ?? this.pipeline.defaults?.workflow ?? "code";
+      const workflowOutputMode = getWorkflowOutputMode(workflowName);
+      if (deps.length > 0 && workflowOutputMode === "git") {
         const repoPath = this.options.repo ?? node.repo ?? this.pipeline.defaults?.repo;
         if (repoPath) {
           await this.mergeUpstreamForNode(node, repoPath);
         }
       }
 
+      const contextFiles = [...input.contextFiles];
+      if (input.contextContent.length > 0) {
+        const materialized = this.materializeContextContent(node.id, input.contextContent);
+        tempContextDir = materialized.dir;
+        contextFiles.push(...materialized.files);
+      }
+
       // Build CLIOptions from node + pipeline defaults
       const cliOptions: CLIOptions = {
         task: node.task,
-        workflow: node.workflow ?? this.pipeline.defaults?.workflow ?? "code",
+        workflow: workflowName,
         agent: node.agent ?? this.pipeline.defaults?.agent ?? "codex",
         repo: this.options.repo ?? input.repo ?? node.repo ?? this.pipeline.defaults?.repo,
-        input: input.files ?? node.input,
-        context: input.contextFiles ?? node.context,
+        input: input.files.length > 0 ? input.files : undefined,
+        context: contextFiles.length > 0 ? contextFiles : undefined,
         review: node.review ?? this.pipeline.defaults?.review ?? false,
         model: node.model ?? this.pipeline.defaults?.model,
         verbose: this.options.verbose,
@@ -235,9 +249,33 @@ export class PipelineExecutor {
       state.error = err instanceof Error ? err.message : String(err);
       state.completedAt = new Date().toISOString();
       console.log(chalk.red(`  ✗ Node error: ${node.id} — ${state.error}`));
+    } finally {
+      if (tempContextDir) {
+        rmSync(tempContextDir, { recursive: true, force: true });
+      }
     }
 
     this.nodeStates.set(node.id, state);
+  }
+
+  private materializeContextContent(
+    nodeId: string,
+    contextContent: ResolvedContextContent[],
+  ): { dir: string; files: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), `forgectl-pipe-${nodeId}-ctx-`));
+    const files: string[] = [];
+
+    for (let i = 0; i < contextContent.length; i++) {
+      const item = contextContent[i];
+      const safeName = (item.name || `context-${i + 1}.txt`)
+        .replace(/[\\/\s]+/g, "_")
+        .replace(/[^a-zA-Z0-9._-]/g, "");
+      const filePath = join(dir, `${String(i + 1).padStart(2, "0")}-${safeName}`);
+      writeFileSync(filePath, item.content, "utf-8");
+      files.push(filePath);
+    }
+
+    return { dir, files };
   }
 
   private anyDependencyFailed(deps: string[]): boolean {
