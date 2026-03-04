@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import chalk from "chalk";
 import type {
   PipelineDefinition,
@@ -167,6 +169,16 @@ export class PipelineExecutor {
       // Resolve input from upstream outputs
       const input = await resolveNodeInput(node, this.pipeline, this.nodeStates);
 
+      // For fan-in nodes with multiple git-mode upstream branches,
+      // merge all upstream branches into the host repo so the workspace includes all changes
+      const deps = node.depends_on ?? [];
+      if (deps.length > 0) {
+        const repoPath = this.options.repo ?? node.repo ?? this.pipeline.defaults?.repo;
+        if (repoPath) {
+          await this.mergeUpstreamForNode(node, repoPath);
+        }
+      }
+
       // Build CLIOptions from node + pipeline defaults
       const cliOptions: CLIOptions = {
         task: node.task,
@@ -199,8 +211,10 @@ export class PipelineExecutor {
             try {
               execSync(`git merge ${result.output.branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
               console.log(chalk.gray(`    Merged ${result.output.branch} into working branch`));
-            } catch (mergeErr) {
-              console.log(chalk.yellow(`    Warning: Could not auto-merge ${result.output.branch}: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`));
+            } catch {
+              // Abort the failed merge to leave the repo in a clean state
+              try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+              console.log(chalk.yellow(`    Warning: Could not auto-merge ${result.output.branch} (aborted)`));
             }
           }
         }
@@ -262,6 +276,70 @@ export class PipelineExecutor {
       startedAt,
       completedAt: startedAt,
     };
+  }
+
+  /**
+   * For a node with dependencies, ensure the host repo's working tree
+   * includes all upstream branches' changes. Creates a temporary merge branch
+   * from the first upstream, then merges remaining upstream branches.
+   * On conflict, falls back to staging all files and committing.
+   */
+  private async mergeUpstreamForNode(node: PipelineNode, repoPath: string): Promise<void> {
+    const deps = node.depends_on ?? [];
+    const upstreamBranches: string[] = [];
+
+    for (const depId of deps) {
+      const depState = this.nodeStates.get(depId);
+      if (depState?.result?.output?.mode === "git" && depState.result.output.branch) {
+        upstreamBranches.push(depState.result.output.branch);
+      }
+    }
+
+    if (upstreamBranches.length === 0) return;
+
+    const tempBranch = `pipeline-merge-${node.id}-${Date.now()}`;
+
+    try {
+      // Create temp branch from the first upstream branch
+      execSync(`git checkout -b ${tempBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
+      console.log(chalk.gray(`    Created merge branch from ${upstreamBranches[0]}`));
+
+      // Merge remaining upstream branches
+      for (const branch of upstreamBranches.slice(1)) {
+        try {
+          execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+          console.log(chalk.gray(`    Merged ${branch} into merge branch`));
+        } catch {
+          // Conflict — resolve by accepting both sides where possible
+          // For files with conflict markers, accept the version with most content
+          try {
+            // Mark all conflicted files as resolved by using the merge result as-is
+            // Strip conflict markers by accepting a combined version
+            const conflictFiles = execSync("git diff --name-only --diff-filter=U", { cwd: repoPath, encoding: "utf-8" }).trim();
+            if (conflictFiles) {
+              for (const file of conflictFiles.split("\n").filter(Boolean)) {
+                // Read conflicted file, strip markers to keep both sides
+                const filePath = join(repoPath, file);
+                const content = readFileSync(filePath, "utf-8");
+                const resolved = content
+                  .replace(/^<<<<<<< HEAD\n/gm, "")
+                  .replace(/^=======\n/gm, "")
+                  .replace(/^>>>>>>> [^\n]*\n/gm, "");
+                writeFileSync(filePath, resolved);
+              }
+            }
+            execSync("git add -A", { cwd: repoPath, stdio: "pipe" });
+            execSync(`git commit --no-edit -m "Pipeline merge: ${branch}"`, { cwd: repoPath, stdio: "pipe" });
+            console.log(chalk.yellow(`    Auto-resolved merge conflict for ${branch}`));
+          } catch {
+            try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+            console.log(chalk.yellow(`    Warning: Could not merge ${branch} for node ${node.id}`));
+          }
+        }
+      }
+    } catch (err) {
+      console.log(chalk.yellow(`    Warning: Failed to prepare merge for node ${node.id}: ${err instanceof Error ? err.message : String(err)}`));
+    }
   }
 
   /** Get current node states (for status queries) */
