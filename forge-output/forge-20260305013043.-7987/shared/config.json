@@ -1,0 +1,53 @@
+{
+  "report": {
+    "title": "U.S. Inflation, Unemployment, and Policy Rate Snapshot",
+    "generated_utc": "2026-03-05T01:32:52Z",
+    "notes_file": "notes.md",
+    "chart_file": "images/chart.png"
+  },
+  "data": {
+    "years": [
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "series": {
+      "inflation_dec_dec_pct": [
+        7.17,
+        6.4,
+        3.32,
+        2.87
+      ],
+      "unemployment_avg_pct": [
+        5.35,
+        3.65,
+        3.62,
+        4.02
+      ],
+      "fedfunds_avg_pct": [
+        0.08,
+        1.68,
+        5.02,
+        5.14
+      ]
+    },
+    "latest": {
+      "cpi_index_latest_date": "2026-01-01",
+      "cpi_index_latest_value": 326.588,
+      "unrate_latest_date": "2026-01-01",
+      "unrate_latest_value": 4.3,
+      "fedfunds_latest_date": "2026-02-01",
+      "fedfunds_latest_value": 3.64
+    }
+  },
+  "sources": [
+    "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "https://fred.stlouisfed.org/series/UNRATE",
+    "https://fred.stlouisfed.org/series/FEDFUNDS",
+    "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
+    "https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE",
+    "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
+    "https://www.federalreserve.gov/monetarypolicy/openmarket.htm"
+  ]
+}

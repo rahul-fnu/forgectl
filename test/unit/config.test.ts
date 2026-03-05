@@ -32,6 +32,9 @@ describe("ConfigSchema", () => {
 
     expect(config.output.dir).toBe("./forge-output");
     expect(config.output.log_dir).toBe(".forgectl/runs");
+    expect(config.board.state_dir).toBe("~/.forgectl/board");
+    expect(config.board.scheduler_tick_seconds).toBe(30);
+    expect(config.board.max_concurrent_card_runs).toBe(2);
   });
 
   it("parses with overrides", () => {

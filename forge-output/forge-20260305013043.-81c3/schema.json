@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/health-response.schema.json",
+  "title": "HealthResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "service",
+    "timestamp",
+    "uptimeSeconds"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "const": "ok"
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "uptimeSeconds": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "examples": [
+    {
+      "status": "ok",
+      "service": "api",
+      "timestamp": "2026-03-05T00:00:00Z",
+      "uptimeSeconds": 12345
+    }
+  ]
+}

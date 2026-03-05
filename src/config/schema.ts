@@ -111,6 +111,12 @@ export const ConfigSchema = z.object({
     dir: z.string().default("./forge-output"),
     log_dir: z.string().default(".forgectl/runs"),
   }).default({}),
+
+  board: z.object({
+    state_dir: z.string().default("~/.forgectl/board"),
+    scheduler_tick_seconds: z.number().int().positive().default(30),
+    max_concurrent_card_runs: z.number().int().positive().default(2),
+  }).default({}),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

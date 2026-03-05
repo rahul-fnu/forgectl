@@ -11,6 +11,15 @@ import {
   pipelineRerunCommand,
   pipelineRevertCommand,
 } from "./cli/pipeline.js";
+import {
+  boardAddCommand,
+  boardCardCreateCommand,
+  boardCardMoveCommand,
+  boardCardRunsCommand,
+  boardCardTriggerCommand,
+  boardListCommand,
+  boardShowCommand,
+} from "./cli/board.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -302,5 +311,113 @@ pipelineCmd
   .requiredOption("--to <node>", "Node to revert to")
   .option("--pipeline-run <id>", "Pipeline run ID")
   .action(pipelineRevertCommand);
+
+// forgectl board
+const boardCmd = program
+  .command("board")
+  .description("Board orchestration and card management");
+
+boardCmd
+  .command("add")
+  .description("Register a board definition file")
+  .requiredOption("-f, --file <path>", "Board definition YAML file")
+  .action(async (opts: { file: string }) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardAddCommand(opts);
+  });
+
+boardCmd
+  .command("list")
+  .description("List boards")
+  .action(async () => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardListCommand();
+  });
+
+boardCmd
+  .command("show <boardId>")
+  .description("Show board details")
+  .action(async (boardId: string) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardShowCommand({ board: boardId });
+  });
+
+const boardCardCmd = boardCmd
+  .command("card")
+  .description("Manage board cards");
+
+boardCardCmd
+  .command("create")
+  .description("Create a card")
+  .requiredOption("--board <id>", "Board ID")
+  .requiredOption("--type <type>", "Card type/template key")
+  .requiredOption("--title <title>", "Card title")
+  .option("--id <id>", "Card ID")
+  .option("--column <column>", "Initial column")
+  .option("--params <json>", "Card params JSON")
+  .action(async (opts: {
+    board: string;
+    type: string;
+    title: string;
+    id?: string;
+    column?: string;
+    params?: string;
+  }) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardCardCreateCommand(opts);
+  });
+
+boardCardCmd
+  .command("move")
+  .description("Move a card to another column")
+  .requiredOption("--board <id>", "Board ID")
+  .requiredOption("--card <id>", "Card ID")
+  .requiredOption("--to <column>", "Target column")
+  .action(async (opts: { board: string; card: string; to: string }) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardCardMoveCommand(opts);
+  });
+
+boardCardCmd
+  .command("trigger")
+  .description("Trigger card execution")
+  .requiredOption("--board <id>", "Board ID")
+  .requiredOption("--card <id>", "Card ID")
+  .option("--mode <mode>", "manual|auto|scheduled", "manual")
+  .action(async (opts: { board: string; card: string; mode: "manual" | "auto" | "scheduled" }) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardCardTriggerCommand(opts);
+  });
+
+boardCardCmd
+  .command("runs")
+  .description("List card run history")
+  .requiredOption("--board <id>", "Board ID")
+  .requiredOption("--card <id>", "Card ID")
+  .action(async (opts: { board: string; card: string }) => {
+    if (!isDaemonRunning()) {
+      console.error("Daemon is not running. Start it with: forgectl up");
+      process.exit(1);
+    }
+    await boardCardRunsCommand(opts);
+  });
 
 program.parse();

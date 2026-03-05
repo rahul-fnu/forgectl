@@ -496,7 +496,7 @@
       );
     }
 
-    function DashboardView({ onOpenBuilder, onOpenExecution }) {
+    function DashboardView({ onOpenBuilder, onOpenExecution, onOpenBoards }) {
       const [health, setHealth] = useState(null);
       const [runs, setRuns] = useState([]);
       const [pipelines, setPipelines] = useState([]);
@@ -545,6 +545,7 @@
             </div>
             <div className="flex flex-wrap gap-3 mt-5">
               <button onClick={onOpenBuilder} className="rounded-lg bg-code px-4 py-2 text-sm font-semibold text-black">New Pipeline</button>
+              <button onClick={onOpenBoards} className="rounded-lg border border-line px-4 py-2 text-sm">Open Boards</button>
               <button onClick={() => setSubmitOpen(true)} className="rounded-lg border border-line px-4 py-2 text-sm">Submit Task</button>
             </div>
           </div>
@@ -1120,6 +1121,253 @@
       );
     }
 
+    function BoardView({ onBack, onOpenExecution }) {
+      const [boards, setBoards] = useState([]);
+      const [boardId, setBoardId] = useState("");
+      const [board, setBoard] = useState(null);
+      const [registerFile, setRegisterFile] = useState("");
+      const [cardTitle, setCardTitle] = useState("");
+      const [cardType, setCardType] = useState("");
+      const [cardParams, setCardParams] = useState("{}");
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState("");
+      const [error, setError] = useState("");
+
+      useEffect(() => {
+        let stopped = false;
+        async function load() {
+          try {
+            const list = await fetchJson("/boards");
+            if (stopped) return;
+            const nextBoards = Array.isArray(list) ? list : [];
+            setBoards(nextBoards);
+
+            const activeBoardId = boardId || nextBoards[0]?.id || "";
+            if (!activeBoardId) {
+              setBoard(null);
+              return;
+            }
+            if (activeBoardId !== boardId) {
+              setBoardId(activeBoardId);
+            }
+            const detail = await fetchJson(`/boards/${activeBoardId}`);
+            if (!stopped) {
+              setBoard(detail);
+            }
+          } catch (err) {
+            if (!stopped) setError(err.message || String(err));
+          }
+        }
+        load();
+        const id = setInterval(load, 4000);
+        return () => {
+          stopped = true;
+          clearInterval(id);
+        };
+      }, [boardId]);
+
+      async function refreshBoard() {
+        if (!boardId) return;
+        const detail = await fetchJson(`/boards/${boardId}`);
+        setBoard(detail);
+      }
+
+      async function registerBoard() {
+        if (!registerFile.trim()) return;
+        setBusy(true);
+        setError("");
+        setMessage("");
+        try {
+          const created = await fetchJson("/boards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: registerFile.trim() }),
+          });
+          setMessage(`Board registered: ${created.boardId}`);
+          const list = await fetchJson("/boards");
+          const nextBoards = Array.isArray(list) ? list : [];
+          setBoards(nextBoards);
+          setBoardId(created.boardId || nextBoards[0]?.id || "");
+        } catch (err) {
+          setError(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function createCard() {
+        if (!boardId || !cardTitle.trim() || !cardType.trim()) return;
+        setBusy(true);
+        setError("");
+        setMessage("");
+        try {
+          let parsed = {};
+          try {
+            parsed = cardParams.trim() ? JSON.parse(cardParams) : {};
+          } catch (err) {
+            throw new Error(`Invalid params JSON: ${err.message || String(err)}`);
+          }
+          await fetchJson(`/boards/${boardId}/cards`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: cardTitle.trim(),
+              type: cardType.trim(),
+              params: parsed,
+            }),
+          });
+          setCardTitle("");
+          setCardParams("{}");
+          await refreshBoard();
+        } catch (err) {
+          setError(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function moveCard(cardId, column) {
+        setBusy(true);
+        setError("");
+        try {
+          await fetchJson(`/boards/${boardId}/cards/${cardId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ column }),
+          });
+          await refreshBoard();
+        } catch (err) {
+          setError(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function triggerCard(cardId) {
+        setBusy(true);
+        setError("");
+        try {
+          const data = await fetchJson(`/boards/${boardId}/cards/${cardId}/trigger`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "manual" }),
+          });
+          setMessage(`Triggered run: ${data.runId}`);
+          await refreshBoard();
+        } catch (err) {
+          setError(err.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      const cardTypes = board ? Object.keys(board.templates || {}) : [];
+
+      return (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <button onClick={onBack} className="rounded-lg border border-line px-3 py-2 text-sm">Back</button>
+            <span className="mono text-xs text-muted">internal board orchestration</span>
+          </div>
+
+          <section className="rounded-2xl border border-line bg-panel p-5 space-y-3">
+            <h2 className="text-xl font-semibold">Boards</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-3">
+              <input
+                value={registerFile}
+                onChange={(e) => setRegisterFile(e.target.value)}
+                className="rounded-lg border border-line bg-shell p-2 text-sm mono"
+                placeholder="/absolute/path/to/board.yaml"
+              />
+              <button onClick={registerBoard} disabled={busy || !registerFile.trim()} className="rounded-lg bg-code px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">Register Board</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {boards.map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => setBoardId(entry.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm mono ${entry.id === boardId ? "bg-panel2 border border-line" : "border border-line text-muted"}`}
+                >
+                  {entry.id}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 xl:grid-cols-[1.1fr_1.9fr] gap-5">
+            <div className="rounded-2xl border border-line bg-panel p-5 space-y-3">
+              <h3 className="font-semibold">Create Card</h3>
+              <label className="text-xs text-muted block">Title
+                <input value={cardTitle} onChange={(e) => setCardTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm" />
+              </label>
+              <label className="text-xs text-muted block">Type
+                <select value={cardType} onChange={(e) => setCardType(e.target.value)} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono">
+                  <option value="">Select type</option>
+                  {cardTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted block">Params JSON
+                <textarea value={cardParams} onChange={(e) => setCardParams(e.target.value)} rows={5} className="mt-1 w-full rounded-lg border border-line bg-shell p-2 text-sm mono" />
+              </label>
+              <button onClick={createCard} disabled={busy || !boardId || !cardTitle.trim() || !cardType.trim()} className="rounded-lg border border-line px-4 py-2 text-sm disabled:opacity-40">Create Card</button>
+            </div>
+
+            <div className="rounded-2xl border border-line bg-panel p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold">Cards</h3>
+                <span className="mono text-xs text-muted">{board?.cards?.length || 0}</span>
+              </div>
+              {!boardId && <p className="text-sm text-muted">Register or select a board.</p>}
+              {boardId && (!board || !Array.isArray(board.cards) || board.cards.length === 0) && <p className="text-sm text-muted">No cards yet.</p>}
+              <div className="space-y-3 max-h-[560px] overflow-auto pr-1">
+                {(board?.cards || []).map((card) => {
+                  const latestRun = card.runHistory && card.runHistory.length > 0 ? card.runHistory[card.runHistory.length - 1] : null;
+                  return (
+                    <div key={card.id} className="rounded-xl border border-line bg-panel2 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="mono text-sm">{card.id}</p>
+                          <p className="text-sm">{card.title}</p>
+                          <p className="mono text-[11px] text-muted mt-1">type {card.type}</p>
+                        </div>
+                        <StatusPill status={latestRun?.status || "pending"} />
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <select
+                          value={card.column}
+                          onChange={(e) => moveCard(card.id, e.target.value)}
+                          className="rounded-lg border border-line bg-shell px-2 py-1.5 text-xs mono"
+                        >
+                          {(board?.columns || []).map((column) => <option key={column} value={column}>{column}</option>)}
+                        </select>
+                        <button onClick={() => triggerCard(card.id)} disabled={busy} className="rounded-lg border border-line px-3 py-1.5 text-xs">Trigger Run</button>
+                      </div>
+
+                      <div className="rounded-lg border border-line bg-shell p-2">
+                        <p className="text-xs text-muted mb-1">Recent runs</p>
+                        {(card.runHistory || []).slice(-3).reverse().map((run) => (
+                          <div key={run.runId} className="mono text-[11px] flex items-center justify-between gap-2 py-1">
+                            <button onClick={() => onOpenExecution(run.runId)} className="text-code hover:underline">{run.runId}</button>
+                            <span>{run.triggerMode}</span>
+                            <span>{run.status}</span>
+                          </div>
+                        ))}
+                        {(!card.runHistory || card.runHistory.length === 0) && <p className="text-xs text-muted">No runs yet</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+
+          {error && <p className="text-sm text-red-300">{error}</p>}
+          {message && <p className="text-sm text-amber-200">{message}</p>}
+        </div>
+      );
+    }
+
     function App() {
       const [view, setView] = useState("dashboard");
       const [activePipelineId, setActivePipelineId] = useState(null);
@@ -1164,6 +1412,7 @@
                 </span>
                 <button onClick={() => setView("dashboard")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "dashboard" ? "bg-panel2 border border-line" : "text-muted"}`}>Dashboard</button>
                 <button onClick={() => setView("builder")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "builder" ? "bg-panel2 border border-line" : "text-muted"}`}>Builder</button>
+                <button onClick={() => setView("boards")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "boards" ? "bg-panel2 border border-line" : "text-muted"}`}>Boards</button>
               </div>
             </div>
           </header>
@@ -1173,6 +1422,7 @@
               <DashboardView
                 onOpenBuilder={() => setView("builder")}
                 onOpenExecution={openExecution}
+                onOpenBoards={() => setView("boards")}
               />
             )}
 
@@ -1190,6 +1440,13 @@
             {view === "execution" && activePipelineId && (
               <PipelineExecutionView
                 pipelineId={activePipelineId}
+                onBack={() => setView("dashboard")}
+                onOpenExecution={openExecution}
+              />
+            )}
+
+            {view === "boards" && (
+              <BoardView
                 onBack={() => setView("dashboard")}
                 onOpenExecution={openExecution}
               />

@@ -1,6 +1,26 @@
 # forgectl
 
-A CLI + daemon that runs AI agents (Claude Code, Codex) inside isolated Docker containers for any workflow — coding, research, content creation, data analysis, ops automation. Users bring their own AI subscriptions (BYOK). forgectl provides the sandbox, validation, orchestration, and output collection.
+A CLI + daemon that orchestrates AI agents (Claude Code and Codex) in isolated Docker containers.
+
+## What this project does
+
+This project lets you define a task in natural language, choose an agent, and run it safely inside a controlled environment. forgectl handles the operational pieces around AI execution so each task is reproducible:
+
+- spins up ephemeral containers with workflow-specific images
+- injects scoped repo/input/context into the agent
+- validates outputs (tests, lint, builds, etc.) and applies structured retries
+- collects results as Git commits or generated files
+- records everything as runs that can be inspected, replayed, or reviewed
+
+For a personal site, this is a good showcase of end-to-end engineering with:
+
+- TypeScript + CLI architecture (`commander`, typed command modules)
+- orchestration and scheduling (`Fastify` daemon, queue/runs, SSE logs)
+- container lifecycle management (sandboxing, cleanup, network modes, secrets)
+- pipeline/DAG execution for multi-step workflows
+- validation + review loops and output collection
+
+The tool is BYOK (bring your own keys); it does not host model weights or proxy agent APIs.
 
 ## Quick Start
 

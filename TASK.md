@@ -1,384 +1,238 @@
-# TASK: E2E Test forgectl Pipelines — Debug and Fix Until Working
+# TASK: Pipeline Reliability + Mixed-Workflow E2E Hardening
 
-You are testing the new pipeline orchestration feature in forgectl. Your job is to run real pipelines end-to-end, find what's broken, fix it, and verify it works. Do NOT stop until you have a pipeline that actually executes multiple nodes with real agent output.
+This task replaces the previous broad v2 plan. Focus only on the gaps below.
 
-**Read SPEC.md for context on how pipelines work.**
+## Goal
 
----
+Fix correctness and reliability issues in pipeline rerun/checkpoint behavior, mixed-workflow piping, and git fan-in safety. Add deterministic tests and live E2E coverage, especially for mixed file types.
 
-## Step 1: Verify the Build
+## Scope
 
-```bash
-cd ~/forgectl
-npm run build
-npm run typecheck
-FORGECTL_SKIP_DOCKER=true npm test
-```
-
-All 211+ tests must pass. If any fail, fix them first.
-
----
-
-## Step 2: Test Pipeline CLI Commands
-
-### 2A: Show a pipeline DAG
-
-```bash
-node dist/index.js pipeline show --file examples/auth-system.yaml
-```
-
-Expected: terminal rendering of the DAG with nodes and edges. If it errors, debug and fix.
-
-### 2B: Dry-run a pipeline
-
-```bash
-node dist/index.js pipeline run --file examples/auth-system.yaml --dry-run
-```
-
-Expected: shows execution plan without running anything. If it errors, debug and fix.
-
-### 2C: Cycle detection
-
-```bash
-cat > /tmp/bad-pipeline.yaml << 'EOF'
-name: bad-pipeline
-nodes:
-  - id: a
-    task: "do A"
-    depends_on: [b]
-  - id: b
-    task: "do B"
-    depends_on: [a]
-EOF
-
-node dist/index.js pipeline show --file /tmp/bad-pipeline.yaml
-```
-
-Expected: error message about cycle detected. If it doesn't detect the cycle, fix the DAG validation.
-
-### 2D: Missing dependency detection
-
-```bash
-cat > /tmp/bad-deps.yaml << 'EOF'
-name: bad-deps
-nodes:
-  - id: a
-    task: "do A"
-    depends_on: [nonexistent]
-EOF
-
-node dist/index.js pipeline show --file /tmp/bad-deps.yaml
-```
-
-Expected: error about missing dependency. Fix if needed.
+- In scope:
+  - `src/pipeline/*`
+  - `src/daemon/routes.ts`
+  - `src/cli/pipeline.ts` and CLI wiring
+  - `src/container/workspace.ts`
+  - `src/context/*` and prompt/context handling
+  - Pipeline unit/integration/e2e tests
+  - README pipeline behavior updates (only sections affected by these changes)
+- Out of scope:
+  - New dashboard features
+  - New workflow types
+  - Agent/model changes
 
 ---
 
-## Step 3: Create a Simple Test Pipeline
+## Phase 1: Fix Rerun + Checkpoint Semantics
 
-Create a minimal 2-node linear pipeline that actually works:
+### 1A. Rerun must be ancestry-based, not topological-prefix-based
 
-```bash
-# Set up test repo
-rm -rf /tmp/forge-pipeline-test
-mkdir /tmp/forge-pipeline-test && cd /tmp/forge-pipeline-test
-git init
-cat > package.json << 'EOF'
-{
-  "name": "pipeline-test",
-  "scripts": {
-    "lint": "echo ok",
-    "typecheck": "echo ok",
-    "test": "echo ok",
-    "build": "echo ok"
-  }
-}
-EOF
-cat > index.js << 'EOF'
-const express = require("express");
-const app = express();
-app.get("/", (req, res) => res.json({ message: "hello" }));
-module.exports = app;
-EOF
-git add -A && git commit -m "init"
-```
+Current behavior skips all nodes before `fromNode` in topo order. This is incorrect for DAGs.
 
-Create the pipeline:
+Implement:
 
-```bash
-cd ~/forgectl
-cat > /tmp/simple-pipeline.yaml << 'EOF'
-name: simple-test
-description: Two-step pipeline to verify chaining works
-defaults:
-  workflow: code
-  agent: codex
-  repo: /tmp/forge-pipeline-test
+- Add graph helpers:
+  - `isAncestor(a, b)`
+  - `collectAncestors(nodeId)`
+  - `collectDescendants(nodeId)`
+- For rerun-from-node:
+  - Only ancestors of `fromNode` are skipped.
+  - Unrelated branches are skipped only if not needed by any executed descendant.
 
-nodes:
-  - id: add-health
-    task: "Add a GET /health endpoint that returns { status: 'ok' }. Do not modify existing endpoints."
+### 1B. Rerun must hydrate from checkpoints
 
-  - id: add-version
-    task: "Add a GET /version endpoint that returns { version: '1.0.0' }. Do not modify existing endpoints or the /health endpoint."
-    depends_on: [add-health]
-EOF
-```
+When rerunning from an existing pipeline run, skipped ancestor nodes must contribute outputs via checkpoints.
 
-### 3A: Show the pipeline
+Implement:
 
-```bash
-node dist/index.js pipeline show --file /tmp/simple-pipeline.yaml
-```
+- Executor option: `checkpointSourceRunId?: string`
+- For each skipped ancestor:
+  - Load checkpoint metadata.
+  - Reconstruct minimal successful `NodeExecution.result.output`:
+    - git: branch (+ sha when available)
+    - files: output dir + file list
+- Downstream `resolveNodeInput` must see hydrated outputs exactly as if upstream nodes completed.
 
-### 3B: Dry-run the pipeline
+### 1C. API/CLI validation for rerun
 
-```bash
-node dist/index.js pipeline run --file /tmp/simple-pipeline.yaml --dry-run
-```
+Implement:
 
-### 3C: Execute the pipeline for real
-
-```bash
-node dist/index.js pipeline run --file /tmp/simple-pipeline.yaml --verbose
-```
-
-**This is the critical test.** Watch for:
-
-1. Node `add-health` starts and runs Codex in a Docker container
-2. Node `add-health` completes with file changes
-3. Node `add-version` starts AFTER `add-health` completes
-4. Node `add-version` sees the health endpoint (it should be on the branch from step 1)
-5. Node `add-version` completes with additional file changes
-6. Pipeline shows "completed" with both nodes successful
-
-**If it fails at any point, debug:**
-- Read the error message carefully
-- Check if it's a pipeline executor issue, an agent invocation issue, or an output collection issue
-- Add debug logging if needed
-- Fix the issue
-- Re-run the pipeline
-
-**Common issues to watch for:**
-- The executor might not pass the repo path correctly to the run engine
-- Branch piping might not work (node 2 doesn't start from node 1's branch)
-- The pipeline might not resolve CLIOptions correctly from node + defaults
-- The executor might not handle the single-node execution interface correctly
-- Docker/auth issues (these should work since v1 E2E passed)
-
-### 3D: Verify the output
-
-After successful pipeline execution:
-
-```bash
-cd /tmp/forge-pipeline-test
-git log --oneline --all
-git branch -a
-```
-
-Expected: Two forge branches, one from each node. The second branch should contain BOTH the health endpoint and the version endpoint.
-
-```bash
-# Check the final branch has both endpoints
-LATEST_BRANCH=$(git branch -a | grep forge | tail -1 | tr -d ' ')
-git diff main...$LATEST_BRANCH
-```
+- `POST /pipelines/:id/rerun`:
+  - Validate `fromNode` exists in pipeline.
+  - Default checkpoint source run to `:id`.
+  - Return 400 on invalid node.
+- CLI rerun:
+  - Add/ensure `--pipeline-run <id>` support for checkpoint-backed rerun.
+  - If omitted, print explicit warning that rerun is from scratch (or require it).
 
 ---
 
-## Step 4: Test Parallel Pipeline
+## Phase 2: Dependency Failure/Skip Propagation
 
-Create a fan-out pipeline where two nodes run in parallel:
+### 2A. Strict dependency gate
 
-```bash
-rm -rf /tmp/forge-parallel-test
-mkdir /tmp/forge-parallel-test && cd /tmp/forge-parallel-test
-git init
-cat > package.json << 'EOF'
-{
-  "name": "parallel-test",
-  "scripts": {
-    "lint": "echo ok",
-    "typecheck": "echo ok",
-    "test": "echo ok",
-    "build": "echo ok"
-  }
-}
-EOF
-cat > index.js << 'EOF'
-const express = require("express");
-const app = express();
-app.get("/", (req, res) => res.json({ message: "hello" }));
-module.exports = app;
-EOF
-git add -A && git commit -m "init"
+Downstream node may run only if all dependencies are effectively successful.
 
-cd ~/forgectl
-cat > /tmp/parallel-pipeline.yaml << 'EOF'
-name: parallel-test
-description: Test parallel node execution
-defaults:
-  workflow: code
-  agent: codex
-  repo: /tmp/forge-parallel-test
+Rules:
 
-nodes:
-  - id: add-health
-    task: "Add a GET /health endpoint that returns { status: 'ok' }."
+- Dependency status `failed` => downstream `skipped` with reason.
+- Dependency status `skipped` without hydrated successful output => downstream `skipped`.
+- Dependency status `completed` with `result.success=false` => downstream `skipped`.
 
-  - id: add-version
-    task: "Add a GET /version endpoint that returns { version: '1.0.0' }."
-
-  - id: add-readme
-    task: "Create a README.md documenting the API endpoints: /, /health, and /version."
-    depends_on: [add-health, add-version]
-EOF
-```
-
-### 4A: Show the DAG
-
-```bash
-node dist/index.js pipeline show --file /tmp/parallel-pipeline.yaml
-```
-
-Expected: `add-health` and `add-version` at the same level, `add-readme` below depending on both.
-
-### 4B: Execute
-
-```bash
-node dist/index.js pipeline run --file /tmp/parallel-pipeline.yaml --verbose
-```
-
-Watch for:
-- `add-health` and `add-version` should start at roughly the same time (parallel)
-- `add-readme` should wait for BOTH to complete
-- The branch merge for `add-readme` should succeed (health and version modify different parts)
-- All three nodes should complete successfully
-
-**If the merge fails**, debug:
-- Check what branches were created
-- Try the merge manually: `git merge branch1 branch2`
-- Fix the merge logic in `src/pipeline/merge.ts`
-
-### 4C: Verify output
-
-```bash
-cd /tmp/forge-parallel-test
-git log --oneline --all
-git branch -a
-# The final branch should have health endpoint + version endpoint + README
-```
+Add explicit skip reasons in node state.
 
 ---
 
-## Step 5: Test Checkpointing
+## Phase 3: Make Git Fan-In Safe and Deterministic
 
-If the parallel pipeline worked:
+### 3A. Protect host repo state
 
-### 5A: Check if checkpoints were saved
+Current merge flow mutates checkout and may leave temp branches/conflicts behind.
 
-```bash
-ls -la ~/forgectl/.forgectl/checkpoints/ 2>/dev/null || echo "No checkpoints dir"
-find ~/forgectl/.forgectl/checkpoints -name "*.json" 2>/dev/null
-```
+Implement:
 
-### 5B: Test rerun
+- Capture original HEAD/ref before fan-in prep.
+- Use dedicated temp branch naming per pipeline run + node.
+- Always restore original ref in `finally`.
+- Cleanup temp branches/work state on success/failure.
 
-```bash
-# Rerun from add-readme (should skip add-health and add-version)
-node dist/index.js pipeline rerun --file /tmp/parallel-pipeline.yaml --from add-readme --verbose
-```
+### 3B. Serialize git mutations per repo
 
-Expected: `add-health` and `add-version` are skipped (using checkpoints), only `add-readme` re-executes.
+Parallel git nodes sharing one repo must not race on checkout/merge.
 
-### 5C: Test pipeline status
+Implement a per-repo async lock for:
 
-```bash
-node dist/index.js pipeline status --file /tmp/parallel-pipeline.yaml
-```
+- upstream branch merge prep
+- merge-back of completed node branch into host repo
 
----
+### 3C. Conflict behavior
 
-## Step 6: Test Daemon Pipeline API
-
-```bash
-cd ~/forgectl
-node dist/index.js up --foreground &
-sleep 2
-
-# List pipelines
-curl -s http://127.0.0.1:4856/pipelines | python3 -m json.tool
-
-# Submit a pipeline via API (use the simple pipeline)
-PIPELINE_JSON=$(python3 -c "
-import yaml, json, sys
-with open('/tmp/simple-pipeline.yaml') as f:
-    data = yaml.safe_load(f)
-print(json.dumps({'pipeline': data}))
-")
-curl -s -X POST http://127.0.0.1:4856/pipelines \
-  -H "Content-Type: application/json" \
-  -d "$PIPELINE_JSON" | python3 -m json.tool
-
-# Check dashboard
-curl -s http://127.0.0.1:4856/ | head -5
-
-node dist/index.js down
-```
+If fan-in merge fails and cannot be safely resolved, fail node clearly with conflict detail. Do not continue with half-merged repo state.
 
 ---
 
-## Step 7: Fix and Iterate
+## Phase 4: files->files Path + Multi-Type File Handling
 
-If ANY of the above tests failed:
+### 4A. Preserve structure and avoid collisions
 
-1. Identify the root cause from error messages and logs
-2. Fix the code
-3. Run `npm run build && npm run typecheck && FORGECTL_SKIP_DOCKER=true npm test`
-4. Re-run the failing test
-5. Repeat until it passes
+Current file input staging flattens by basename.
 
-**Do not stop until:**
-- The simple 2-node linear pipeline executes successfully end-to-end
-- Both nodes produce actual file changes
-- The second node builds on the first node's output
-- All unit tests still pass
+Implement:
+
+- Preserve relative paths from upstream outputs.
+- Namespace upstream files by dependency ID (e.g., `/input/upstream/<depId>/...`).
+- Avoid filename collisions deterministically.
+
+### 4B. Support mixed file types
+
+Ensure files->files piping includes text and binary files. No UTF-8-only assumptions in this path.
 
 ---
 
-## Step 8: Final Verification
+## Phase 5: Improve Mixed-Mode Context Materialization (files->git and git->files)
+
+### 5A. Text vs binary classification
+
+Implement context materialization rules:
+
+- Text files: inline to prompt context (size-limited).
+- Binary/large files: do not inline raw bytes; provide file artifact plus manifest entry.
+
+### 5B. Git->files extraction improvements
+
+When extracting changed files from git outputs:
+
+- Handle add/modify/delete/rename in summary.
+- Include only readable text for inline sections.
+- Preserve metadata for non-text files in manifest.
+
+---
+
+## Phase 6: Checkpoint Metadata Correctness
+
+### 6A. Commit SHA field consistency
+
+Fix mismatch between git output `sha` and checkpoint `commitSha` persistence.
+
+### 6B. Files checkpoint metadata
+
+Store enough metadata for deterministic hydration:
+
+- output dir
+- file list
+- timestamps optional
+
+---
+
+## Phase 7: Tests (Required)
+
+## 7A. Unit tests
+
+Add/extend tests for:
+
+- rerun ancestry logic on non-linear DAGs
+- checkpoint hydration into `nodeStates`
+- dependency skip propagation
+- per-repo lock behavior (no concurrent git mutation)
+- files->files path preservation/collision handling
+- text/binary context classification
+- checkpoint sha field persistence
+
+## 7B. Integration tests (mocked execution engine)
+
+Add tests covering:
+
+- content(files) -> code(git) -> content(files)
+- fan-in with mixed upstream output modes
+- rerun from node using existing run checkpoints
+
+Assert resolved inputs and node statuses, not just call counts.
+
+## 7C. Live E2E (docker-enabled)
+
+Add live E2E script/test for three pipelines:
+
+1. files->git
+- Node A (`content`): emits `spec.md`, `schema.json`, `diagram.png`
+- Node B (`code`): uses context to implement endpoint
+
+2. git->files
+- Node A (`code`): edits `.ts` + `.md` + binary asset
+- Node B (`content`): produces docs using extracted context/manifest
+
+3. files->files fan-in
+- Two upstream `content/research` nodes emit overlapping filenames and nested dirs
+- Downstream `content` node receives both sets without collisions
+
+Required assertions:
+
+- Pipeline finishes with expected statuses.
+- Downstream receives expected count/type of context/input artifacts.
+- No repo left on temp branch after run.
+- Rerun-from-node reproduces outputs using checkpoints.
+
+---
+
+## Verification Commands
 
 ```bash
-cd ~/forgectl
 npm run typecheck
 FORGECTL_SKIP_DOCKER=true npm test
 npm run build
 
-# v1 still works
-node dist/index.js run --task "test" --workflow code --agent codex --repo /tmp/forge-pipeline-test --dry-run
-
-# Pipeline commands work
-node dist/index.js pipeline show --file examples/auth-system.yaml
-node dist/index.js pipeline run --file /tmp/simple-pipeline.yaml --dry-run
-
-git add -A
-git diff --cached --stat
-git commit -m "Fix pipeline E2E issues found during testing"
-git push origin main
+# Docker/live only
+FORGECTL_SKIP_DOCKER=false npm test -- test/integration/pipeline-mixed-e2e.test.ts
 ```
 
 ---
 
-## Success Criteria
+## Acceptance Criteria
 
-You are DONE when ALL of these are true:
-
-- [ ] `npm run typecheck` — zero errors
-- [ ] `npm test` — all tests pass
-- [ ] `forgectl pipeline show` renders a DAG in the terminal
-- [ ] `forgectl pipeline run --dry-run` shows execution plan
-- [ ] Cycle detection works (rejects cyclic pipelines)
-- [ ] A real 2-node linear pipeline executes E2E with Codex producing actual changes
-- [ ] The second node builds on the first node's branch output
-- [ ] `forgectl run` (v1 single task) still works
-- [ ] All changes committed and pushed
+- [ ] Rerun uses ancestry + checkpoint hydration correctly.
+- [ ] API rerun validates `fromNode` and uses base run checkpoints by default.
+- [ ] Dependency failures/skips never allow invalid downstream execution.
+- [ ] Git fan-in is serialized, restores original repo state, and cleans temp branches.
+- [ ] files->files preserves structure and handles mixed file types.
+- [ ] files->git and git->files context handling supports text + binary via manifest strategy.
+- [ ] Checkpoint SHA metadata is correct and reloadable.
+- [ ] New unit/integration/live E2E tests cover all above behaviors.
