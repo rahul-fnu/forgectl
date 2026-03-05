@@ -1,0 +1,55 @@
+name: mixed-workflow-e2e
+description: Exercises files->git, git->files, and files fan-in with mixed file types.
+
+defaults:
+  agent: codex
+  repo: ./my-project
+
+nodes:
+  - id: content-seed
+    workflow: content
+    task: |
+      Create these files in /output:
+      - spec.md (endpoint requirements for GET /health)
+      - schema.json (response contract)
+      - diagram.png (valid PNG bytes)
+
+  - id: implement-api
+    workflow: code
+    depends_on: [content-seed]
+    task: |
+      Implement GET /health in the repo.
+      Use upstream context artifacts from content-seed.
+      Ensure lint/test/build pass.
+
+  - id: docs-from-code
+    workflow: content
+    depends_on: [implement-api]
+    task: |
+      Write docs-summary.md that explains the code changes.
+      Mention changed files and behavior.
+
+  - id: research-a
+    workflow: research
+    task: |
+      Produce in /output:
+      - notes.md
+      - shared/config.json
+      - images/chart.png
+
+  - id: research-b
+    workflow: content
+    task: |
+      Produce in /output the same paths as research-a:
+      - notes.md
+      - shared/config.json
+      - images/chart.png
+      Use different content from research-a.
+
+  - id: synthesis
+    workflow: content
+    depends_on: [research-a, research-b]
+    task: |
+      Read both upstream sources from namespaced paths.
+      Create synthesis.md comparing source A vs source B.
+
