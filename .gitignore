@@ -2,3 +2,5 @@ node_modules/
 dist/
 .forgectl/runs/
 .forgectl/config.yaml
+
+forge-output/

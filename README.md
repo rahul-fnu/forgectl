@@ -12,7 +12,7 @@ This project lets you define a task in natural language, choose an agent, and ru
 - collects results as Git commits or generated files
 - records everything as runs that can be inspected, replayed, or reviewed
 
-For a personal site, this is a good showcase of end-to-end engineering with:
+This is a practical showcase of end-to-end engineering with:
 
 - TypeScript + CLI architecture (`commander`, typed command modules)
 - orchestration and scheduling (`Fastify` daemon, queue/runs, SSE logs)
@@ -110,9 +110,9 @@ Create blog posts, documentation, marketing copy.
 
 ```bash
 forgectl run \
-  --task "Write a blog post about our v2 launch" \
+  --task "Write a blog post about our launch" \
   --workflow content \
-  --context ./docs/v2-changelog.md ./docs/brand-guide.md
+  --context ./docs/changelog.md ./docs/brand-guide.md
 ```
 
 ### Data Workflow
@@ -136,7 +136,7 @@ forgectl run \
   --workflow ops
 ```
 
-## Pipelines (v2)
+## Pipelines
 
 Pipelines let you define multi-step DAGs where each node is a forgectl run. Outputs chain between nodes, and you can checkpoint/revert to any point.
 
