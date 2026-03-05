@@ -82,6 +82,7 @@ export async function pipelineRerunCommand(options: {
   from: string;
   verbose?: boolean;
   repo?: string;
+  pipelineRun?: string;
 }): Promise<void> {
   const pipeline = parsePipeline(options.file);
 
@@ -95,10 +96,17 @@ export async function pipelineRerunCommand(options: {
 
   console.log(chalk.bold(`\n🔄 Re-running pipeline from node: ${options.from}\n`));
 
+  if (!options.pipelineRun) {
+    console.log(chalk.red("Rerun requires --pipeline-run <id> for checkpoint-backed hydration."));
+    console.log(chalk.gray("Without checkpoint metadata, rerun semantics are ambiguous in non-linear DAGs."));
+    process.exit(1);
+  }
+
   const executor = new PipelineExecutor(pipeline, {
     fromNode: options.from,
     verbose: options.verbose,
     repo: options.repo,
+    checkpointSourceRunId: options.pipelineRun,
   });
 
   const result = await executor.execute();

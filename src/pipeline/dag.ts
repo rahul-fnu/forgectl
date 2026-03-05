@@ -189,3 +189,70 @@ export function getParallelGroups(pipeline: PipelineDefinition): string[][] {
   }
   return result;
 }
+
+function buildDependencyMap(pipeline: PipelineDefinition): Map<string, string[]> {
+  const deps = new Map<string, string[]>();
+  for (const node of pipeline.nodes) {
+    deps.set(node.id, [...(node.depends_on ?? [])]);
+  }
+  return deps;
+}
+
+function buildDependentsMap(pipeline: PipelineDefinition): Map<string, string[]> {
+  const dependents = new Map<string, string[]>();
+  for (const node of pipeline.nodes) {
+    if (!dependents.has(node.id)) dependents.set(node.id, []);
+  }
+  for (const node of pipeline.nodes) {
+    for (const dep of node.depends_on ?? []) {
+      if (!dependents.has(dep)) dependents.set(dep, []);
+      dependents.get(dep)!.push(node.id);
+    }
+  }
+  return dependents;
+}
+
+/** Collect all transitive ancestors of a node. */
+export function collectAncestors(pipeline: PipelineDefinition, nodeId: string): Set<string> {
+  const deps = buildDependencyMap(pipeline);
+  const ancestors = new Set<string>();
+  const stack = [...(deps.get(nodeId) ?? [])];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (ancestors.has(current)) continue;
+    ancestors.add(current);
+    for (const parent of deps.get(current) ?? []) {
+      if (!ancestors.has(parent)) stack.push(parent);
+    }
+  }
+
+  return ancestors;
+}
+
+/** Collect all transitive descendants of a node. */
+export function collectDescendants(pipeline: PipelineDefinition, nodeId: string): Set<string> {
+  const dependents = buildDependentsMap(pipeline);
+  const descendants = new Set<string>();
+  const stack = [...(dependents.get(nodeId) ?? [])];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (descendants.has(current)) continue;
+    descendants.add(current);
+    for (const child of dependents.get(current) ?? []) {
+      if (!descendants.has(child)) stack.push(child);
+    }
+  }
+
+  return descendants;
+}
+
+/** Return true when `ancestorId` is a transitive ancestor of `nodeId`. */
+export function isAncestor(
+  pipeline: PipelineDefinition,
+  ancestorId: string,
+  nodeId: string,
+): boolean {
+  return collectAncestors(pipeline, nodeId).has(ancestorId);
+}

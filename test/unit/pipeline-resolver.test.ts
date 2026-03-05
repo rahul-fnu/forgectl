@@ -58,9 +58,43 @@ describe("pipeline resolver", () => {
     const resolved = await resolveNodeInput(pipeline.nodes[1], pipeline, nodeStates, { repo: "/tmp/repo" });
 
     expect(resolved.files).toEqual([]);
+    expect(resolved.fileArtifacts).toEqual([]);
     expect(resolved.contextContent).toHaveLength(1);
+    expect(resolved.contextManifestEntries).toEqual([
+      expect.objectContaining({
+        sourceNodeId: "research",
+        path: "spec.md",
+        type: "text",
+        changeKind: "added",
+      }),
+    ]);
     expect(resolved.contextContent[0].name).toContain("spec.md");
     expect(resolved.contextContent[0].content).toContain("Health endpoint");
+  });
+
+  it("classifies binary files as context artifacts with manifest entries", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "forgectl-resolver-binary-"));
+    tempPaths.push(outputDir);
+    writeFileSync(join(outputDir, "spec.md"), "text content\n", "utf-8");
+    writeFileSync(join(outputDir, "diagram.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+
+    const pipeline = makePipeline([
+      { id: "research", task: "write spec", workflow: "content" },
+      { id: "implement", task: "implement endpoint", workflow: "code", repo: "/tmp/repo", depends_on: ["research"] },
+    ]);
+
+    const nodeStates = new Map<string, NodeExecution>([
+      ["research", completedNode("research", { mode: "files", dir: outputDir, files: ["spec.md", "diagram.png"], totalSize: 10 })],
+    ]);
+
+    const resolved = await resolveNodeInput(pipeline.nodes[1], pipeline, nodeStates, { repo: "/tmp/repo" });
+
+    expect(resolved.contextContent.some(item => item.name.endsWith("spec.md"))).toBe(true);
+    expect(resolved.contextFiles.some(file => file.endsWith("diagram.png"))).toBe(true);
+    expect(resolved.contextManifestEntries).toEqual([
+      expect.objectContaining({ path: "spec.md", type: "text", sourceNodeId: "research" }),
+      expect.objectContaining({ path: "diagram.png", type: "binary", sourceNodeId: "research" }),
+    ]);
   });
 
   it("pipes files output into files-mode downstream input", async () => {
@@ -79,7 +113,13 @@ describe("pipeline resolver", () => {
 
     const resolved = await resolveNodeInput(pipeline.nodes[1], pipeline, nodeStates);
 
-    expect(resolved.files).toEqual(["/tmp/manual.md", join(outputDir, "notes.md")]);
+    expect(resolved.files).toEqual(["/tmp/manual.md"]);
+    expect(resolved.fileArtifacts).toEqual([
+      {
+        sourcePath: join(outputDir, "notes.md"),
+        targetPath: "upstream/research/notes.md",
+      },
+    ]);
     expect(resolved.contextContent).toEqual([]);
   });
 
@@ -124,8 +164,10 @@ describe("pipeline resolver", () => {
 
     const resolved = await resolveNodeInput(pipeline.nodes[1], pipeline, nodeStates, { repo: repoDir });
 
+    expect(resolved.fileArtifacts).toEqual([]);
     expect(resolved.contextContent.some(c => c.name.includes("health.js"))).toBe(true);
     expect(resolved.contextContent.map(c => c.content).join("\n")).toContain("status");
+    expect(resolved.contextManifestEntries.some(m => m.changeKind === "added" || m.changeKind === "modified")).toBe(true);
   });
 
   it("keeps git branches for downstream git-mode nodes", async () => {

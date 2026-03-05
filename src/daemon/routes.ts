@@ -264,7 +264,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
   // Re-run pipeline from a node
   app.post<{
     Params: { id: string };
-    Body: { fromNode: string; repo?: string; verbose?: boolean };
+    Body: { fromNode: string; repo?: string; verbose?: boolean; checkpointRunId?: string };
   }>("/pipelines/:id/rerun", async (request, reply) => {
     const entry = pipelineRuns.get(request.params.id);
     if (!entry) {
@@ -279,10 +279,18 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue): void {
     }
 
     const pipeline = entry.pipeline;
+    const nodeIds = new Set(pipeline.nodes.map(n => n.id));
+    if (!nodeIds.has(fromNode)) {
+      reply.code(400);
+      return { error: `Invalid fromNode: ${fromNode}` };
+    }
+
+    const checkpointSourceRunId = request.body.checkpointRunId ?? request.params.id;
     const newExecutor = new PipelineExecutor(pipeline, {
       fromNode,
       repo: request.body.repo,
       verbose: request.body.verbose,
+      checkpointSourceRunId,
     });
     const newEntry: PipelineRunEntry = {
       pipeline,

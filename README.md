@@ -164,8 +164,8 @@ forgectl pipeline run --file pipeline.yaml --repo ./my-project
 # Dry-run (show execution plan)
 forgectl pipeline run --file pipeline.yaml --dry-run
 
-# Re-run from a specific node (skips upstream)
-forgectl pipeline rerun --file pipeline.yaml --from auth-routes
+# Re-run from a specific node using checkpoints from a prior run
+forgectl pipeline rerun --file pipeline.yaml --from auth-routes --pipeline-run <run-id>
 
 # Revert to a checkpoint
 forgectl pipeline revert --file pipeline.yaml --to user-model --pipeline-run <run-id>
@@ -176,10 +176,11 @@ forgectl pipeline status --file pipeline.yaml
 
 ### How It Works
 
-- **Git-mode workflows:** Each node starts from the previous node's branch. Fan-in merges upstream branches.
-- **Files-mode workflows:** Upstream output files become downstream input files.
+- **Git-mode workflows:** Downstream git nodes fan in upstream git branches on a temporary branch, then merge output back into the host repo.
+- **Files-mode workflows:** Upstream file outputs are namespaced into `/input/upstream/<node-id>/...` to preserve paths and avoid collisions.
+- **Mixed-mode context:** Text artifacts are inlined (size-limited); binary/large artifacts are passed as files with a context manifest.
 - **Parallel execution:** Independent nodes run simultaneously (up to `--max-parallel`).
-- **Checkpointing:** Each completed node saves a checkpoint. Resume from any point without re-executing upstream tasks.
+- **Checkpointing:** Each completed node saves checkpoint metadata (git branch+SHA or files output dir+file list). Reruns hydrate required ancestors from checkpoints.
 
 See `examples/` for sample pipelines.
 
@@ -224,6 +225,7 @@ forgectl pipeline run -f <path>      Execute a pipeline
 forgectl pipeline status -f <path>   Show pipeline status
 forgectl pipeline rerun -f <path>    Re-run from a node
   --from <node>                      Node to start from
+  --pipeline-run <id>                Checkpoint source run ID (required)
 forgectl pipeline revert -f <path>   Revert to checkpoint
   --to <node>                        Target node
 ```

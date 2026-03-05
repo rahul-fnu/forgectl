@@ -30,9 +30,7 @@ export async function saveCheckpoint(
   if (result.output) {
     if (result.output.mode === "git") {
       ref.branch = result.output.branch;
-      if ("commitSha" in result.output) {
-        ref.commitSha = result.output.commitSha as string;
-      }
+      ref.commitSha = result.output.sha;
     } else {
       // Copy output files to checkpoint dir
       const outputDir = join(dir, "output");
@@ -44,6 +42,7 @@ export async function saveCheckpoint(
         }
       }
       ref.outputDir = outputDir;
+      ref.outputFiles = [...result.output.files];
     }
   }
 
@@ -58,7 +57,11 @@ export async function loadCheckpoint(
 ): Promise<CheckpointRef | null> {
   const metaPath = join(checkpointDir(pipelineRunId, nodeId), "checkpoint.json");
   if (!existsSync(metaPath)) return null;
-  return JSON.parse(readFileSync(metaPath, "utf-8")) as CheckpointRef;
+  const checkpoint = JSON.parse(readFileSync(metaPath, "utf-8")) as CheckpointRef;
+  if (checkpoint.outputDir && !checkpoint.outputFiles) {
+    checkpoint.outputFiles = listFilesRecursive(checkpoint.outputDir);
+  }
+  return checkpoint;
 }
 
 /** List all checkpoints for a pipeline run */
@@ -93,4 +96,18 @@ export async function revertToCheckpoint(checkpoint: CheckpointRef): Promise<voi
   } else if (checkpoint.outputDir) {
     console.log(`Checkpoint output: ${checkpoint.outputDir}`);
   }
+}
+
+function listFilesRecursive(dir: string, prefix = ""): string[] {
+  const files: string[] = [];
+  if (!existsSync(dir)) return files;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(join(dir, entry.name), rel));
+    } else {
+      files.push(rel);
+    }
+  }
+  return files;
 }

@@ -28,10 +28,12 @@ vi.mock("../../src/logging/events.js", () => ({
 
 vi.mock("../../src/pipeline/checkpoint.js", () => ({
   saveCheckpoint: vi.fn().mockResolvedValue({ nodeId: "test", pipelineRunId: "p1", timestamp: "2024-01-01" }),
+  loadCheckpoint: vi.fn().mockResolvedValue(null),
 }));
 
 import { PipelineExecutor } from "../../src/pipeline/executor.js";
 import { executeRun } from "../../src/orchestration/modes.js";
+import { loadCheckpoint } from "../../src/pipeline/checkpoint.js";
 
 function makePipeline(nodes: PipelineDefinition["nodes"], defaults?: PipelineDefinition["defaults"]): PipelineDefinition {
   return { name: "test", nodes, defaults };
@@ -40,6 +42,7 @@ function makePipeline(nodes: PipelineDefinition["nodes"], defaults?: PipelineDef
 describe("PipelineExecutor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(loadCheckpoint).mockResolvedValue(null);
   });
 
   it("executes a linear pipeline in order", async () => {
@@ -76,7 +79,7 @@ describe("PipelineExecutor", () => {
     expect(executeRun).toHaveBeenCalledTimes(3);
   });
 
-  it("skips downstream nodes when upstream fails", async () => {
+  it("propagates skip when a dependency is skipped without hydrated output", async () => {
     vi.mocked(executeRun)
       .mockResolvedValueOnce({
         success: false,
@@ -95,6 +98,7 @@ describe("PipelineExecutor", () => {
     const pipeline = makePipeline([
       { id: "a", task: "do a" },
       { id: "b", task: "do b", depends_on: ["a"] },
+      { id: "c", task: "do c", depends_on: ["b"] },
     ]);
 
     const executor = new PipelineExecutor(pipeline);
@@ -103,6 +107,8 @@ describe("PipelineExecutor", () => {
     expect(result.status).toBe("failed");
     expect(executeRun).toHaveBeenCalledTimes(1); // Only a was executed
     expect(result.nodes.get("b")!.status).toBe("skipped");
+    expect(result.nodes.get("c")!.status).toBe("skipped");
+    expect(result.nodes.get("c")!.skipReason).toContain("skipped without hydrated output");
   });
 
   it("fan-in waits for all upstream nodes", async () => {
@@ -144,7 +150,7 @@ describe("PipelineExecutor", () => {
     expect(executeRun).not.toHaveBeenCalled();
   });
 
-  it("resume from node skips upstream", async () => {
+  it("rerun without checkpoint source re-executes required ancestors", async () => {
     const pipeline = makePipeline([
       { id: "a", task: "do a" },
       { id: "b", task: "do b", depends_on: ["a"] },
@@ -154,9 +160,65 @@ describe("PipelineExecutor", () => {
     const executor = new PipelineExecutor(pipeline, { fromNode: "b" });
     const result = await executor.execute();
 
-    // a should be skipped, b and c should run
+    expect(result.nodes.get("a")!.status).toBe("completed");
+    expect(result.nodes.get("b")!.status).toBe("completed");
+    expect(result.nodes.get("c")!.status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("rerun with checkpoint source hydrates only fromNode ancestors", async () => {
+    vi.mocked(loadCheckpoint).mockImplementation(async (runId, nodeId) => {
+      if (runId === "base-run" && nodeId === "a") {
+        return {
+          nodeId: "a",
+          pipelineRunId: "base-run",
+          timestamp: "2024-01-01T00:00:00.000Z",
+          branch: "forge/a/123",
+          commitSha: "abc123",
+        };
+      }
+      return null;
+    });
+
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b" },
+      { id: "c", task: "do c", depends_on: ["a"] },
+      { id: "d", task: "do d", depends_on: ["c", "b"] },
+      { id: "e", task: "do e", depends_on: ["b"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline, {
+      fromNode: "c",
+      checkpointSourceRunId: "base-run",
+    });
+    const result = await executor.execute();
+
     expect(result.nodes.get("a")!.status).toBe("skipped");
-    expect(executeRun).toHaveBeenCalledTimes(2);
+    expect(result.nodes.get("a")!.hydratedFromCheckpoint?.pipelineRunId).toBe("base-run");
+    expect(result.nodes.get("a")!.result?.success).toBe(true);
+    expect(result.nodes.get("b")!.status).toBe("completed");
+    expect(result.nodes.get("c")!.status).toBe("completed");
+    expect(result.nodes.get("d")!.status).toBe("completed");
+    expect(result.nodes.get("e")!.status).toBe("skipped");
+    expect(result.nodes.get("e")!.skipReason).toContain("not required");
+    expect(executeRun).toHaveBeenCalledTimes(3); // b, c, d
+  });
+
+  it("fails rerun when required checkpoint is missing", async () => {
+    vi.mocked(loadCheckpoint).mockResolvedValue(null);
+
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline, {
+      fromNode: "b",
+      checkpointSourceRunId: "missing-run",
+    });
+
+    await expect(executor.execute()).rejects.toThrow(/Missing checkpoint/);
   });
 
   it("throws on invalid DAG", async () => {

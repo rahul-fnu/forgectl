@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, cpSync, existsSync } from "node:fs";
+import { mkdirSync, cpSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -54,7 +54,14 @@ export function prepareFilesWorkspace(
   for (const p of inputPaths) {
     const resolved = resolve(p);
     if (!existsSync(resolved)) throw new Error(`Input file not found: ${p}`);
-    cpSync(resolved, join(inputDir, basename(resolved)), { recursive: true });
+    const stats = statSync(resolved);
+    if (stats.isDirectory()) {
+      for (const entry of readdirSync(resolved)) {
+        cpSync(join(resolved, entry), join(inputDir, entry), { recursive: true });
+      }
+    } else {
+      cpSync(resolved, join(inputDir, basename(resolved)), { recursive: true });
+    }
   }
 
   return { inputDir, outputDir };

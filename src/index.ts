@@ -290,6 +290,7 @@ pipelineCmd
   .description("Re-run pipeline from a specific node")
   .requiredOption("-f, --file <path>", "Pipeline YAML file")
   .requiredOption("--from <node>", "Node to start from")
+  .option("--pipeline-run <id>", "Checkpoint source pipeline run ID")
   .option("-r, --repo <path>", "Repository path override")
   .option("--verbose", "Show detailed output")
   .action(pipelineRerunCommand);

@@ -1,34 +1,52 @@
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import chalk from "chalk";
 import type {
   PipelineDefinition,
   PipelineNode,
   PipelineRun,
   NodeExecution,
+  ContextManifestEntry,
   ResolvedContextContent,
+  ResolvedFileArtifact,
 } from "./types.js";
-import { validateDAG, topologicalSort } from "./dag.js";
+import { collectAncestors, collectDescendants, validateDAG, topologicalSort } from "./dag.js";
 import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
 import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
 import { Logger } from "../logging/logger.js";
 import { emitRunEvent } from "../logging/events.js";
-import { saveCheckpoint } from "./checkpoint.js";
+import { loadCheckpoint, saveCheckpoint } from "./checkpoint.js";
+import type { OutputResult } from "../output/types.js";
 
 export interface PipelineExecutorOptions {
   maxParallel?: number;
   fromNode?: string;
+  checkpointSourceRunId?: string;
   verbose?: boolean;
   dryRun?: boolean;
   repo?: string;
 }
 
+interface RerunSelection {
+  executeNodes: Set<string>;
+  hydratedNodes: Set<string>;
+  skippedNodes: Set<string>;
+}
+
+interface FanInContext {
+  repoPath: string;
+  tempBranch: string;
+  originalRef: string;
+  originalSha: string;
+}
+
 export class PipelineExecutor {
+  private static repoLocks = new Map<string, Promise<void>>();
   private pipeline: PipelineDefinition;
   private options: PipelineExecutorOptions;
   private nodeStates: Map<string, NodeExecution>;
@@ -70,31 +88,32 @@ export class PipelineExecutor {
     // Get execution order
     const order = topologicalSort(this.pipeline);
     const nodeMap = new Map(this.pipeline.nodes.map(n => [n.id, n]));
+    const selection = await this.prepareRerunSelection(order);
+
+    for (const nodeId of selection.hydratedNodes) {
+      await this.hydrateNodeFromCheckpoint(nodeId);
+    }
+
+    for (const nodeId of selection.skippedNodes) {
+      this.nodeStates.set(nodeId, {
+        nodeId,
+        status: "skipped",
+        skipReason: this.options.fromNode
+          ? `Skipped for rerun from ${this.options.fromNode}: not required`
+          : "Skipped",
+      });
+    }
 
     // Track in-flight promises
     const inFlight = new Map<string, Promise<void>>();
     const maxParallel = this.options.maxParallel ?? 3;
-
-    // Determine nodes to skip when resuming from a node
-    const skipNodes = new Set<string>();
-    if (this.options.fromNode) {
-      for (const nodeId of order) {
-        if (nodeId === this.options.fromNode) break;
-        skipNodes.add(nodeId);
-      }
-    }
 
     let pipelineStatus: "running" | "completed" | "failed" = "running";
 
     for (const nodeId of order) {
       const node = nodeMap.get(nodeId)!;
 
-      // Skip upstream nodes when resuming
-      if (skipNodes.has(nodeId)) {
-        this.nodeStates.set(nodeId, {
-          nodeId,
-          status: "skipped",
-        });
+      if (!selection.executeNodes.has(nodeId)) {
         continue;
       }
 
@@ -107,12 +126,14 @@ export class PipelineExecutor {
         }
       }
 
-      // Check if any dependency failed
-      if (this.anyDependencyFailed(deps)) {
+      const dependencyIssues = this.getDependencyIssues(deps);
+      if (dependencyIssues.length > 0) {
+        const reason = dependencyIssues.join("; ");
         this.nodeStates.set(nodeId, {
           nodeId,
           status: "skipped",
-          error: "Upstream dependency failed",
+          error: reason,
+          skipReason: reason,
         });
         continue;
       }
@@ -162,6 +183,96 @@ export class PipelineExecutor {
     };
   }
 
+  private async prepareRerunSelection(order: string[]): Promise<RerunSelection> {
+    const executeNodes = new Set<string>();
+    const hydratedNodes = new Set<string>();
+    const skippedNodes = new Set<string>();
+
+    if (!this.options.fromNode) {
+      for (const nodeId of order) executeNodes.add(nodeId);
+      return { executeNodes, hydratedNodes, skippedNodes };
+    }
+
+    const fromNode = this.options.fromNode;
+    if (!order.includes(fromNode)) {
+      throw new Error(`Node "${fromNode}" not found in pipeline`);
+    }
+
+    const executeFrontier = new Set<string>([fromNode, ...collectDescendants(this.pipeline, fromNode)]);
+    for (const nodeId of executeFrontier) {
+      executeNodes.add(nodeId);
+      for (const ancestor of collectAncestors(this.pipeline, nodeId)) {
+        executeNodes.add(ancestor);
+      }
+    }
+
+    // Checkpoint-backed rerun skips only the ancestry of fromNode.
+    if (this.options.checkpointSourceRunId) {
+      const ancestorsOfFrom = collectAncestors(this.pipeline, fromNode);
+      for (const ancestor of ancestorsOfFrom) {
+        hydratedNodes.add(ancestor);
+        executeNodes.delete(ancestor);
+      }
+    }
+
+    for (const nodeId of order) {
+      if (!executeNodes.has(nodeId) && !hydratedNodes.has(nodeId)) {
+        skippedNodes.add(nodeId);
+      }
+    }
+
+    return { executeNodes, hydratedNodes, skippedNodes };
+  }
+
+  private async hydrateNodeFromCheckpoint(nodeId: string): Promise<void> {
+    const sourceRunId = this.options.checkpointSourceRunId;
+    if (!sourceRunId) return;
+
+    const checkpoint = await loadCheckpoint(sourceRunId, nodeId);
+    if (!checkpoint) {
+      throw new Error(`Missing checkpoint for node "${nodeId}" in run ${sourceRunId}`);
+    }
+
+    let output: OutputResult;
+
+    if (checkpoint.branch) {
+      output = {
+        mode: "git",
+        branch: checkpoint.branch,
+        sha: checkpoint.commitSha ?? "",
+        filesChanged: 0,
+        insertions: 0,
+        deletions: 0,
+      };
+    } else if (checkpoint.outputDir) {
+      output = {
+        mode: "files",
+        dir: checkpoint.outputDir,
+        files: [...(checkpoint.outputFiles ?? [])],
+        totalSize: 0,
+      };
+    } else {
+      throw new Error(`Checkpoint for node "${nodeId}" has no restorable output`);
+    }
+
+    this.nodeStates.set(nodeId, {
+      nodeId,
+      status: "skipped",
+      skipReason: `Hydrated from checkpoint run ${sourceRunId}`,
+      checkpoint,
+      hydratedFromCheckpoint: {
+        pipelineRunId: sourceRunId,
+        nodeId,
+      },
+      result: {
+        success: true,
+        output,
+        validation: { passed: true, totalAttempts: 0, stepResults: [] },
+        durationMs: 0,
+      },
+    });
+  }
+
   private async executeNode(node: PipelineNode): Promise<void> {
     const state: NodeExecution = {
       nodeId: node.id,
@@ -180,6 +291,9 @@ export class PipelineExecutor {
     console.log(chalk.blue(`  ▶ Starting node: ${node.id}`));
 
     let tempContextDir: string | null = null;
+    let tempInputArtifactsDir: string | null = null;
+    let fanInContext: FanInContext | null = null;
+    let releaseRepoLock: (() => void) | null = null;
     try {
       // Resolve input from upstream outputs
       const input = await resolveNodeInput(node, this.pipeline, this.nodeStates, {
@@ -191,10 +305,11 @@ export class PipelineExecutor {
       const deps = node.depends_on ?? [];
       const workflowName = node.workflow ?? this.pipeline.defaults?.workflow ?? "code";
       const workflowOutputMode = getWorkflowOutputMode(workflowName);
+      const repoPath = this.options.repo ?? input.repo ?? node.repo ?? this.pipeline.defaults?.repo;
       if (deps.length > 0 && workflowOutputMode === "git") {
-        const repoPath = this.options.repo ?? node.repo ?? this.pipeline.defaults?.repo;
         if (repoPath) {
-          await this.mergeUpstreamForNode(node, repoPath);
+          releaseRepoLock = await this.acquireRepoLock(repoPath);
+          fanInContext = this.prepareFanInBranch(node, repoPath);
         }
       }
 
@@ -204,14 +319,30 @@ export class PipelineExecutor {
         tempContextDir = materialized.dir;
         contextFiles.push(...materialized.files);
       }
+      if (input.contextManifestEntries.length > 0) {
+        const manifest = this.materializeContextManifest(
+          node.id,
+          input.contextManifestEntries,
+          tempContextDir,
+        );
+        tempContextDir = manifest.dir;
+        contextFiles.push(manifest.file);
+      }
+
+      const inputFiles = [...input.files];
+      if (input.fileArtifacts.length > 0) {
+        const staged = this.stageInputArtifacts(node.id, input.fileArtifacts);
+        tempInputArtifactsDir = staged.dir;
+        inputFiles.push(staged.dir);
+      }
 
       // Build CLIOptions from node + pipeline defaults
       const cliOptions: CLIOptions = {
         task: node.task,
         workflow: workflowName,
         agent: node.agent ?? this.pipeline.defaults?.agent ?? "codex",
-        repo: this.options.repo ?? input.repo ?? node.repo ?? this.pipeline.defaults?.repo,
-        input: input.files.length > 0 ? input.files : undefined,
+        repo: repoPath,
+        input: inputFiles.length > 0 ? inputFiles : undefined,
         context: contextFiles.length > 0 ? contextFiles : undefined,
         review: node.review ?? this.pipeline.defaults?.review ?? false,
         model: node.model ?? this.pipeline.defaults?.model,
@@ -231,16 +362,15 @@ export class PipelineExecutor {
 
         // For git-mode output, merge the branch back into the host repo's current branch
         // so downstream nodes see the changes when their workspace is created
-        if (result.output?.mode === "git" && result.output.branch) {
-          const repoPath = this.options.repo ?? node.repo ?? this.pipeline.defaults?.repo;
+        if (result.output && result.output.mode === "git" && result.output.branch) {
+          const outputBranch = result.output.branch;
           if (repoPath) {
-            try {
-              execSync(`git merge ${result.output.branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
-              console.log(chalk.gray(`    Merged ${result.output.branch} into working branch`));
-            } catch {
-              // Abort the failed merge to leave the repo in a clean state
-              try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
-              console.log(chalk.yellow(`    Warning: Could not auto-merge ${result.output.branch} (aborted)`));
+            if (releaseRepoLock) {
+              this.mergeOutputBranchIntoHostRepo(repoPath, outputBranch, fanInContext);
+            } else {
+              await this.withRepoLock(repoPath, async () => {
+                this.mergeOutputBranchIntoHostRepo(repoPath, outputBranch, null);
+              });
             }
           }
         }
@@ -312,6 +442,21 @@ export class PipelineExecutor {
       if (tempContextDir) {
         rmSync(tempContextDir, { recursive: true, force: true });
       }
+      if (tempInputArtifactsDir) {
+        rmSync(tempInputArtifactsDir, { recursive: true, force: true });
+      }
+      if (fanInContext) {
+        try {
+          this.cleanupFanInBranch(fanInContext);
+        } catch (err) {
+          state.status = "failed";
+          state.error = `Failed to restore repo state after fan-in: ${err instanceof Error ? err.message : String(err)}`;
+          state.completedAt = new Date().toISOString();
+        }
+      }
+      if (releaseRepoLock) {
+        releaseRepoLock();
+      }
     }
 
     this.nodeStates.set(node.id, state);
@@ -337,11 +482,68 @@ export class PipelineExecutor {
     return { dir, files };
   }
 
-  private anyDependencyFailed(deps: string[]): boolean {
-    return deps.some(dep => {
+  private materializeContextManifest(
+    nodeId: string,
+    entries: ContextManifestEntry[],
+    existingDir?: string | null,
+  ): { dir: string; file: string } {
+    const dir = existingDir ?? mkdtempSync(join(tmpdir(), `forgectl-pipe-${nodeId}-ctx-`));
+    const file = join(dir, "context-manifest.json");
+    writeFileSync(file, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      entries,
+    }, null, 2), "utf-8");
+    return { dir, file };
+  }
+
+  private stageInputArtifacts(
+    nodeId: string,
+    artifacts: ResolvedFileArtifact[],
+  ): { dir: string } {
+    const dir = mkdtempSync(join(tmpdir(), `forgectl-pipe-${nodeId}-input-`));
+    for (const artifact of artifacts) {
+      const targetPath = join(dir, artifact.targetPath);
+      mkdirSync(dirname(targetPath), { recursive: true });
+      cpSync(artifact.sourcePath, targetPath, { recursive: true });
+    }
+    return { dir };
+  }
+
+  private getDependencyIssues(deps: string[]): string[] {
+    const issues: string[] = [];
+    for (const dep of deps) {
       const state = this.nodeStates.get(dep);
-      return state?.status === "failed";
-    });
+      if (!state) {
+        issues.push(`Dependency ${dep} has no state`);
+        continue;
+      }
+
+      if (state.status === "failed") {
+        issues.push(`Dependency ${dep} failed`);
+        continue;
+      }
+
+      if (state.status === "completed") {
+        if (!state.result?.success) {
+          issues.push(`Dependency ${dep} completed unsuccessfully`);
+        }
+        continue;
+      }
+
+      if (state.status === "skipped") {
+        const hydratedSuccess = Boolean(state.result?.success && state.result.output);
+        if (!hydratedSuccess) {
+          issues.push(`Dependency ${dep} was skipped without hydrated output`);
+        }
+        continue;
+      }
+
+      if (state.status === "pending" || state.status === "running") {
+        issues.push(`Dependency ${dep} is not finished (${state.status})`);
+      }
+    }
+
+    return issues;
   }
 
   private buildDryRunResult(startedAt: string): PipelineRun {
@@ -375,67 +577,130 @@ export class PipelineExecutor {
     };
   }
 
-  /**
-   * For a node with dependencies, ensure the host repo's working tree
-   * includes all upstream branches' changes. Creates a temporary merge branch
-   * from the first upstream, then merges remaining upstream branches.
-   * On conflict, falls back to staging all files and committing.
-   */
-  private async mergeUpstreamForNode(node: PipelineNode, repoPath: string): Promise<void> {
-    const deps = node.depends_on ?? [];
-    const upstreamBranches: string[] = [];
+  private async acquireRepoLock(repoPath: string): Promise<() => void> {
+    const previous = PipelineExecutor.repoLocks.get(repoPath) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    PipelineExecutor.repoLocks.set(repoPath, queued);
+    await previous;
+    return () => {
+      release();
+      if (PipelineExecutor.repoLocks.get(repoPath) === queued) {
+        PipelineExecutor.repoLocks.delete(repoPath);
+      }
+    };
+  }
 
-    for (const depId of deps) {
+  private async withRepoLock<T>(repoPath: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquireRepoLock(repoPath);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  private collectUpstreamGitBranches(node: PipelineNode): string[] {
+    const branches = new Set<string>();
+    for (const depId of node.depends_on ?? []) {
       const depState = this.nodeStates.get(depId);
       if (depState?.result?.output?.mode === "git" && depState.result.output.branch) {
-        upstreamBranches.push(depState.result.output.branch);
+        branches.add(depState.result.output.branch);
       }
     }
+    return [...branches];
+  }
 
-    if (upstreamBranches.length === 0) return;
+  private prepareFanInBranch(node: PipelineNode, repoPath: string): FanInContext | null {
+    const upstreamBranches = this.collectUpstreamGitBranches(node);
+    if (upstreamBranches.length === 0) {
+      return null;
+    }
 
-    const tempBranch = `pipeline-merge-${node.id}-${Date.now()}`;
+    const originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd: repoPath, encoding: "utf-8" }).trim();
+    const originalSha = execSync("git rev-parse HEAD", { cwd: repoPath, encoding: "utf-8" }).trim();
+    const tempBranch = `forgectl-fanin-${this.pipelineRunId}-${node.id}-${Date.now()}`
+      .replace(/[^a-zA-Z0-9._/-]/g, "-");
+    const context: FanInContext = { repoPath, tempBranch, originalRef, originalSha };
 
     try {
-      // Create temp branch from the first upstream branch
-      execSync(`git checkout -b ${tempBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
-      console.log(chalk.gray(`    Created merge branch from ${upstreamBranches[0]}`));
+      execSync(`git checkout -B ${tempBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
+      console.log(chalk.gray(`    Prepared fan-in branch ${tempBranch} from ${upstreamBranches[0]}`));
 
-      // Merge remaining upstream branches
       for (const branch of upstreamBranches.slice(1)) {
         try {
           execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
-          console.log(chalk.gray(`    Merged ${branch} into merge branch`));
+          console.log(chalk.gray(`    Merged ${branch} into ${tempBranch}`));
         } catch {
-          // Conflict — resolve by accepting both sides where possible
-          // For files with conflict markers, accept the version with most content
-          try {
-            // Mark all conflicted files as resolved by using the merge result as-is
-            // Strip conflict markers by accepting a combined version
-            const conflictFiles = execSync("git diff --name-only --diff-filter=U", { cwd: repoPath, encoding: "utf-8" }).trim();
-            if (conflictFiles) {
-              for (const file of conflictFiles.split("\n").filter(Boolean)) {
-                // Read conflicted file, strip markers to keep both sides
-                const filePath = join(repoPath, file);
-                const content = readFileSync(filePath, "utf-8");
-                const resolved = content
-                  .replace(/^<<<<<<< HEAD\n/gm, "")
-                  .replace(/^=======\n/gm, "")
-                  .replace(/^>>>>>>> [^\n]*\n/gm, "");
-                writeFileSync(filePath, resolved);
-              }
-            }
-            execSync("git add -A", { cwd: repoPath, stdio: "pipe" });
-            execSync(`git commit --no-edit -m "Pipeline merge: ${branch}"`, { cwd: repoPath, stdio: "pipe" });
-            console.log(chalk.yellow(`    Auto-resolved merge conflict for ${branch}`));
-          } catch {
-            try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
-            console.log(chalk.yellow(`    Warning: Could not merge ${branch} for node ${node.id}`));
-          }
+          const conflicts = this.getConflictFiles(repoPath);
+          try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+          throw new Error(
+            `Fan-in merge conflict for node ${node.id} while merging ${branch}` +
+            (conflicts ? `: ${conflicts}` : "")
+          );
         }
       }
+
+      return context;
     } catch (err) {
-      console.log(chalk.yellow(`    Warning: Failed to prepare merge for node ${node.id}: ${err instanceof Error ? err.message : String(err)}`));
+      try {
+        this.cleanupFanInBranch(context);
+      } catch {
+        // ignore cleanup errors here; the original error is more relevant.
+      }
+      throw err instanceof Error
+        ? err
+        : new Error(`Failed to prepare fan-in for node ${node.id}: ${String(err)}`);
+    }
+  }
+
+  private mergeOutputBranchIntoHostRepo(
+    repoPath: string,
+    branch: string,
+    fanInContext: FanInContext | null,
+  ): void {
+    if (fanInContext) {
+      this.restoreOriginalRef(fanInContext);
+    }
+
+    try {
+      execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+      console.log(chalk.gray(`    Merged ${branch} into host repo`));
+    } catch {
+      const conflicts = this.getConflictFiles(repoPath);
+      try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+      throw new Error(
+        `Failed to merge output branch ${branch}` +
+        (conflicts ? `: ${conflicts}` : "")
+      );
+    }
+  }
+
+  private cleanupFanInBranch(context: FanInContext): void {
+    this.restoreOriginalRef(context);
+    try {
+      execSync(`git branch -D ${context.tempBranch}`, { cwd: context.repoPath, stdio: "pipe" });
+    } catch {
+      // Branch may already be gone.
+    }
+  }
+
+  private restoreOriginalRef(context: FanInContext): void {
+    const target = context.originalRef === "HEAD" ? context.originalSha : context.originalRef;
+    execSync(`git checkout ${target}`, { cwd: context.repoPath, stdio: "pipe" });
+  }
+
+  private getConflictFiles(repoPath: string): string {
+    try {
+      return execSync("git diff --name-only --diff-filter=U", {
+        cwd: repoPath,
+        encoding: "utf-8",
+      }).trim();
+    } catch {
+      return "";
     }
   }
 

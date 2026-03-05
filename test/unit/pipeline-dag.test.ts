@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { validateDAG, topologicalSort, getParallelGroups } from "../../src/pipeline/dag.js";
+import {
+  validateDAG,
+  topologicalSort,
+  getParallelGroups,
+  collectAncestors,
+  collectDescendants,
+  isAncestor,
+} from "../../src/pipeline/dag.js";
 import { parsePipelineYaml } from "../../src/pipeline/parser.js";
 import type { PipelineDefinition } from "../../src/pipeline/types.js";
 
@@ -150,6 +157,33 @@ describe("getParallelGroups", () => {
     ]);
     const groups = getParallelGroups(pipeline);
     expect(groups).toEqual([["a"], ["b", "c"], ["d"]]);
+  });
+});
+
+describe("graph helpers", () => {
+  const pipeline = makePipeline([
+    { id: "a", task: "a" },
+    { id: "b", task: "b", depends_on: ["a"] },
+    { id: "c", task: "c" },
+    { id: "d", task: "d", depends_on: ["b", "c"] },
+    { id: "e", task: "e", depends_on: ["d"] },
+  ]);
+
+  it("collectAncestors returns full transitive ancestry", () => {
+    expect([...collectAncestors(pipeline, "e")].sort()).toEqual(["a", "b", "c", "d"]);
+    expect([...collectAncestors(pipeline, "a")]).toEqual([]);
+  });
+
+  it("collectDescendants returns full transitive descendants", () => {
+    expect([...collectDescendants(pipeline, "a")].sort()).toEqual(["b", "d", "e"]);
+    expect([...collectDescendants(pipeline, "c")].sort()).toEqual(["d", "e"]);
+  });
+
+  it("isAncestor detects transitive ancestor relationships", () => {
+    expect(isAncestor(pipeline, "a", "e")).toBe(true);
+    expect(isAncestor(pipeline, "c", "e")).toBe(true);
+    expect(isAncestor(pipeline, "e", "a")).toBe(false);
+    expect(isAncestor(pipeline, "b", "c")).toBe(false);
   });
 });
 

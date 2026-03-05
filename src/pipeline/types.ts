@@ -51,6 +51,11 @@ export interface NodeExecution {
   result?: ExecutionResult;
   checkpoint?: CheckpointRef;
   error?: string;
+  skipReason?: string;
+  hydratedFromCheckpoint?: {
+    pipelineRunId: string;
+    nodeId: string;
+  };
 }
 
 export interface CheckpointRef {
@@ -60,6 +65,7 @@ export interface CheckpointRef {
   branch?: string;
   commitSha?: string;
   outputDir?: string;
+  outputFiles?: string[];
 }
 
 export interface ResolvedContextContent {
@@ -67,12 +73,28 @@ export interface ResolvedContextContent {
   content: string;
 }
 
+export interface ContextManifestEntry {
+  sourceNodeId: string;
+  path: string;
+  type: "text" | "binary" | "large-text" | "deleted";
+  size: number;
+  changeKind: "added" | "modified" | "deleted" | "renamed";
+  previousPath?: string;
+}
+
+export interface ResolvedFileArtifact {
+  sourcePath: string;
+  targetPath: string;
+}
+
 /** Resolved input for a node based on upstream outputs */
 export interface ResolvedNodeInput {
   repo?: string;
   branch?: string;
   files: string[];
+  fileArtifacts: ResolvedFileArtifact[];
   contextFiles: string[];
+  contextManifestEntries: ContextManifestEntry[];
   contextContent: ResolvedContextContent[];
   upstreamBranches: string[];
 }
