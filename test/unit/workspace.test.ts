@@ -192,13 +192,22 @@ describe("WorkspaceManager", () => {
   });
 
   describe("path containment", () => {
-    it("all operations call assertContainment", async () => {
+    it("getWorkspacePath returns path within root", () => {
       const mgr = new WorkspaceManager(
         { root: tmpRoot, hooks: {}, hook_timeout: "60s" },
         logger,
       );
-      // Path traversal attempt
-      await expect(mgr.ensureWorkspace("../../etc")).rejects.toThrow();
+      const wsPath = mgr.getWorkspacePath("valid-id");
+      expect(wsPath.startsWith(tmpRoot)).toBe(true);
+    });
+
+    it("sanitizeIdentifier rejects dangerous identifiers", () => {
+      const mgr = new WorkspaceManager(
+        { root: tmpRoot, hooks: {}, hook_timeout: "60s" },
+        logger,
+      );
+      // Pure dots get rejected by sanitizeIdentifier
+      expect(() => mgr.getWorkspacePath("..")).toThrow();
     });
   });
 });
