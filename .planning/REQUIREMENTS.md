@@ -27,18 +27,38 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 - Write back: post comments, add/remove labels, close issues via REST API
 - Handle rate limits gracefully: read `X-RateLimit-Remaining`, back off when near zero
 
-### R1.3: Tracker Configuration
-- Config section in `forgectl.yaml` or WORKFLOW.md front matter: `tracker.kind`, `tracker.token`, `tracker.repo`, `tracker.labels`, `tracker.active_states`, `tracker.terminal_states`
-- Defaults: `active_states: ["open"]`, `terminal_states: ["closed"]`
+### R1.3: Notion Database Adapter
+- Poll a Notion database using the Notion API (`POST /v1/databases/{db_id}/query`) with filter and sorts
+- Delta polling: filter by `last_edited_time` greater than last poll timestamp
+- Handle pagination via `start_cursor` / `has_more` response fields
+- Map Notion page properties to normalized `TrackerIssue` model:
+  - Title property → `title`
+  - Status property → `state` (user-configurable property name)
+  - Priority property (select) → `priority`
+  - Tags/Labels property (multi-select) → `labels`
+  - Assignee property (people) → `assignees`
+  - Rich text / description property → `description`
+- Support configurable property-to-field mapping (different databases use different property names)
+- Authenticate via Notion integration token (`Authorization: Bearer ntn_XXX`)
+- Write back: update page properties (status, labels), add comments via `POST /v1/comments`
+- Handle rate limits: Notion API allows 3 requests/second per integration; implement request throttling
+
+### R1.4: Tracker Configuration
+- Config section in `forgectl.yaml` or WORKFLOW.md front matter: `tracker.kind`, `tracker.token`, `tracker.active_states`, `tracker.terminal_states`
+- GitHub-specific: `tracker.repo`, `tracker.labels`
+- Notion-specific: `tracker.database_id`, `tracker.property_map` (maps Notion property names to TrackerIssue fields)
+- Defaults: `active_states: ["open"]` / `["In Progress", "Todo"]`, `terminal_states: ["closed"]` / `["Done", "Cancelled"]`
 - Validate tracker config at startup and per-tick before dispatch
 
 ### Acceptance Criteria
 - [ ] TrackerAdapter interface defined with all three operations
 - [ ] GitHub Issues adapter passes unit tests for: fetch candidates, fetch by IDs, pagination, ETag caching
 - [ ] Adapter correctly normalizes GitHub issues to TrackerIssue model
-- [ ] Rate limit handling works (backs off when remaining < 100)
-- [ ] Can write comments and close issues via adapter
-- [ ] Config validation catches missing token/repo at startup
+- [ ] Notion adapter passes unit tests for: fetch candidates, pagination, property mapping
+- [ ] Notion adapter correctly maps configurable properties to TrackerIssue model
+- [ ] Rate limit handling works for both adapters (GitHub: header-based backoff, Notion: request throttling)
+- [ ] Can write comments and update state via both adapters
+- [ ] Config validation catches missing token/repo/database_id at startup
 
 ---
 

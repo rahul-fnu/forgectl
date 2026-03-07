@@ -25,6 +25,44 @@
 - Need public HTTPS endpoint + signature verification
 - **Recommendation**: Start with polling, add webhook support later for real-time
 
+## 1b. Notion API for Polling-Based Orchestration
+
+### Polling Strategy
+- **Best endpoint**: `POST /v1/databases/{database_id}/query` with filter and sorts
+- **Delta polling**: Filter by `last_edited_time` > last poll timestamp using `filter.timestamp.last_edited_time.after`
+- **Pagination**: Response includes `has_more` boolean and `next_cursor` string; pass `start_cursor` in subsequent requests
+- **Rate limits**: 3 requests/second per integration token — much stricter than GitHub; requires request throttling
+- **Page size**: `page_size` parameter, max 100
+
+### Database/Page Model Mapping
+- Notion databases have user-defined **properties** (columns) — no fixed schema
+- Common patterns: Status (select), Priority (select), Tags (multi-select), Assignee (people), Title (title)
+- Property names are user-defined — adapter needs configurable `property_map`
+- Page ID = unique identifier, page URL = human-readable link
+- Rich text body via `POST /v1/blocks/{block_id}/children` (separate from properties)
+
+### Authentication
+- **Integration token**: `Bearer ntn_XXX` (internal integrations)
+- Integration must be explicitly connected to the database by the workspace owner
+- No OAuth needed for internal use; OAuth available for public integrations
+
+### Writing Back
+- Update properties: `PATCH /v1/pages/{page_id}` with properties payload
+- Add comments: `POST /v1/comments` with `parent.page_id` and rich text body
+- Create pages: `POST /v1/pages` (for creating sub-tasks if needed)
+
+### Key Differences from GitHub
+| Aspect | GitHub Issues | Notion |
+|--------|--------------|--------|
+| Schema | Fixed fields | User-defined properties |
+| Rate limit | 5000/hour | 3/second (~10800/hour) |
+| Polling | REST GET with ETag | POST query with filters |
+| Pagination | Link header | cursor-based |
+| States | open/closed | Any select property values |
+| Auth | PAT or GitHub App | Integration token |
+
+---
+
 ## 2. Agent Session Protocols
 
 ### Current forgectl Pattern

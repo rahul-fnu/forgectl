@@ -1,17 +1,18 @@
 # Roadmap: forgectl v2 — Core Orchestrator
 
-## Phase 1: Tracker Adapter Interface + GitHub Issues
-**Goal:** Pluggable issue tracker abstraction with working GitHub Issues implementation.
-**Requirements:** R1.1, R1.2, R1.3
+## Phase 1: Tracker Adapter Interface + GitHub Issues + Notion
+**Goal:** Pluggable issue tracker abstraction with working GitHub Issues and Notion implementations.
+**Requirements:** R1.1, R1.2, R1.3, R1.4
 **Deliverables:**
 - `src/tracker/types.ts` — TrackerAdapter interface + TrackerIssue model
 - `src/tracker/github.ts` — GitHub Issues adapter (polling, ETag, pagination, write-back)
+- `src/tracker/notion.ts` — Notion database adapter (polling, property mapping, write-back)
 - `src/tracker/registry.ts` — Adapter registry (lookup by `tracker.kind`)
-- Config schema extensions for tracker settings
-- Unit tests: fetch candidates, pagination, ETag caching, normalization, rate limit handling
+- Config schema extensions for tracker settings (shared + per-adapter)
+- Unit tests: fetch candidates, pagination, ETag/cursor, normalization, rate limit handling, property mapping
 
 **Depends on:** Nothing (standalone)
-**Estimated plans:** 3-4
+**Estimated plans:** 4-5
 
 ---
 
@@ -112,7 +113,7 @@
 
 | Phase | Name | Plans | Depends On |
 |-------|------|-------|------------|
-| 1 | Tracker Adapter + GitHub Issues | 3-4 | — |
+| 1 | Tracker Adapter + GitHub Issues + Notion | 4-5 | — |
 | 2 | Workspace Management | 2-3 | — |
 | 3 | WORKFLOW.md Contract | 3 | Phase 1 |
 | 4 | Agent Session Abstraction | 3-4 | — |
