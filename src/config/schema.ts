@@ -112,6 +112,8 @@ export const ConfigSchema = z.object({
     log_dir: z.string().default(".forgectl/runs"),
   }).default({}),
 
+  tracker: z.lazy(() => TrackerConfigSchema).optional(),
+
   board: z.object({
     state_dir: z.string().default("~/.forgectl/board"),
     scheduler_tick_seconds: z.number().int().positive().default(30),
@@ -120,3 +122,33 @@ export const ConfigSchema = z.object({
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;
+
+export const TrackerConfigSchema = z.object({
+  kind: z.enum(["github", "notion"]),
+  token: z.string(),
+  active_states: z.array(z.string()).default(["open"]),
+  terminal_states: z.array(z.string()).default(["closed"]),
+  poll_interval_ms: z.number().int().positive().default(60000),
+  auto_close: z.boolean().default(false),
+  repo: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  database_id: z.string().optional(),
+  property_map: z.record(z.string()).optional(),
+  in_progress_label: z.string().optional(),
+  done_label: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.kind === "github" && !data.repo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Tracker kind "github" requires a "repo" field (e.g. "owner/repo")',
+      path: ["repo"],
+    });
+  }
+  if (data.kind === "notion" && !data.database_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Tracker kind "notion" requires a "database_id" field',
+      path: ["database_id"],
+    });
+  }
+});
