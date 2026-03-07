@@ -32,7 +32,11 @@ Plans:
 - Unit tests: create/reuse/cleanup, hook lifecycle, path safety
 
 **Depends on:** Nothing (standalone)
-**Estimated plans:** 2-3
+**Plans:** 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Safety module, hook executor, and config schema extension
+- [ ] 02-02-PLAN.md — WorkspaceManager class, barrel export, full suite verification
 
 ---
 
@@ -120,9 +124,9 @@ Plans:
 | Phase | Name | Plans | Depends On |
 |-------|------|-------|------------|
 | 1 | Tracker Adapter Interface | 4/4 | Complete |
-| 2 | Workspace Management | 2-3 | — |
+| 2 | Workspace Management | 2 | -- |
 | 3 | WORKFLOW.md Contract | 3 | Phase 1 |
-| 4 | Agent Session Abstraction | 3-4 | — |
+| 4 | Agent Session Abstraction | 3-4 | -- |
 | 5 | Orchestration State Machine | 4-5 | Phase 1-4 |
 | 6 | Observability + API Extensions | 3 | Phase 5 |
 | 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |
