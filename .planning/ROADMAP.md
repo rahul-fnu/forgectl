@@ -1,0 +1,126 @@
+# Roadmap: forgectl v2 — Core Orchestrator
+
+## Phase 1: Tracker Adapter Interface + GitHub Issues
+**Goal:** Pluggable issue tracker abstraction with working GitHub Issues implementation.
+**Requirements:** R1.1, R1.2, R1.3
+**Deliverables:**
+- `src/tracker/types.ts` — TrackerAdapter interface + TrackerIssue model
+- `src/tracker/github.ts` — GitHub Issues adapter (polling, ETag, pagination, write-back)
+- `src/tracker/registry.ts` — Adapter registry (lookup by `tracker.kind`)
+- Config schema extensions for tracker settings
+- Unit tests: fetch candidates, pagination, ETag caching, normalization, rate limit handling
+
+**Depends on:** Nothing (standalone)
+**Estimated plans:** 3-4
+
+---
+
+## Phase 2: Workspace Management
+**Goal:** Per-issue workspace lifecycle with hooks and safety invariants.
+**Requirements:** R3.1, R3.2, R3.3
+**Deliverables:**
+- `src/workspace/manager.ts` — Workspace creation, reuse, cleanup, path validation
+- `src/workspace/hooks.ts` — Hook execution with timeout and failure semantics
+- `src/workspace/safety.ts` — Path sanitization, root containment checks
+- Unit tests: create/reuse/cleanup, hook lifecycle, path safety
+
+**Depends on:** Nothing (standalone)
+**Estimated plans:** 2-3
+
+---
+
+## Phase 3: WORKFLOW.md Contract
+**Goal:** In-repo workflow definition with YAML front matter, prompt templates, and dynamic reload.
+**Requirements:** R4.1, R4.2, R4.3, R4.4
+**Deliverables:**
+- `src/workflow/workflow-file.ts` — WORKFLOW.md parser (front matter + prompt body)
+- `src/workflow/watcher.ts` — File watcher with reload + validation
+- Template rendering integration with issue data
+- Config merge: WORKFLOW.md → forgectl.yaml → defaults
+- Unit tests: parsing, template rendering, reload, merge priority
+
+**Depends on:** Phase 1 (needs TrackerIssue model for template variables)
+**Estimated plans:** 3
+
+---
+
+## Phase 4: Agent Session Abstraction
+**Goal:** Unified session interface supporting both one-shot CLI and persistent subprocess modes.
+**Requirements:** R5.1, R5.2, R5.3, R5.4
+**Deliverables:**
+- `src/agent/session.ts` — AgentSession interface + factory
+- `src/agent/oneshot-session.ts` — One-shot session (refactored from current adapters)
+- `src/agent/appserver-session.ts` — JSON-RPC persistent session for Codex
+- Activity tracking (lastActivityAt updates)
+- Unit tests: session lifecycle, one-shot backward compat, JSON-RPC protocol
+
+**Depends on:** Nothing (refactors existing agent layer)
+**Estimated plans:** 3-4
+
+---
+
+## Phase 5: Orchestration State Machine
+**Goal:** Full orchestrator with polling, dispatch, concurrency, retry, reconciliation, and stall detection.
+**Requirements:** R2.1, R2.2, R2.3, R2.4, R2.5, R2.6
+**Deliverables:**
+- `src/orchestrator/state.ts` — Orchestrator state types and transitions
+- `src/orchestrator/scheduler.ts` — Polling loop with tick sequence
+- `src/orchestrator/dispatcher.ts` — Candidate selection, priority sort, slot management
+- `src/orchestrator/reconciler.ts` — Active run reconciliation + stall detection
+- `src/orchestrator/retry.ts` — Retry queue with exponential backoff
+- `src/orchestrator/index.ts` — Orchestrator class tying it all together
+- CLI command: `forgectl orchestrate` (start the orchestrator loop)
+- Unit tests: state transitions, dispatch priority, concurrency, backoff, reconciliation
+
+**Depends on:** Phase 1, 2, 3, 4 (uses tracker, workspace, workflow, sessions)
+**Estimated plans:** 4-5
+
+---
+
+## Phase 6: Observability + API Extensions
+**Goal:** Structured logging, metrics, REST API, and dashboard updates for orchestrator visibility.
+**Requirements:** R6.1, R6.2, R6.3, R6.4
+**Deliverables:**
+- Logger extensions for issue/session context fields
+- Token/runtime metrics aggregation
+- REST API routes: `/api/v1/state`, `/api/v1/issues/:id`, `/api/v1/refresh`
+- Dashboard updates: orchestrator status panel, per-issue details
+- Unit tests: metric aggregation, API response shapes
+
+**Depends on:** Phase 5 (needs orchestrator state to expose)
+**Estimated plans:** 3
+
+---
+
+## Phase 7: End-to-End Integration + Demo
+**Goal:** Working end-to-end flow: GitHub issue → agent dispatch → validate → report back.
+**Requirements:** R7.1, R7.2, R7.3, R7.4, NF1
+**Deliverables:**
+- Integration wiring: orchestrator → tracker → workspace → agent → validation → output → tracker write-back
+- `forgectl orchestrate` command fully functional
+- Backward compatibility verification (`forgectl run`, `forgectl pipeline` still work)
+- Example WORKFLOW.md for a code review workflow
+- E2E test with mock GitHub API
+- Demo script / documentation
+
+**Depends on:** Phase 5, 6 (all pieces must be integrated)
+**Estimated plans:** 3-4
+
+---
+
+## Phase Summary
+
+| Phase | Name | Plans | Depends On |
+|-------|------|-------|------------|
+| 1 | Tracker Adapter + GitHub Issues | 3-4 | — |
+| 2 | Workspace Management | 2-3 | — |
+| 3 | WORKFLOW.md Contract | 3 | Phase 1 |
+| 4 | Agent Session Abstraction | 3-4 | — |
+| 5 | Orchestration State Machine | 4-5 | Phase 1-4 |
+| 6 | Observability + API Extensions | 3 | Phase 5 |
+| 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |
+
+**Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5.
+
+---
+*Generated: 2026-03-07*
