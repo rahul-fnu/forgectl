@@ -10,10 +10,10 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 ## R1: Pluggable Issue Tracker Adapter
 
 ### R1.1: Generic Tracker Interface
-- Define `TrackerAdapter` interface with operations: `fetchCandidateIssues()`, `fetchIssueStatesByIds()`, `fetchIssuesByStates()`
-- Define normalized `TrackerIssue` model: id, identifier, title, description, state, priority, labels, assignees, url, created_at, updated_at, blocked_by
+- [x] Define `TrackerAdapter` interface with operations: `fetchCandidateIssues()`, `fetchIssueStatesByIds()`, `fetchIssuesByStates()`
+- [x] Define normalized `TrackerIssue` model: id, identifier, title, description, state, priority, labels, assignees, url, created_at, updated_at, blocked_by
 - Tracker adapter returns normalized issues regardless of backend
-- Support `$VAR` indirection for API tokens (resolve from environment)
+- [x] Support `$VAR` indirection for API tokens (resolve from environment)
 - Adapter validates its own config at startup (missing token, missing project, etc.)
 
 ### R1.2: GitHub Issues Adapter
@@ -44,10 +44,10 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 - Handle rate limits: Notion API allows 3 requests/second per integration; implement request throttling
 
 ### R1.4: Tracker Configuration
-- Config section in `forgectl.yaml` or WORKFLOW.md front matter: `tracker.kind`, `tracker.token`, `tracker.active_states`, `tracker.terminal_states`
-- GitHub-specific: `tracker.repo`, `tracker.labels`
-- Notion-specific: `tracker.database_id`, `tracker.property_map` (maps Notion property names to TrackerIssue fields)
-- Defaults: `active_states: ["open"]` / `["In Progress", "Todo"]`, `terminal_states: ["closed"]` / `["Done", "Cancelled"]`
+- [x] Config section in `forgectl.yaml` or WORKFLOW.md front matter: `tracker.kind`, `tracker.token`, `tracker.active_states`, `tracker.terminal_states`
+- [x] GitHub-specific: `tracker.repo`, `tracker.labels`
+- [x] Notion-specific: `tracker.database_id`, `tracker.property_map` (maps Notion property names to TrackerIssue fields)
+- [x] Defaults: `active_states: ["open"]` / `["In Progress", "Todo"]`, `terminal_states: ["closed"]` / `["Done", "Cancelled"]`
 - Validate tracker config at startup and per-tick before dispatch
 
 ### Acceptance Criteria
