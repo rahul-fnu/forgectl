@@ -112,6 +112,8 @@ export const ConfigSchema = z.object({
     log_dir: z.string().default(".forgectl/runs"),
   }).default({}),
 
+  workspace: z.lazy(() => WorkspaceConfigSchema).optional(),
+
   tracker: z.lazy(() => TrackerConfigSchema).optional(),
 
   board: z.object({
@@ -122,6 +124,18 @@ export const ConfigSchema = z.object({
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;
+
+export const WorkspaceConfigSchema = z.object({
+  root: z.string().default("~/.forgectl/workspaces"),
+  hooks: z.object({
+    after_create: z.string().optional(),
+    before_run: z.string().optional(),
+    after_run: z.string().optional(),
+    before_remove: z.string().optional(),
+  }).default({}),
+  hook_timeout: duration.default("60s"),
+});
+export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 
 export const TrackerConfigSchema = z.object({
   kind: z.enum(["github", "notion"]),
