@@ -35,8 +35,8 @@ Plans:
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 02-01-PLAN.md — Safety module, hook executor, and config schema extension
-- [ ] 02-02-PLAN.md — WorkspaceManager class, barrel export, full suite verification
+- [x] 02-01-PLAN.md — Safety module, hook executor, and config schema extension
+- [x] 02-02-PLAN.md — WorkspaceManager class, barrel export, full suite verification
 
 ---
 
