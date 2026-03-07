@@ -1,7 +1,7 @@
 # Project State
 
 ## Current Phase
-Phase 1 — Plan 3 of 4 — next action: execute 01-03-PLAN.md
+Phase 1 — Plan 4 of 4 — next action: execute 01-04-PLAN.md
 
 ## Completed Phases
 (none yet — Phase 1 in progress)
@@ -9,6 +9,7 @@ Phase 1 — Plan 3 of 4 — next action: execute 01-03-PLAN.md
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
 - 01-02: GitHub Issues adapter with ETag caching, pagination, delta polling, PR filtering, rate limits (2 min)
+- 01-03: Notion database adapter with delta polling, property mapping, rich text to markdown, throttle, write-back (2 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -22,10 +23,13 @@ Phase 1 — Plan 3 of 4 — next action: execute 01-03-PLAN.md
 - Token resolution supports both $ENV_VAR references and literal values
 - Closure-based adapter pattern for private state (ETag, cache, rate limits)
 - Priority extraction supports both "priority:X" and "P0/P1" label patterns
+- Native fetch for Notion API (no extra HTTP client library)
+- Timestamp array throttle for Notion rate limiting (3 req/s)
+- Default property_map for common Notion database column names
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 01-02-PLAN.md
-- **Timestamp:** 2026-03-07T21:17:29Z
+- **Stopped at:** Completed 01-03-PLAN.md
+- **Timestamp:** 2026-03-07T21:19:00Z

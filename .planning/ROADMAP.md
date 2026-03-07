@@ -16,8 +16,8 @@
 
 Plans:
 - [x] 01-01-PLAN.md — TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry skeleton
-- [ ] 01-02-PLAN.md — GitHub Issues adapter (polling, ETag, pagination, normalization, write-back)
-- [ ] 01-03-PLAN.md — Notion database adapter (polling, property mapping, throttle, write-back)
+- [x] 01-02-PLAN.md — GitHub Issues adapter (polling, ETag, pagination, normalization, write-back)
+- [x] 01-03-PLAN.md — Notion database adapter (polling, property mapping, throttle, write-back)
 - [ ] 01-04-PLAN.md — Registry wiring, barrel export, integration tests
 
 ---
