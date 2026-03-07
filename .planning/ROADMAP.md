@@ -12,13 +12,13 @@
 - Unit tests: fetch candidates, pagination, ETag/cursor, normalization, rate limit handling, property mapping
 
 **Depends on:** Nothing (standalone)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans executed (COMPLETE)
 
 Plans:
 - [x] 01-01-PLAN.md — TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry skeleton
 - [x] 01-02-PLAN.md — GitHub Issues adapter (polling, ETag, pagination, normalization, write-back)
 - [x] 01-03-PLAN.md — Notion database adapter (polling, property mapping, throttle, write-back)
-- [ ] 01-04-PLAN.md — Registry wiring, barrel export, integration tests
+- [x] 01-04-PLAN.md — Registry wiring, barrel export, integration tests
 
 ---
 
@@ -119,7 +119,7 @@ Plans:
 
 | Phase | Name | Plans | Depends On |
 |-------|------|-------|------------|
-| 1 | 3/4 | In Progress|  |
+| 1 | Tracker Adapter Interface | 4/4 | Complete |
 | 2 | Workspace Management | 2-3 | — |
 | 3 | WORKFLOW.md Contract | 3 | Phase 1 |
 | 4 | Agent Session Abstraction | 3-4 | — |
