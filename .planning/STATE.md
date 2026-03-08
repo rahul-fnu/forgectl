@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-08T17:45:08.011Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-08T18:11:43.540Z"
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 18
+  completed_plans: 16
 ---
 
 # Project State
 
 ## Current Phase
-Phase 5 — Orchestration State Machine (4/4 plans complete)
+Phase 6 — Observability API Extensions (1/3 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -40,6 +40,7 @@ Phase 5 — Orchestration State Machine (4/4 plans complete)
 - 05-02: Worker lifecycle with buildOrchestratedRunPlan, executeWorker, and structured comment builder (4 min)
 - 05-03: Dispatcher, reconciler, and scheduler for orchestrator runtime with 51 tests (3 min)
 - 05-04: Orchestrator integration with startup recovery, graceful shutdown, daemon wiring, CLI command (3 min)
+- 06-01: MetricsCollector with per-issue tracking, enriched LogEntry/RunEvent, wired dispatcher metrics (4 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -92,10 +93,14 @@ Phase 5 — Orchestration State Machine (4/4 plans complete)
 - Drain uses Promise.race against drain_timeout_ms, then force-kills remaining
 - Label removal on shutdown uses Promise.allSettled to tolerate individual failures
 - startDaemon accepts enableOrchestrator parameter for CLI command to force-enable
+- MetricsCollector uses bounded buffer (default 100) with shift eviction for completed entries
+- Logger listener errors swallowed silently via try/catch to prevent orchestrator crashes
+- Tick lock guard on Orchestrator prevents concurrent tick execution from API refresh
+- Completion status mapped from classifyFailure: continuation->completed, error->failed
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Phase 6 context gathered
-- **Timestamp:** 2026-03-08T08:51:30Z
+- **Stopped at:** Completed 06-01-PLAN.md
+- **Timestamp:** 2026-03-08T18:10:32Z
