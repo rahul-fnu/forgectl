@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-08T08:37:19.000Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-08T08:38:30.000Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
 
 ## Current Phase
-Phase 5 — Orchestration State Machine (1/4 plans complete)
+Phase 5 — Orchestration State Machine (2/4 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -36,6 +36,7 @@ Phase 5 — Orchestration State Machine (1/4 plans complete)
 - 04-02: AppServerSession with JSON-RPC over stdio for Codex app-server multi-turn sessions (4 min)
 - 04-03: Factory routing codex+appServer to AppServerSession, orchestration migrated to AgentSession, barrel export (3 min)
 - 05-01: Orchestrator state types, claim/release transitions, slot manager, retry/backoff, config schema (3 min)
+- 05-02: Worker lifecycle with buildOrchestratedRunPlan, executeWorker, and structured comment builder (4 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -76,10 +77,13 @@ Phase 5 — Orchestration State Machine (1/4 plans complete)
 - Mutable state object with pure transition functions for orchestrator (not class-based)
 - SlotManager takes running Map as parameter rather than holding state reference
 - classifyFailure maps completed to continuation, all others to error
+- Empty tempDirs in CleanupContext to preserve workspace while destroying container
+- CommitConfig field mapping (include_task -> includeTask) inline in buildOrchestratedRunPlan
+- Before hook failure returns immediate failure result without agent invocation
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 05-01-PLAN.md
-- **Timestamp:** 2026-03-08T08:37:19Z
+- **Stopped at:** Completed 05-02-PLAN.md
+- **Timestamp:** 2026-03-08T08:38:30Z
