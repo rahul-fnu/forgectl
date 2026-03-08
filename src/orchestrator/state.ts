@@ -77,7 +77,7 @@ export function releaseIssue(state: OrchestratorState, issueId: string): void {
  * Tracks how many workers can run simultaneously.
  */
 export class SlotManager {
-  private readonly maxConcurrent: number;
+  private maxConcurrent: number;
 
   constructor(maxConcurrent: number) {
     this.maxConcurrent = maxConcurrent;
@@ -102,5 +102,12 @@ export class SlotManager {
    */
   getMax(): number {
     return this.maxConcurrent;
+  }
+
+  /**
+   * Update the maximum concurrent slots at runtime.
+   */
+  setMax(n: number): void {
+    this.maxConcurrent = n;
   }
 }

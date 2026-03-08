@@ -25,8 +25,8 @@ export class Orchestrator {
   private slotManager!: SlotManager;
   private readonly tracker: TrackerAdapter;
   private readonly workspaceManager: WorkspaceManager;
-  private readonly config: ForgectlConfig;
-  private readonly promptTemplate: string;
+  private config: ForgectlConfig;
+  private promptTemplate: string;
   private readonly logger: Logger;
   private stopScheduler: (() => void) | null = null;
   private running = false;
@@ -184,6 +184,28 @@ export class Orchestrator {
       active: this.state.running.size,
       max: this.slotManager.getMax(),
     };
+  }
+
+  /**
+   * Apply new config and prompt template at runtime without restarting.
+   * Updates internal deps so subsequent ticks use the new values.
+   * In-flight workers are NOT affected.
+   */
+  applyConfig(config: ForgectlConfig, promptTemplate: string): void {
+    this.config = config;
+    this.promptTemplate = promptTemplate;
+    this.deps.config = config;
+    this.deps.promptTemplate = promptTemplate;
+
+    const newMax = config.orchestrator.max_concurrent_agents;
+    if (newMax !== this.slotManager.getMax()) {
+      this.slotManager.setMax(newMax);
+    }
+
+    this.logger.info(
+      "orchestrator",
+      `Config reloaded (max=${newMax}, poll=${config.orchestrator.poll_interval_ms}ms)`,
+    );
   }
 
   /**
