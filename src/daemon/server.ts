@@ -37,12 +37,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     maxConcurrentCardRuns: config.board.max_concurrent_card_runs,
   });
 
-  registerRoutes(app, queue, {
-    pipelineService,
-    boardStore,
-    boardEngine,
-  });
-
   const schedulerInterval = setInterval(() => {
     void boardEngine.schedulerTick();
   }, config.board.scheduler_tick_seconds * 1000);
@@ -72,6 +66,13 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       daemonLogger.error("daemon", `Failed to start orchestrator: ${err}`);
     }
   }
+
+  registerRoutes(app, queue, {
+    pipelineService,
+    boardStore,
+    boardEngine,
+    orchestrator: orchestrator ?? undefined,
+  });
 
   // Serve dashboard UI — find the index.html from src/ui or bundled location
   const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));

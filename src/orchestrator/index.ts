@@ -177,6 +177,16 @@ export class Orchestrator {
   }
 
   /**
+   * Returns slot utilization info for the API.
+   */
+  getSlotUtilization(): { active: number; max: number } {
+    return {
+      active: this.state.running.size,
+      max: this.slotManager.getMax(),
+    };
+  }
+
+  /**
    * Trigger an immediate tick (e.g., from API refresh endpoint).
    * Uses a lock to prevent concurrent tick execution.
    * Returns true if a tick was executed, false if one was already in progress.

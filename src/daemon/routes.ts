@@ -12,6 +12,7 @@ import { BoardStore } from "../board/store.js";
 import { CreateCardSchema, TriggerCardSchema, UpdateCardSchema } from "../board/schema.js";
 import { PipelineRunService, PipelineValidationError } from "./pipeline-service.js";
 import type { PipelineDefinition } from "../pipeline/types.js";
+import type { Orchestrator } from "../orchestrator/index.js";
 
 interface InlineContext {
   name: string;
@@ -22,12 +23,14 @@ interface RouteServices {
   pipelineService?: PipelineRunService;
   boardStore?: BoardStore;
   boardEngine?: BoardEngine;
+  orchestrator?: Orchestrator;
 }
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
   const pipelineService = services.pipelineService ?? new PipelineRunService();
   const boardStore = services.boardStore;
   const boardEngine = services.boardEngine;
+  const orchestrator = services.orchestrator;
 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -419,5 +422,163 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     }
 
     return card.runHistory;
+  });
+
+  // --- Orchestrator Observability API ---
+
+  const orchError503 = { error: { code: "NOT_CONFIGURED", message: "Orchestrator not running" } };
+
+  // GET /api/v1/state — orchestrator state snapshot
+  app.get("/api/v1/state", async (_request, reply) => {
+    if (!orchestrator || !orchestrator.isRunning()) {
+      reply.code(503);
+      return orchError503;
+    }
+
+    const state = orchestrator.getState();
+    const metrics = orchestrator.getMetrics();
+    const snapshot = metrics.getSnapshot();
+    const slots = orchestrator.getSlotUtilization();
+
+    const running = [...state.running.values()].map((w) => {
+      const issueM = metrics.getIssueMetrics(w.issueId);
+      return {
+        issueId: w.issueId,
+        identifier: w.identifier,
+        startedAt: new Date(w.startedAt).toISOString(),
+        attempt: w.attempt,
+        tokens: issueM?.tokens ?? { input: 0, output: 0, total: 0 },
+      };
+    });
+
+    // Retry queue: issues in retryAttempts that are NOT currently running
+    const retryQueue: { issueId: string; identifier: string; attempt: number }[] = [];
+    for (const [issueId, attempt] of state.retryAttempts.entries()) {
+      if (!state.running.has(issueId)) {
+        // Try to find identifier from metrics or claimed set
+        const issueM = metrics.getIssueMetrics(issueId);
+        retryQueue.push({
+          issueId,
+          identifier: issueM?.identifier ?? issueId,
+          attempt,
+        });
+      }
+    }
+
+    return {
+      status: "running",
+      uptimeMs: snapshot.uptimeMs,
+      running,
+      retryQueue,
+      slots,
+      totals: snapshot.totals,
+    };
+  });
+
+  // GET /api/v1/issues/:identifier — per-issue details
+  app.get<{ Params: { identifier: string } }>("/api/v1/issues/:identifier", async (request, reply) => {
+    if (!orchestrator || !orchestrator.isRunning()) {
+      reply.code(503);
+      return orchError503;
+    }
+
+    const identifier = request.params.identifier;
+    const state = orchestrator.getState();
+    const metrics = orchestrator.getMetrics();
+    const snapshot = metrics.getSnapshot();
+
+    // Search running workers
+    let found = false;
+    for (const worker of state.running.values()) {
+      if (worker.identifier === identifier) {
+        const issueM = metrics.getIssueMetrics(worker.issueId);
+        return {
+          identifier: worker.identifier,
+          issue: {
+            id: worker.issue.id,
+            title: worker.issue.title,
+            state: worker.issue.state,
+            labels: worker.issue.labels,
+          },
+          orchestratorState: "running" as const,
+          session: {
+            startedAt: new Date(worker.startedAt).toISOString(),
+            lastActivityAt: new Date(worker.lastActivityAt).toISOString(),
+            attempt: worker.attempt,
+          },
+          metrics: {
+            totalAttempts: issueM?.attempts ?? worker.attempt,
+            totalRuntime: issueM?.runtimeMs ?? 0,
+            tokens: issueM?.tokens ?? { input: 0, output: 0, total: 0 },
+          },
+        };
+      }
+    }
+
+    // Search completed/active metrics
+    const allMetrics = [...snapshot.active, ...snapshot.completed];
+    const metricEntry = allMetrics.find((m) => m.identifier === identifier);
+    if (metricEntry) {
+      // Determine state from retry queue or metric status
+      let orchState: string = metricEntry.status;
+      if (state.retryAttempts.has(metricEntry.issueId) && !state.running.has(metricEntry.issueId)) {
+        orchState = "retry_queued";
+      }
+
+      return {
+        identifier: metricEntry.identifier,
+        issue: { id: metricEntry.issueId },
+        orchestratorState: orchState,
+        session: null,
+        metrics: {
+          totalAttempts: metricEntry.attempts,
+          totalRuntime: metricEntry.runtimeMs,
+          tokens: metricEntry.tokens,
+        },
+      };
+    }
+
+    if (!found) {
+      reply.code(404);
+      return { error: { code: "NOT_FOUND", message: `Issue '${identifier}' not found` } };
+    }
+  });
+
+  // POST /api/v1/refresh — trigger immediate tick
+  app.post("/api/v1/refresh", async (_request, reply) => {
+    if (!orchestrator || !orchestrator.isRunning()) {
+      reply.code(503);
+      return orchError503;
+    }
+
+    const triggered = await orchestrator.triggerTick();
+    reply.code(202);
+    if (triggered) {
+      return { triggered: true };
+    }
+    return { triggered: false, reason: "tick_in_progress" };
+  });
+
+  // GET /api/v1/events — SSE stream for orchestrator events
+  app.get("/api/v1/events", async (request, reply) => {
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+
+    const handler = (event: RunEvent) => {
+      try {
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        // Swallow sink errors (client may have disconnected)
+      }
+    };
+
+    runEvents.on("run:orchestrator", handler);
+
+    request.raw.on("close", () => {
+      runEvents.off("run:orchestrator", handler);
+    });
   });
 }

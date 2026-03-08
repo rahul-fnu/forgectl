@@ -246,10 +246,10 @@ describe("Observability API Routes", () => {
       const orchestrator = createMockOrchestrator();
       registerRoutes(app, queue, { orchestrator });
 
-      // Just verify the route exists and responds with SSE headers
-      const res = await app.inject({ method: "GET", url: "/api/v1/events" });
-      // inject() closes immediately, so we just check the route was found (not 404)
-      expect(res.statusCode).not.toBe(404);
+      // Verify the route is registered by checking Fastify's route table
+      await app.ready();
+      const routes = app.printRoutes();
+      expect(routes).toContain("events");
     });
   });
 
