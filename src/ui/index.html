@@ -1368,6 +1368,240 @@
       );
     }
 
+    function OrchestratorPage({ onBack }) {
+      const [state, setState] = useState(null);
+      const [error, setError] = useState("");
+      const [notConfigured, setNotConfigured] = useState(false);
+      const [refreshFeedback, setRefreshFeedback] = useState(false);
+      const [expandedIssue, setExpandedIssue] = useState(null);
+      const [issueDetails, setIssueDetails] = useState({});
+      const lastFetchRef = useRef(0);
+
+      function formatUptime(ms) {
+        if (!ms || ms <= 0) return "0m";
+        const hours = Math.floor(ms / 3600000);
+        const mins = Math.floor((ms % 3600000) / 60000);
+        if (hours > 0) return hours + "h " + mins + "m";
+        return mins + "m";
+      }
+
+      function formatTokens(n) {
+        if (!n) return "0";
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+        if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+        return String(n);
+      }
+
+      async function loadState() {
+        const now = Date.now();
+        if (now - lastFetchRef.current < 1000) return;
+        lastFetchRef.current = now;
+        try {
+          const res = await fetch(API + "/api/v1/state");
+          if (res.status === 503) {
+            setNotConfigured(true);
+            return;
+          }
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          setNotConfigured(false);
+          setState(data);
+          setError("");
+        } catch (err) {
+          setError(err.message || String(err));
+        }
+      }
+
+      useEffect(() => {
+        let stopped = false;
+        loadState();
+        const id = setInterval(() => { if (!stopped) loadState(); }, 10000);
+        return () => { stopped = true; clearInterval(id); };
+      }, []);
+
+      useEffect(() => {
+        let es;
+        try {
+          es = new EventSource(API + "/api/v1/events");
+          es.onmessage = () => { loadState(); };
+        } catch {}
+        return () => { if (es) es.close(); };
+      }, []);
+
+      async function handleRefresh() {
+        try {
+          await fetch(API + "/api/v1/refresh", { method: "POST" });
+          setRefreshFeedback(true);
+          setTimeout(() => setRefreshFeedback(false), 1500);
+          loadState();
+        } catch (err) {
+          setError(err.message || String(err));
+        }
+      }
+
+      async function toggleIssueExpand(identifier) {
+        if (expandedIssue === identifier) {
+          setExpandedIssue(null);
+          return;
+        }
+        setExpandedIssue(identifier);
+        if (!issueDetails[identifier]) {
+          try {
+            const data = await fetchJson("/api/v1/issues/" + encodeURIComponent(identifier));
+            setIssueDetails((prev) => ({ ...prev, [identifier]: data }));
+          } catch {}
+        }
+      }
+
+      if (notConfigured) {
+        return (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <button onClick={onBack} className="rounded-lg border border-line px-3 py-2 text-sm">Back</button>
+              <h2 className="text-xl font-semibold">Orchestrator</h2>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel p-8 text-center">
+              <p className="text-lg text-muted">Orchestrator not configured</p>
+              <p className="text-sm text-muted mt-2">Add a tracker configuration to enable orchestration.</p>
+            </div>
+          </div>
+        );
+      }
+
+      const slots = state?.slots || { active: 0, max: 3 };
+      const running = state?.running || [];
+      const retryQueue = state?.retryQueue || [];
+      const totals = state?.totals || { dispatched: 0, completed: 0, failed: 0, tokens: { input: 0, output: 0, total: 0 } };
+      const slotPct = slots.max > 0 ? (slots.active / slots.max) * 100 : 0;
+      const slotColor = slots.active < slots.max ? "bg-content" : "bg-amber-400";
+
+      return (
+        <div className="space-y-5">
+          <div className="flex items-center gap-3">
+            <button onClick={onBack} className="rounded-lg border border-line px-3 py-2 text-sm">Back</button>
+            <h2 className="text-xl font-semibold">Orchestrator</h2>
+          </div>
+
+          {error && <p className="text-sm text-amber-300 rounded-lg border border-amber-400/30 bg-amber-900/20 px-4 py-2">Warning: {error}</p>}
+
+          <div className="rounded-2xl border border-line bg-panel p-5 shadow-glow">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <span className={"h-3 w-3 rounded-full " + (state?.status === "running" ? "bg-content" : "bg-red-400")}></span>
+                <span className="text-lg font-semibold">{state?.status === "running" ? "Running" : "Stopped"}</span>
+                <span className="mono text-sm text-muted">uptime {formatUptime(state?.uptimeMs)}</span>
+              </div>
+              <button
+                onClick={handleRefresh}
+                className={"rounded-lg px-4 py-2 text-sm font-semibold " + (refreshFeedback ? "bg-content text-black" : "bg-code text-black")}
+              >
+                {refreshFeedback ? "Triggered!" : "Refresh Now"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-line bg-panel p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Slot Utilization</h3>
+              <span className="mono text-sm text-muted">{slots.active}/{slots.max} slots active</span>
+            </div>
+            <div className="h-4 rounded-full bg-shell overflow-hidden">
+              <div className={"h-full rounded-full transition-all " + slotColor} style={{ width: slotPct + "%" }}></div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="rounded-xl border border-line bg-panel2 p-4 text-center">
+              <p className="mono text-2xl font-bold">{totals.dispatched}</p>
+              <p className="text-xs text-muted mt-1">Dispatched</p>
+            </div>
+            <div className="rounded-xl border border-line bg-panel2 p-4 text-center">
+              <p className="mono text-2xl font-bold text-content">{totals.completed}</p>
+              <p className="text-xs text-muted mt-1">Completed</p>
+            </div>
+            <div className="rounded-xl border border-line bg-panel2 p-4 text-center">
+              <p className="mono text-2xl font-bold text-red-400">{totals.failed}</p>
+              <p className="text-xs text-muted mt-1">Failed</p>
+            </div>
+            <div className="rounded-xl border border-line bg-panel2 p-4 text-center">
+              <p className="mono text-2xl font-bold text-code">{formatTokens(totals.tokens?.total)}</p>
+              <p className="text-xs text-muted mt-1">Total Tokens</p>
+            </div>
+          </div>
+
+          <section className="rounded-2xl border border-line bg-panel p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Running Issues</h3>
+              <span className="mono text-xs text-muted">{running.length}</span>
+            </div>
+            {running.length === 0 && <p className="text-sm text-muted">No agents running</p>}
+            {running.length > 0 && (
+              <div className="space-y-2">
+                {running.map((issue) => {
+                  const expanded = expandedIssue === issue.identifier;
+                  const details = issueDetails[issue.identifier];
+                  return (
+                    <div key={issue.issueId || issue.identifier}>
+                      <button
+                        onClick={() => toggleIssueExpand(issue.identifier)}
+                        className="w-full text-left rounded-xl border border-line bg-panel2 p-3 hover:border-code/60 transition"
+                      >
+                        <div className="grid grid-cols-4 gap-2 items-center text-sm">
+                          <span className="mono font-semibold">{issue.identifier}</span>
+                          <span className="text-muted">{issue.startedAt ? new Date(issue.startedAt).toLocaleTimeString() : "-"}</span>
+                          <span className="text-muted">Attempt {issue.attempt || 1}</span>
+                          <span className="mono text-code text-right">{formatTokens(issue.tokens?.total)} tokens</span>
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="rounded-b-xl border border-t-0 border-line bg-shell p-4 space-y-2 text-sm">
+                          <div className="grid grid-cols-3 gap-4">
+                            <div><span className="text-muted">Input:</span> <span className="mono">{formatTokens(issue.tokens?.input)}</span></div>
+                            <div><span className="text-muted">Output:</span> <span className="mono">{formatTokens(issue.tokens?.output)}</span></div>
+                            <div><span className="text-muted">Total:</span> <span className="mono">{formatTokens(issue.tokens?.total)}</span></div>
+                          </div>
+                          <div><span className="text-muted">Started:</span> <span className="mono text-xs">{issue.startedAt || "-"}</span></div>
+                          {details && details.session && (
+                            <div><span className="text-muted">Last activity:</span> <span className="mono text-xs">{details.session.lastActivityAt || "-"}</span></div>
+                          )}
+                          {details && details.metrics && (
+                            <div className="flex gap-4">
+                              <span className="text-muted">Total attempts: <span className="mono">{details.metrics.totalAttempts}</span></span>
+                              <span className="text-muted">Total runtime: <span className="mono">{Math.round((details.metrics.totalRuntime || 0) / 1000)}s</span></span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-line bg-panel p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Retry Queue</h3>
+              <span className="mono text-xs text-muted">{retryQueue.length}</span>
+            </div>
+            {retryQueue.length === 0 && <p className="text-sm text-muted">No issues in retry queue</p>}
+            {retryQueue.length > 0 && (
+              <div className="space-y-2">
+                {retryQueue.map((issue) => (
+                  <div key={issue.issueId || issue.identifier} className="rounded-xl border border-line bg-panel2 p-3">
+                    <div className="grid grid-cols-2 gap-2 items-center text-sm">
+                      <span className="mono font-semibold">{issue.identifier}</span>
+                      <span className="text-muted text-right">Attempt {issue.attempt || 1}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      );
+    }
+
     function App() {
       const [view, setView] = useState("dashboard");
       const [activePipelineId, setActivePipelineId] = useState(null);
@@ -1413,6 +1647,7 @@
                 <button onClick={() => setView("dashboard")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "dashboard" ? "bg-panel2 border border-line" : "text-muted"}`}>Dashboard</button>
                 <button onClick={() => setView("builder")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "builder" ? "bg-panel2 border border-line" : "text-muted"}`}>Builder</button>
                 <button onClick={() => setView("boards")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "boards" ? "bg-panel2 border border-line" : "text-muted"}`}>Boards</button>
+                <button onClick={() => setView("orchestrator")} className={`rounded-lg px-3 py-1.5 text-sm ${view === "orchestrator" ? "bg-panel2 border border-line" : "text-muted"}`}>Orchestrator</button>
               </div>
             </div>
           </header>
@@ -1449,6 +1684,12 @@
               <BoardView
                 onBack={() => setView("dashboard")}
                 onOpenExecution={openExecution}
+              />
+            )}
+
+            {view === "orchestrator" && (
+              <OrchestratorPage
+                onBack={() => setView("dashboard")}
               />
             )}
           </main>
