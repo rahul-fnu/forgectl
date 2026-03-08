@@ -114,7 +114,12 @@ Plans:
 - Unit tests: metric aggregation, API response shapes
 
 **Depends on:** Phase 5 (needs orchestrator state to expose)
-**Estimated plans:** 3
+**Plans:** 3 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — MetricsCollector, Logger enrichment, RunEvent SSE extension, dispatcher wiring
+- [ ] 06-02-PLAN.md — REST API routes (/api/v1/state, /issues, /refresh, /events), server wiring
+- [ ] 06-03-PLAN.md — Dashboard Orchestrator page with status, slots, issues, metrics, SSE
 
 ---
 
