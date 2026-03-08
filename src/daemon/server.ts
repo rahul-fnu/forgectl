@@ -14,8 +14,12 @@ import type { QueuedRun } from "./queue.js";
 import { BoardEngine } from "../board/engine.js";
 import { BoardStore, resolveBoardStateDir } from "../board/store.js";
 import { PipelineRunService } from "./pipeline-service.js";
+import { Orchestrator } from "../orchestrator/index.js";
+import { createTrackerAdapter } from "../tracker/registry.js";
+import { WorkspaceManager } from "../workspace/manager.js";
+import { loadWorkflowFile } from "../workflow/workflow-file.js";
 
-export async function startDaemon(port = 4856): Promise<void> {
+export async function startDaemon(port = 4856, enableOrchestrator = false): Promise<void> {
   const app = Fastify({ logger: false });
   await app.register(cors, { origin: true });
 
@@ -42,6 +46,32 @@ export async function startDaemon(port = 4856): Promise<void> {
   const schedulerInterval = setInterval(() => {
     void boardEngine.schedulerTick();
   }, config.board.scheduler_tick_seconds * 1000);
+
+  // Orchestrator initialization (when enabled or forced via CLI)
+  const daemonLogger = new Logger(false);
+  let orchestrator: Orchestrator | null = null;
+  const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
+  if (orchestratorEnabled && config.tracker) {
+    try {
+      const tracker = createTrackerAdapter(config.tracker);
+      const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
+      const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
+
+      // Load WORKFLOW.md from cwd if it exists, otherwise use default template
+      let promptTemplate = "Resolve the following issue: {{issue.title}}\n\n{{issue.description}}";
+      try {
+        const wf = await loadWorkflowFile(join(process.cwd(), "WORKFLOW.md"));
+        if (wf.promptTemplate) promptTemplate = wf.promptTemplate;
+      } catch {
+        /* no WORKFLOW.md, use default */
+      }
+
+      orchestrator = new Orchestrator({ tracker, workspaceManager, config, promptTemplate, logger: daemonLogger });
+      await orchestrator.start();
+    } catch (err) {
+      daemonLogger.error("daemon", `Failed to start orchestrator: ${err}`);
+    }
+  }
 
   // Serve dashboard UI — find the index.html from src/ui or bundled location
   const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
@@ -73,6 +103,9 @@ export async function startDaemon(port = 4856): Promise<void> {
 
   const shutdown = async () => {
     clearInterval(schedulerInterval);
+    if (orchestrator) {
+      await orchestrator.stop();
+    }
     removePid();
     await app.close();
     process.exit(0);

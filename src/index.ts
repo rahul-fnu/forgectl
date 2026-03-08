@@ -92,6 +92,40 @@ workflows
   .description("Show workflow definition")
   .action((name: string) => { workflowsCommand("show", name); });
 
+// forgectl orchestrate — start daemon with orchestration enabled
+program
+  .command("orchestrate")
+  .description("Start daemon with orchestration enabled (polls tracker, dispatches agents)")
+  .option("-p, --port <port>", "daemon port", "4856")
+  .option("--foreground", "Run in foreground (don't detach)")
+  .action(async (opts: { port: string; foreground?: boolean }) => {
+    const port = parseInt(opts.port, 10);
+
+    if (isDaemonRunning()) {
+      const pid = readPid();
+      console.log(`forgectl daemon is already running (PID ${pid})`);
+      return;
+    }
+
+    if (opts.foreground) {
+      const { startDaemon } = await import("./daemon/server.js");
+      await startDaemon(port, true);
+    } else {
+      const child = spawn(process.execPath, [process.argv[1], "orchestrate", "--foreground", "--port", String(port)], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      await new Promise(r => setTimeout(r, 500));
+      if (isDaemonRunning()) {
+        console.log(`forgectl orchestrator started on http://127.0.0.1:${port}`);
+      } else {
+        console.error("Failed to start orchestrator. Run with --foreground to see errors.");
+        process.exit(1);
+      }
+    }
+  });
+
 // forgectl up — start the daemon
 program
   .command("up")
