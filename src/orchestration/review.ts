@@ -3,8 +3,7 @@ import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { ExecutionResult } from "./single.js";
 import { prepareExecution } from "./single.js";
-import { getAgentAdapter } from "../agent/registry.js";
-import { invokeAgent } from "../agent/invoke.js";
+import { createAgentSession } from "../agent/session.js";
 import { buildPrompt } from "../context/prompt.js";
 import { createContainer, destroyContainer } from "../container/runner.js";
 import { getClaudeAuth } from "../auth/claude.js";
@@ -137,11 +136,15 @@ export async function executeReviewMode(
 
     const prompt = buildPrompt(plan);
     logger.info("agent", `Running ${plan.agent.type}...`);
-    const agentResult = await invokeAgent(container, adapter, prompt, agentOptions, agentEnv);
 
-    logger.info("agent", `Agent finished (exit ${agentResult.exitCode}, ${agentResult.durationMs}ms)`);
-    if (agentResult.exitCode !== 0) {
-      logger.warn("agent", `Agent exited with non-zero code: ${agentResult.exitCode}`);
+    // Use AgentSession for the implementer invocation
+    const implementerSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+    const agentResult = await implementerSession.invoke(prompt);
+    await implementerSession.close();
+
+    logger.info("agent", `Agent finished (status=${agentResult.status}, ${agentResult.durationMs}ms)`);
+    if (agentResult.status === "failed") {
+      logger.warn("agent", `Agent finished with status: ${agentResult.status}`);
       if (agentResult.stderr) {
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
@@ -171,7 +174,6 @@ export async function executeReviewMode(
     const maxRounds = plan.orchestration.review.maxRounds;
     const reviewAgent = plan.orchestration.review.agent;
     const reviewModel = plan.orchestration.review.model;
-    const reviewAdapter = getAgentAdapter(reviewAgent);
 
     // Build a resolved plan for reviewer containers (same image as implementer)
     const resolvedPlan = { ...plan, container: { ...plan.container, image: resolvedImage } };
@@ -202,14 +204,13 @@ export async function executeReviewMode(
       // Snapshot workspace from implementer to reviewer
       await snapshotWorkspace(container, reviewerContainer, plan.input.mountPath);
 
-      // Build and invoke reviewer
+      // Build and invoke reviewer via AgentSession
       const reviewPrompt = buildReviewPrompt(plan, round);
 
       logger.info("review", "Reviewer running...");
-      const reviewExecResult = await invokeAgent(
-        reviewerContainer, reviewAdapter, reviewPrompt, reviewOptions,
-        reviewerCreds.agentEnv, `review-${round}`
-      );
+      const reviewerSession = createAgentSession(reviewAgent, reviewerContainer, reviewOptions, reviewerCreds.agentEnv);
+      const reviewExecResult = await reviewerSession.invoke(reviewPrompt);
+      await reviewerSession.close();
 
       // Parse review result
       const parsed = parseReviewResult(reviewExecResult.stdout);
@@ -227,14 +228,14 @@ export async function executeReviewMode(
       logger.warn("review", `✗ Review round ${round}: issues found`);
 
       if (round < maxRounds) {
-        // Feed issues back to implementer
+        // Feed issues back to implementer via AgentSession
         logger.info("review", "Feeding issues to implementer...");
         const fixPrompt = buildFixPrompt(parsed.feedback, round);
 
         logger.info("agent", "Agent fixing review issues...");
-        await invokeAgent(
-          container, adapter, fixPrompt, agentOptions, agentEnv, `review-fix-${round}`
-        );
+        const fixSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+        await fixSession.invoke(fixPrompt);
+        await fixSession.close();
 
         // Re-validate after fix
         if (plan.validation.steps.length > 0) {

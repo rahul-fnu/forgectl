@@ -2,6 +2,7 @@ import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "./types.js";
 import { getAgentAdapter } from "./registry.js";
 import { OneShotSession } from "./oneshot-session.js";
+import { AppServerSession } from "./appserver-session.js";
 
 /**
  * Status of a completed agent invocation.
@@ -35,6 +36,8 @@ export interface AgentResult {
  */
 export interface AgentSessionOptions {
   onActivity?: () => void;
+  /** When true and agent is codex, use AppServerSession for persistent multi-turn sessions. */
+  useAppServer?: boolean;
 }
 
 /**
@@ -56,8 +59,8 @@ export interface AgentSession {
 
 /**
  * Factory function to create an agent session by type.
- * Currently returns OneShotSession for all known agent types.
- * AppServerSession support will be added in plan 02.
+ * Returns AppServerSession for codex when useAppServer is enabled,
+ * otherwise returns OneShotSession for all agent types.
  */
 export function createAgentSession(
   agentType: string,
@@ -66,6 +69,12 @@ export function createAgentSession(
   env: string[],
   sessionOptions?: AgentSessionOptions,
 ): AgentSession {
+  // AppServerSession is only supported for codex agent type
+  if (agentType === "codex" && sessionOptions?.useAppServer) {
+    return new AppServerSession(container, agentOptions, env, sessionOptions);
+  }
+
+  // Default: OneShotSession for all agent types (claude-code, codex without app-server)
   const adapter: AgentAdapter = getAgentAdapter(agentType);
   return new OneShotSession(container, adapter, agentOptions, env, sessionOptions);
 }

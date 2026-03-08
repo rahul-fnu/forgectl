@@ -3,7 +3,7 @@ import type { Logger } from "../logging/logger.js";
 import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
 import { getAgentAdapter } from "../agent/registry.js";
-import { invokeAgent } from "../agent/invoke.js";
+import { createAgentSession } from "../agent/session.js";
 import { buildPrompt } from "../context/prompt.js";
 import { createContainer } from "../container/runner.js";
 import { ensureImage } from "../container/builder.js";
@@ -142,15 +142,17 @@ export async function executeSingleAgent(
 
     const prompt = buildPrompt(plan);
     logger.info("agent", `Running ${plan.agent.type}...`);
-    const agentResult = await invokeAgent(
-      container, adapter, prompt, agentOptions, agentEnv
-    );
 
-    logger.info("agent", `Agent finished (exit ${agentResult.exitCode}, ${agentResult.durationMs}ms)`);
+    // Use AgentSession for the top-level invocation
+    const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+    const agentResult = await session.invoke(prompt);
+    await session.close();
+
+    logger.info("agent", `Agent finished (status=${agentResult.status}, ${agentResult.durationMs}ms)`);
     if (agentResult.stdout) logger.info("agent", `STDOUT: ${agentResult.stdout.slice(0, 2000)}`);
     if (agentResult.stderr) logger.info("agent", `STDERR: ${agentResult.stderr.slice(0, 2000)}`);
-    if (agentResult.exitCode !== 0) {
-      logger.warn("agent", `Agent exited with non-zero code: ${agentResult.exitCode}`);
+    if (agentResult.status === "failed") {
+      logger.warn("agent", `Agent finished with status: ${agentResult.status}`);
       if (agentResult.stderr) {
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
