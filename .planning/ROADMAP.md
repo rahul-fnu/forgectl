@@ -158,6 +158,11 @@ Plans:
 - Unit tests for wiring: watcher lifecycle, config merge at startup, reload propagation
 
 **Depends on:** Phase 3 (workflow components), Phase 5 (daemon/orchestrator)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — SlotManager.setMax, Orchestrator.applyConfig, mapFrontMatterToConfig, server.ts wiring, unit tests
+- [ ] 08-02-PLAN.md — Integration tests for full reload pipeline with agent adapter scenarios
 
 ---
 
@@ -172,7 +177,7 @@ Plans:
 | 5 | 4/4 | Complete   | 2026-03-08 |
 | 6 | 3/3 | Complete   | 2026-03-08 |
 | 7 | 3/3 | Complete   | 2026-03-08 |
-| 8 | Wire Workflow Runtime Integration | 0/0 | Pending |
+| 8 | Wire Workflow Runtime Integration | 2 plans | Pending |
 
 **Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5. Phase 8 is a gap closure phase (depends on 3, 5).
 
