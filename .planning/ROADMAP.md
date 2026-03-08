@@ -161,7 +161,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — SlotManager.setMax, Orchestrator.applyConfig, mapFrontMatterToConfig, server.ts wiring, unit tests
+- [x] 08-01-PLAN.md — SlotManager.setMax, Orchestrator.applyConfig, mapFrontMatterToConfig, server.ts wiring, unit tests
 - [ ] 08-02-PLAN.md — Integration tests for full reload pipeline with agent adapter scenarios
 
 ---

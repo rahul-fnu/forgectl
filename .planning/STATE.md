@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-03-08T20:02:08.151Z"
+status: in-progress
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-08T20:40:42Z"
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
-  total_plans: 21
-  completed_plans: 21
+  total_plans: 23
+  completed_plans: 22
 ---
 
 # Project State
 
 ## Current Phase
-Phase 7 — End-to-End Integration Demo (3/3 plans complete, verified)
+Phase 8 — Wire Workflow Runtime Integration (1/2 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -24,6 +24,7 @@ Phase 7 — End-to-End Integration Demo (3/3 plans complete, verified)
 - Phase 4: Agent Session Abstraction (3/3 plans, verified)
 - Phase 5: Orchestration State Machine (4/4 plans, verified)
 - Phase 6: Observability API Extensions (3/3 plans, verified)
+- Phase 7: End-to-End Integration Demo (3/3 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -47,6 +48,7 @@ Phase 7 — End-to-End Integration Demo (3/3 plans complete, verified)
 - 07-01: Validation loop, output collection, enriched write-back, auto-close in orchestrated worker and dispatcher (5 min)
 - 07-02: Backward compatibility tests and example WORKFLOW.md with full orchestrator config (3 min)
 - 07-03: E2E orchestration integration tests covering dispatch, retry, reconcile, slot limits (3 min)
+- 08-01: Hot-reload wiring for WORKFLOW.md via WorkflowFileWatcher, four-layer config merge, Orchestrator.applyConfig (4 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -116,10 +118,14 @@ Phase 7 — End-to-End Integration Demo (3/3 plans complete, verified)
 - validationConfig parameter threaded through executeWorker to buildOrchestratedRunPlan
 - Test dispatcher/reconciler directly rather than full Orchestrator class to avoid timer complexity
 - vi.waitFor pattern for fire-and-forget async dispatch assertions
+- mapFrontMatterToConfig combines polling and concurrency into single orchestrator key
+- Watcher only started when WORKFLOW.md exists (no crash on missing file)
+- watcher.stop() called before orchestrator.stop() in shutdown sequence
+- CLI flags layer is empty object placeholder for future CLI flag passthrough
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 07-03-PLAN.md
-- **Timestamp:** 2026-03-08T19:58:54Z
+- **Stopped at:** Completed 08-01-PLAN.md
+- **Timestamp:** 2026-03-08T20:40:42Z

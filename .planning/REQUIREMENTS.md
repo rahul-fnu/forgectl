@@ -175,9 +175,9 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 - [ ] WORKFLOW.md parsed: front matter extracted as config, body as prompt template
 - [ ] Prompt renders with issue data and attempt number
 - [ ] Unknown template variable causes render failure
-- [ ] Dynamic reload applies new poll interval without restart
-- [ ] Invalid WORKFLOW.md doesn't crash — keeps last good config
-- [ ] Config merge priority respected
+- [x] Dynamic reload applies new poll interval without restart
+- [x] Invalid WORKFLOW.md doesn't crash — keeps last good config
+- [x] Config merge priority respected
 
 ---
 
