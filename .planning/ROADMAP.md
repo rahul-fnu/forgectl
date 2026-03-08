@@ -135,7 +135,12 @@ Plans:
 - Demo script / documentation
 
 **Depends on:** Phase 5, 6 (all pieces must be integrated)
-**Estimated plans:** 3-4
+**Plans:** 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Worker integration: validation loop, output collection, enriched write-back, front matter schema
+- [ ] 07-02-PLAN.md — Backward compatibility tests, example WORKFLOW.md
+- [ ] 07-03-PLAN.md — E2E orchestration integration test, full regression verification
 
 ---
 
@@ -149,7 +154,7 @@ Plans:
 | 4 | 3/3 | Complete   | 2026-03-08 |
 | 5 | 4/4 | Complete   | 2026-03-08 |
 | 6 | 3/3 | Complete   | 2026-03-08 |
-| 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |
+| 7 | End-to-End Integration + Demo | 3 | Phase 5-6 |
 
 **Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5.
 
