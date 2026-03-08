@@ -96,7 +96,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — State types, config schema, slot manager, retry/backoff logic
+- [x] 05-01-PLAN.md — State types, config schema, slot manager, retry/backoff logic
 - [ ] 05-02-PLAN.md — Worker lifecycle, structured comment builder
 - [ ] 05-03-PLAN.md — Dispatcher, reconciler, scheduler (tick loop)
 - [ ] 05-04-PLAN.md — Orchestrator class, daemon integration, CLI command, startup recovery

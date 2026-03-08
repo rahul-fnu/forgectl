@@ -2,25 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-08T08:15:20.536Z"
+status: in-progress
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-08T08:37:19.000Z"
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 15
+  completed_plans: 12
 ---
 
 # Project State
 
 ## Current Phase
-Phase 4 — Agent Session Abstraction (3/3 plans complete)
+Phase 5 — Orchestration State Machine (1/4 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
 - Phase 2: Workspace Management (2/2 plans, verified)
 - Phase 3: Workflow Contract (2/2 plans, verified)
+- Phase 4: Agent Session Abstraction (3/3 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -34,6 +35,7 @@ Phase 4 — Agent Session Abstraction (3/3 plans complete)
 - 04-01: AgentSession interface with OneShotSession wrapping invokeAgent for unified session abstraction (2 min)
 - 04-02: AppServerSession with JSON-RPC over stdio for Codex app-server multi-turn sessions (4 min)
 - 04-03: Factory routing codex+appServer to AppServerSession, orchestration migrated to AgentSession, barrel export (3 min)
+- 05-01: Orchestrator state types, claim/release transitions, slot manager, retry/backoff, config schema (3 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -71,10 +73,13 @@ Phase 4 — Agent Session Abstraction (3/3 plans complete)
 - AppServerSession only for codex; claude-code always uses OneShotSession
 - Validation loop retains direct invokeAgent internally (separate concern)
 - Barrel export (src/agent/index.ts) as single entry point for agent subsystem
+- Mutable state object with pure transition functions for orchestrator (not class-based)
+- SlotManager takes running Map as parameter rather than holding state reference
+- classifyFailure maps completed to continuation, all others to error
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Phase 5 context gathered
-- **Timestamp:** 2026-03-08T07:58:27Z
+- **Stopped at:** Completed 05-01-PLAN.md
+- **Timestamp:** 2026-03-08T08:37:19Z
