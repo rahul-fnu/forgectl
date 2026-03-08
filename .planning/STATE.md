@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 2 verified and complete
-last_updated: "2026-03-08T07:03:46.034Z"
+status: in-progress
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-08T07:06:59Z"
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
 
 ## Current Phase
-Phase 3 — Workflow Contract (Plan 1/2 complete)
+Phase 3 — Workflow Contract (Plan 2/2 complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -29,6 +29,7 @@ Phase 3 — Workflow Contract (Plan 1/2 complete)
 - 02-01: Safety utilities, hook executor, workspace config schema (2 min)
 - 02-02: WorkspaceManager with create/reuse/remove/cleanup lifecycle and hook integration (2 min)
 - 03-01: WORKFLOW.md parser with front matter validation and strict template renderer (3 min)
+- 03-02: Config merge with four-layer priority and debounced file watcher (2 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -53,10 +54,13 @@ Phase 3 — Workflow Contract (Plan 1/2 complete)
 - Separate strict renderPromptTemplate instead of modifying existing expandTemplate
 - Tracker partial schema without superRefine for override contexts (front matter)
 - Arrays in templates serialize as JSON, null values as empty string
+- Sequential deepMerge for config layering (simple, correct, readable)
+- fs/promises watch() with AbortController for clean cancellation
+- Callback-based warning pattern so daemon routes to logger + SSE
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 03-01-PLAN.md
-- **Timestamp:** 2026-03-08T07:03:01Z
+- **Stopped at:** Completed 03-02-PLAN.md
+- **Timestamp:** 2026-03-08T07:06:59Z
