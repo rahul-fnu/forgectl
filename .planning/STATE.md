@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-08T20:40:42Z"
+status: complete
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-03-08T20:45:31.296Z"
 progress:
   total_phases: 8
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
 
 ## Current Phase
-Phase 8 — Wire Workflow Runtime Integration (1/2 plans complete)
+Phase 8 — Wire Workflow Runtime Integration (2/2 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -49,6 +49,7 @@ Phase 8 — Wire Workflow Runtime Integration (1/2 plans complete)
 - 07-02: Backward compatibility tests and example WORKFLOW.md with full orchestrator config (3 min)
 - 07-03: E2E orchestration integration tests covering dispatch, retry, reconcile, slot limits (3 min)
 - 08-01: Hot-reload wiring for WORKFLOW.md via WorkflowFileWatcher, four-layer config merge, Orchestrator.applyConfig (4 min)
+- 08-02: Integration tests for full reload pipeline with both agent types, sequential reloads, partial overrides (2 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -122,10 +123,11 @@ Phase 8 — Wire Workflow Runtime Integration (1/2 plans complete)
 - Watcher only started when WORKFLOW.md exists (no crash on missing file)
 - watcher.stop() called before orchestrator.stop() in shutdown sequence
 - CLI flags layer is empty object placeholder for future CLI flag passthrough
+- simulateReload helper mirrors server.ts onReload callback for test fidelity
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 08-01-PLAN.md
+- **Stopped at:** Completed 08-02-PLAN.md
 - **Timestamp:** 2026-03-08T20:40:42Z
