@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 4 context gathered
+stopped_at: Completed 04-02-PLAN.md
 last_updated: "2026-03-08T07:51:16.581Z"
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
 
 ## Current Phase
-Phase 4 — Agent Session Abstraction (Plan 1/3 complete)
+Phase 4 — Agent Session Abstraction (Plan 2/3 complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -32,6 +32,7 @@ Phase 4 — Agent Session Abstraction (Plan 1/3 complete)
 - 03-01: WORKFLOW.md parser with front matter validation and strict template renderer (3 min)
 - 03-02: Config merge with four-layer priority and debounced file watcher (2 min)
 - 04-01: AgentSession interface with OneShotSession wrapping invokeAgent for unified session abstraction (2 min)
+- 04-02: AppServerSession with JSON-RPC over stdio for Codex app-server multi-turn sessions (4 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -62,10 +63,13 @@ Phase 4 — Agent Session Abstraction (Plan 1/3 complete)
 - InvokeOptions type for per-call overrides separate from AgentSessionOptions
 - Activity callback fires once per invoke, not per line of output
 - TokenUsage defaults to zeros for one-shot CLI mode
+- Docker modem demuxStream with PassThrough targets for bidirectional exec streams
+- Token usage replaces from latest notification rather than accumulating deltas
+- Timeout resolves with status timeout rather than rejecting promise
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 04-01-PLAN.md
-- **Timestamp:** 2026-03-08T07:51:00Z
+- **Stopped at:** Completed 04-02-PLAN.md
+- **Timestamp:** 2026-03-08T07:52:32Z

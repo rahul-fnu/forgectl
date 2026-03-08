@@ -214,10 +214,10 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 ### Acceptance Criteria
 - [ ] AgentSession interface defined with invoke/isAlive/close
 - [ ] OneShotSession works for Claude Code (backward compatible)
-- [ ] AppServerSession handles JSON-RPC handshake with Codex
-- [ ] Multi-turn invocation reuses thread within session
-- [ ] Activity tracking updates lastActivityAt for stall detection
-- [ ] Session cleanup on worker exit (no zombie processes)
+- [x] AppServerSession handles JSON-RPC handshake with Codex
+- [x] Multi-turn invocation reuses thread within session
+- [x] Activity tracking updates lastActivityAt for stall detection
+- [x] Session cleanup on worker exit (no zombie processes)
 
 ---
 
