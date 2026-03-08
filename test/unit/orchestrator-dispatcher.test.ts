@@ -5,6 +5,7 @@ import type { ForgectlConfig, OrchestratorConfig } from "../../src/config/schema
 import type { WorkspaceManager } from "../../src/workspace/manager.js";
 import type { Logger } from "../../src/logging/logger.js";
 import { createState, claimIssue } from "../../src/orchestrator/state.js";
+import { MetricsCollector } from "../../src/orchestrator/metrics.js";
 
 // Mock worker module
 vi.mock("../../src/orchestrator/worker.js", () => ({
@@ -244,6 +245,7 @@ describe("dispatchIssue", () => {
   let config: ForgectlConfig;
   let logger: ReturnType<typeof makeLogger>;
   let workspaceManager: WorkspaceManager;
+  let metrics: MetricsCollector;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -252,24 +254,25 @@ describe("dispatchIssue", () => {
     config = makeConfig();
     logger = makeLogger();
     workspaceManager = {} as unknown as WorkspaceManager;
+    metrics = new MetricsCollector();
   });
 
   it("returns immediately if issue is already claimed", () => {
     const issue = makeIssue({ id: "a" });
     claimIssue(state, "a");
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(executeWorker).not.toHaveBeenCalled();
   });
 
   it("claims the issue on dispatch", () => {
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(state.claimed.has("a")).toBe(true);
   });
 
   it("calls updateLabels with in_progress_label (best-effort)", () => {
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["in-progress"], []);
   });
 
@@ -280,7 +283,7 @@ describe("dispatchIssue", () => {
     });
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(executeWorker).toHaveBeenCalled();
@@ -295,7 +298,7 @@ describe("dispatchIssue", () => {
     vi.mocked(classifyFailure).mockReturnValue("continuation");
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(tracker.postComment).toHaveBeenCalledWith("a", "Agent completed");
@@ -310,7 +313,7 @@ describe("dispatchIssue", () => {
     vi.mocked(classifyFailure).mockReturnValue("continuation");
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(scheduleRetry).toHaveBeenCalledWith(
@@ -333,7 +336,7 @@ describe("dispatchIssue", () => {
     state.retryAttempts.set("a", 5);
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(state.claimed.has("a")).toBe(false);
@@ -350,7 +353,7 @@ describe("dispatchIssue", () => {
     state.retryAttempts.set("a", 5);
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(tracker.updateLabels).toHaveBeenCalledWith("a", [], ["in-progress"]);
@@ -366,7 +369,7 @@ describe("dispatchIssue", () => {
     vi.mocked(calculateBackoff).mockReturnValue(20000);
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
       expect(scheduleRetry).toHaveBeenCalledWith(

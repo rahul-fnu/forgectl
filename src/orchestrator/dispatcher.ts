@@ -3,9 +3,11 @@ import type { OrchestratorState } from "./state.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
+import type { MetricsCollector } from "./metrics.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
 import { executeWorker } from "./worker.js";
+import { emitRunEvent } from "../logging/events.js";
 
 /**
  * Extract a numeric priority from issue priority field and labels.
@@ -113,6 +115,7 @@ export function dispatchIssue(
   workspaceManager: WorkspaceManager,
   promptTemplate: string,
   logger: Logger,
+  metrics: MetricsCollector,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -138,6 +141,7 @@ export function dispatchIssue(
     workspaceManager,
     promptTemplate,
     logger,
+    metrics,
   );
 }
 
@@ -149,6 +153,7 @@ async function executeWorkerAndHandle(
   workspaceManager: WorkspaceManager,
   promptTemplate: string,
   logger: Logger,
+  metrics: MetricsCollector,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -162,15 +167,25 @@ async function executeWorkerAndHandle(
   };
 
   // Add WorkerInfo to running map
+  const startedAt = Date.now();
   state.running.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
     issue,
     session: null as never, // Session is managed inside executeWorker
     cleanup: { tempDirs: [], secretCleanups: [] },
-    startedAt: Date.now(),
+    startedAt,
     lastActivityAt: Date.now(),
     attempt,
+  });
+
+  // Record dispatch metrics and emit SSE event
+  metrics.recordDispatch(issue.id, issue.identifier);
+  emitRunEvent({
+    runId: "orchestrator",
+    type: "dispatch",
+    timestamp: new Date().toISOString(),
+    data: { issueId: issue.id, identifier: issue.identifier, attempt },
   });
 
   try {
@@ -185,6 +200,7 @@ async function executeWorkerAndHandle(
     );
 
     // Remove from running
+    const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);
 
     // Post comment (best-effort)
@@ -195,6 +211,15 @@ async function executeWorkerAndHandle(
 
     // Classify failure and handle retry
     const failureType = classifyFailure(result.agentResult.status);
+
+    // Record completion metrics
+    const tokenUsage = result.agentResult.tokenUsage ?? { input: 0, output: 0, total: 0 };
+    metrics.recordCompletion(
+      issue.id,
+      tokenUsage,
+      runtimeMs,
+      failureType === "continuation" ? "completed" : "failed",
+    );
 
     if (failureType === "continuation") {
       // Re-dispatch after short delay
@@ -238,6 +263,13 @@ async function executeWorkerAndHandle(
           currentAttempts,
           orchestratorConfig.max_retry_backoff_ms,
         );
+        metrics.recordRetry(issue.id);
+        emitRunEvent({
+          runId: "orchestrator",
+          type: "orch_retry",
+          timestamp: new Date().toISOString(),
+          data: { issueId: issue.id, identifier: issue.identifier, attempt: currentAttempts, delayMs: delay },
+        });
         scheduleRetry(
           issue.id,
           delay,
@@ -250,7 +282,9 @@ async function executeWorkerAndHandle(
     }
   } catch (err) {
     // Unexpected error in worker
+    const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);
+    metrics.recordCompletion(issue.id, { input: 0, output: 0, total: 0 }, runtimeMs, "failed");
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("dispatcher", `Unexpected worker error for ${issue.identifier}: ${msg}`);
     releaseIssue(state, issue.id);

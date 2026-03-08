@@ -4,8 +4,9 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import { createState, type OrchestratorState, SlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
-import { startScheduler, type TickDeps } from "./scheduler.js";
+import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
+import { MetricsCollector } from "./metrics.js";
 
 export interface OrchestratorOptions {
   tracker: TrackerAdapter;
@@ -29,6 +30,9 @@ export class Orchestrator {
   private readonly logger: Logger;
   private stopScheduler: (() => void) | null = null;
   private running = false;
+  private metrics!: MetricsCollector;
+  private deps!: TickDeps;
+  private tickInProgress = false;
 
   constructor(opts: OrchestratorOptions) {
     this.tracker = opts.tracker;
@@ -44,6 +48,7 @@ export class Orchestrator {
   async start(): Promise<void> {
     this.state = createState();
     this.slotManager = new SlotManager(this.config.orchestrator.max_concurrent_agents);
+    this.metrics = new MetricsCollector();
 
     // Run startup recovery (errors are non-fatal)
     try {
@@ -54,7 +59,7 @@ export class Orchestrator {
     }
 
     // Start the scheduler tick loop
-    const deps: TickDeps = {
+    this.deps = {
       state: this.state,
       tracker: this.tracker,
       workspaceManager: this.workspaceManager,
@@ -62,8 +67,9 @@ export class Orchestrator {
       config: this.config,
       promptTemplate: this.promptTemplate,
       logger: this.logger,
+      metrics: this.metrics,
     };
-    this.stopScheduler = startScheduler(deps);
+    this.stopScheduler = startScheduler(this.deps);
 
     this.running = true;
     const max = this.config.orchestrator.max_concurrent_agents;
@@ -161,5 +167,28 @@ export class Orchestrator {
    */
   getState(): OrchestratorState {
     return this.state;
+  }
+
+  /**
+   * Returns the MetricsCollector for API/dashboard access.
+   */
+  getMetrics(): MetricsCollector {
+    return this.metrics;
+  }
+
+  /**
+   * Trigger an immediate tick (e.g., from API refresh endpoint).
+   * Uses a lock to prevent concurrent tick execution.
+   * Returns true if a tick was executed, false if one was already in progress.
+   */
+  async triggerTick(): Promise<boolean> {
+    if (this.tickInProgress) return false;
+    this.tickInProgress = true;
+    try {
+      await tick(this.deps);
+    } finally {
+      this.tickInProgress = false;
+    }
+    return true;
   }
 }

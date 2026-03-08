@@ -5,6 +5,7 @@ import type { ForgectlConfig } from "../../src/config/schema.js";
 import type { WorkspaceManager } from "../../src/workspace/manager.js";
 import type { Logger } from "../../src/logging/logger.js";
 import { createState, SlotManager } from "../../src/orchestrator/state.js";
+import { MetricsCollector } from "../../src/orchestrator/metrics.js";
 
 // Mock reconciler
 vi.mock("../../src/orchestrator/reconciler.js", () => ({
@@ -90,6 +91,7 @@ function makeDeps(overrides: Partial<TickDeps> = {}): TickDeps {
     } as unknown as ForgectlConfig,
     promptTemplate: "Fix {{issue_identifier}}",
     logger: makeLogger(),
+    metrics: new MetricsCollector(),
     ...overrides,
   };
 }

@@ -4,6 +4,7 @@ import type { TrackerAdapter } from "../tracker/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
+import type { MetricsCollector } from "./metrics.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue } from "./dispatcher.js";
 
@@ -18,6 +19,7 @@ export interface TickDeps {
   config: ForgectlConfig;
   promptTemplate: string;
   logger: Logger;
+  metrics: MetricsCollector;
 }
 
 /**
@@ -26,7 +28,7 @@ export interface TickDeps {
  * Sequence: reconcile -> fetch candidates -> filter -> sort -> dispatch
  */
 export async function tick(deps: TickDeps): Promise<void> {
-  const { state, tracker, workspaceManager, slotManager, config, promptTemplate, logger } = deps;
+  const { state, tracker, workspaceManager, slotManager, config, promptTemplate, logger, metrics } = deps;
 
   // Step 1: Reconcile running workers
   try {
@@ -65,7 +67,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 7: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics);
   }
 }
 
