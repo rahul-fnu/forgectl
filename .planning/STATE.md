@@ -3,25 +3,26 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-03-08T08:46:30.000Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-03-08T08:51:30.000Z"
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
 
 ## Current Phase
-Phase 5 — Orchestration State Machine (3/4 plans complete)
+Phase 5 — Orchestration State Machine (4/4 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
 - Phase 2: Workspace Management (2/2 plans, verified)
 - Phase 3: Workflow Contract (2/2 plans, verified)
 - Phase 4: Agent Session Abstraction (3/3 plans, verified)
+- Phase 5: Orchestration State Machine (4/4 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -38,6 +39,7 @@ Phase 5 — Orchestration State Machine (3/4 plans complete)
 - 05-01: Orchestrator state types, claim/release transitions, slot manager, retry/backoff, config schema (3 min)
 - 05-02: Worker lifecycle with buildOrchestratedRunPlan, executeWorker, and structured comment builder (4 min)
 - 05-03: Dispatcher, reconciler, and scheduler for orchestrator runtime with 51 tests (3 min)
+- 05-04: Orchestrator integration with startup recovery, graceful shutdown, daemon wiring, CLI command (3 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -85,10 +87,15 @@ Phase 5 — Orchestration State Machine (3/4 plans complete)
 - Fire-and-forget dispatch pattern with void async for non-blocking worker start
 - Separate reconciliation and stall detection loops with per-worker error isolation
 - setTimeout chain (not setInterval) prevents tick overlap in scheduler
+- Orchestrator constructor takes deps, start() creates fresh state (enables clean restart)
+- Startup recovery is non-fatal: logs warning and continues if tracker fetch fails
+- Drain uses Promise.race against drain_timeout_ms, then force-kills remaining
+- Label removal on shutdown uses Promise.allSettled to tolerate individual failures
+- startDaemon accepts enableOrchestrator parameter for CLI command to force-enable
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 05-03-PLAN.md
-- **Timestamp:** 2026-03-08T08:46:30Z
+- **Stopped at:** Completed 05-04-PLAN.md
+- **Timestamp:** 2026-03-08T08:51:30Z
