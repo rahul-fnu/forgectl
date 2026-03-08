@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: unknown
 stopped_at: Phase 2 verified and complete
-last_updated: "2026-03-07T22:10:00Z"
+last_updated: "2026-03-08T07:03:46.034Z"
 progress:
   total_phases: 7
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
 ---
 
 # Project State
 
 ## Current Phase
-Phase 2 — VERIFIED AND COMPLETE
+Phase 3 — Workflow Contract (Plan 1/2 complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -28,6 +28,7 @@ Phase 2 — VERIFIED AND COMPLETE
 - 01-04: Registry wiring with GitHub and Notion factories, barrel export, integration tests (2 min)
 - 02-01: Safety utilities, hook executor, workspace config schema (2 min)
 - 02-02: WorkspaceManager with create/reuse/remove/cleanup lifecycle and hook integration (2 min)
+- 03-01: WORKFLOW.md parser with front matter validation and strict template renderer (3 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -49,10 +50,13 @@ Phase 2 — VERIFIED AND COMPLETE
 - Callback-based execFile for cleaner error field access (killed, code, stderr)
 - stat-then-mkdir pattern for workspace creation detection (avoids TOCTOU)
 - Non-critical hooks (after_run, before_remove) catch errors and log warnings
+- Separate strict renderPromptTemplate instead of modifying existing expandTemplate
+- Tracker partial schema without superRefine for override contexts (front matter)
+- Arrays in templates serialize as JSON, null values as empty string
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Phase 2 verified and complete
-- **Timestamp:** 2026-03-07T22:10:00Z
+- **Stopped at:** Completed 03-01-PLAN.md
+- **Timestamp:** 2026-03-08T07:03:01Z
