@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-03-08T08:38:30.000Z"
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-03-08T08:46:30.000Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
 
 ## Current Phase
-Phase 5 — Orchestration State Machine (2/4 plans complete)
+Phase 5 — Orchestration State Machine (3/4 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -37,6 +37,7 @@ Phase 5 — Orchestration State Machine (2/4 plans complete)
 - 04-03: Factory routing codex+appServer to AppServerSession, orchestration migrated to AgentSession, barrel export (3 min)
 - 05-01: Orchestrator state types, claim/release transitions, slot manager, retry/backoff, config schema (3 min)
 - 05-02: Worker lifecycle with buildOrchestratedRunPlan, executeWorker, and structured comment builder (4 min)
+- 05-03: Dispatcher, reconciler, and scheduler for orchestrator runtime with 51 tests (3 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -80,10 +81,14 @@ Phase 5 — Orchestration State Machine (2/4 plans complete)
 - Empty tempDirs in CleanupContext to preserve workspace while destroying container
 - CommitConfig field mapping (include_task -> includeTask) inline in buildOrchestratedRunPlan
 - Before hook failure returns immediate failure result without agent invocation
+- Priority extraction re-implemented locally in dispatcher (not coupled to github adapter)
+- Fire-and-forget dispatch pattern with void async for non-blocking worker start
+- Separate reconciliation and stall detection loops with per-worker error isolation
+- setTimeout chain (not setInterval) prevents tick overlap in scheduler
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 05-02-PLAN.md
-- **Timestamp:** 2026-03-08T08:38:30Z
+- **Stopped at:** Completed 05-03-PLAN.md
+- **Timestamp:** 2026-03-08T08:46:30Z
