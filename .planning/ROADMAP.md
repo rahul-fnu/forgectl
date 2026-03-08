@@ -93,7 +93,13 @@ Plans:
 - Unit tests: state transitions, dispatch priority, concurrency, backoff, reconciliation
 
 **Depends on:** Phase 1, 2, 3, 4 (uses tracker, workspace, workflow, sessions)
-**Estimated plans:** 4-5
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — State types, config schema, slot manager, retry/backoff logic
+- [ ] 05-02-PLAN.md — Worker lifecycle, structured comment builder
+- [ ] 05-03-PLAN.md — Dispatcher, reconciler, scheduler (tick loop)
+- [ ] 05-04-PLAN.md — Orchestrator class, daemon integration, CLI command, startup recovery
 
 ---
 
@@ -136,7 +142,7 @@ Plans:
 | 2 | 2/2 | Complete   | 2026-03-07 |
 | 3 | 2/2 | Complete   | 2026-03-08 |
 | 4 | 3/3 | Complete   | 2026-03-08 |
-| 5 | Orchestration State Machine | 4-5 | Phase 1-4 |
+| 5 | Orchestration State Machine | 4 | Phase 1-4 |
 | 6 | Observability + API Extensions | 3 | Phase 5 |
 | 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |
 
