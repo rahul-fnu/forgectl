@@ -55,6 +55,19 @@ export const WorkflowSchema = z.object({
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
 
+export const OrchestratorConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  max_concurrent_agents: z.number().int().positive().default(3),
+  poll_interval_ms: z.number().int().positive().default(30000),
+  stall_timeout_ms: z.number().int().positive().default(600000),
+  max_retries: z.number().int().min(0).default(5),
+  max_retry_backoff_ms: z.number().int().positive().default(300000),
+  drain_timeout_ms: z.number().int().positive().default(30000),
+  continuation_delay_ms: z.number().int().min(0).default(1000),
+  in_progress_label: z.string().default("in-progress"),
+});
+export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
+
 export const ConfigSchema = z.object({
   agent: z.object({
     type: AgentType.default("claude-code"),
@@ -115,6 +128,8 @@ export const ConfigSchema = z.object({
   workspace: z.lazy(() => WorkspaceConfigSchema).optional(),
 
   tracker: z.lazy(() => TrackerConfigSchema).optional(),
+
+  orchestrator: OrchestratorConfigSchema.default({}),
 
   board: z.object({
     state_dir: z.string().default("~/.forgectl/board"),
