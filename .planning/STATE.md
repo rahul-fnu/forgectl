@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-08T07:51:16.581Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-03-08T07:58:27Z"
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
 
 ## Current Phase
-Phase 4 — Agent Session Abstraction (Plan 2/3 complete)
+Phase 4 — Agent Session Abstraction (3/3 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -33,6 +33,7 @@ Phase 4 — Agent Session Abstraction (Plan 2/3 complete)
 - 03-02: Config merge with four-layer priority and debounced file watcher (2 min)
 - 04-01: AgentSession interface with OneShotSession wrapping invokeAgent for unified session abstraction (2 min)
 - 04-02: AppServerSession with JSON-RPC over stdio for Codex app-server multi-turn sessions (4 min)
+- 04-03: Factory routing codex+appServer to AppServerSession, orchestration migrated to AgentSession, barrel export (3 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -66,10 +67,14 @@ Phase 4 — Agent Session Abstraction (Plan 2/3 complete)
 - Docker modem demuxStream with PassThrough targets for bidirectional exec streams
 - Token usage replaces from latest notification rather than accumulating deltas
 - Timeout resolves with status timeout rather than rejecting promise
+- useAppServer as optional field on AgentSessionOptions for factory routing
+- AppServerSession only for codex; claude-code always uses OneShotSession
+- Validation loop retains direct invokeAgent internally (separate concern)
+- Barrel export (src/agent/index.ts) as single entry point for agent subsystem
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 04-02-PLAN.md
-- **Timestamp:** 2026-03-08T07:52:32Z
+- **Stopped at:** Completed 04-03-PLAN.md
+- **Timestamp:** 2026-03-08T07:58:27Z
