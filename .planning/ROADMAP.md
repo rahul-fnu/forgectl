@@ -114,7 +114,7 @@ Plans:
 - Unit tests: metric aggregation, API response shapes
 
 **Depends on:** Phase 5 (needs orchestrator state to expose)
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 06-01-PLAN.md — MetricsCollector, Logger enrichment, RunEvent SSE extension, dispatcher wiring
@@ -148,7 +148,7 @@ Plans:
 | 3 | 2/2 | Complete   | 2026-03-08 |
 | 4 | 3/3 | Complete   | 2026-03-08 |
 | 5 | 4/4 | Complete   | 2026-03-08 |
-| 6 | 1/3 | In Progress|  |
+| 6 | 3/3 | Complete   | 2026-03-08 |
 | 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |
 
 **Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5.
