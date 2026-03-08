@@ -104,6 +104,53 @@ describe("WorkflowFrontMatterSchema", () => {
     });
     expect(result.agent?.type).toBe("claude-code");
   });
+
+  it("accepts validation section with steps and on_failure", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      validation: {
+        steps: [{ name: "test", command: "npm test" }],
+        on_failure: "abandon",
+      },
+    });
+    expect(result.validation?.steps).toHaveLength(1);
+    expect(result.validation?.steps[0].name).toBe("test");
+    expect(result.validation?.steps[0].command).toBe("npm test");
+    expect(result.validation?.on_failure).toBe("abandon");
+  });
+
+  it("defaults validation steps to empty array and on_failure to abandon", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      validation: {},
+    });
+    expect(result.validation?.steps).toEqual([]);
+    expect(result.validation?.on_failure).toBe("abandon");
+  });
+
+  it("rejects validation with invalid step (missing command)", () => {
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({
+        validation: {
+          steps: [{ name: "test" }],
+        },
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("accepts validation with multiple steps and retries", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      validation: {
+        steps: [
+          { name: "typecheck", command: "npm run typecheck", retries: 2 },
+          { name: "test", command: "npm test", retries: 5 },
+        ],
+        on_failure: "output-wip",
+      },
+    });
+    expect(result.validation?.steps).toHaveLength(2);
+    expect(result.validation?.steps[0].retries).toBe(2);
+    expect(result.validation?.steps[1].retries).toBe(5);
+    expect(result.validation?.on_failure).toBe("output-wip");
+  });
 });
 
 describe("loadWorkflowFile", () => {

@@ -212,6 +212,34 @@ describe("buildOrchestratedRunPlan", () => {
     const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
     expect(plan.orchestration.mode).toBe("single");
   });
+
+  it("populates validation steps from validationConfig", () => {
+    const validationConfig = {
+      steps: [{ name: "test", command: "npm test", retries: 3, description: "" }],
+      on_failure: "abandon" as const,
+    };
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1, validationConfig);
+    expect(plan.validation.steps).toHaveLength(1);
+    expect(plan.validation.steps[0].name).toBe("test");
+    expect(plan.validation.steps[0].command).toBe("npm test");
+    expect(plan.validation.onFailure).toBe("abandon");
+  });
+
+  it("keeps empty validation steps when no validationConfig", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.validation.steps).toEqual([]);
+    expect(plan.validation.onFailure).toBe("abandon");
+  });
+
+  it("populates workflow.validation from validationConfig", () => {
+    const validationConfig = {
+      steps: [{ name: "lint", command: "npm run lint", retries: 2, description: "run linter" }],
+      on_failure: "output-wip" as const,
+    };
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1, validationConfig);
+    expect(plan.workflow.validation.steps).toHaveLength(1);
+    expect(plan.workflow.validation.on_failure).toBe("output-wip");
+  });
 });
 
 describe("executeWorker", () => {
