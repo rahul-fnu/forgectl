@@ -118,10 +118,20 @@ vi.mock("../../src/agent/registry.js", () => ({
   })),
 }));
 
+vi.mock("../../src/validation/runner.js", () => ({
+  runValidationLoop: vi.fn(),
+}));
+
+vi.mock("../../src/output/git.js", () => ({
+  collectGitOutput: vi.fn(),
+}));
+
 const { buildOrchestratedRunPlan, executeWorker } = await import("../../src/orchestrator/worker.js");
 const { prepareExecution } = await import("../../src/orchestration/single.js");
 const { createAgentSession } = await import("../../src/agent/session.js");
 const { cleanupRun } = await import("../../src/container/cleanup.js");
+const { runValidationLoop } = await import("../../src/validation/runner.js");
+const { collectGitOutput } = await import("../../src/output/git.js");
 
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
@@ -354,5 +364,99 @@ describe("executeWorker", () => {
     const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
     expect(result.agentResult.status).toBe("failed");
     expect(result.comment).toContain("Fail");
+  });
+
+  it("calls runValidationLoop when plan has validation steps", async () => {
+    const validationResult = {
+      passed: true,
+      totalAttempts: 1,
+      stepResults: [{ name: "test", passed: true, attempts: 1 }],
+    };
+    vi.mocked(runValidationLoop).mockResolvedValue(validationResult);
+    vi.mocked(collectGitOutput).mockResolvedValue({
+      mode: "git" as const,
+      branch: "forge/issue-42/abc",
+      sha: "abc123",
+      filesChanged: 2,
+      insertions: 10,
+      deletions: 3,
+    });
+
+    const validationConfig = {
+      steps: [{ name: "test", command: "npm test", retries: 3, description: "" }],
+      on_failure: "abandon" as const,
+    };
+
+    const result = await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, validationConfig,
+    );
+
+    expect(runValidationLoop).toHaveBeenCalled();
+    expect(result.validationResult).toEqual(validationResult);
+  });
+
+  it("does NOT call runValidationLoop when no validation steps", async () => {
+    vi.mocked(collectGitOutput).mockResolvedValue({
+      mode: "git" as const,
+      branch: "forge/issue-42/abc",
+      sha: "abc123",
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
+
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(runValidationLoop).not.toHaveBeenCalled();
+  });
+
+  it("calls collectGitOutput and includes branch in WorkerResult", async () => {
+    vi.mocked(collectGitOutput).mockResolvedValue({
+      mode: "git" as const,
+      branch: "forge/issue-42/abc",
+      sha: "abc123",
+      filesChanged: 2,
+      insertions: 10,
+      deletions: 3,
+    });
+
+    const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(collectGitOutput).toHaveBeenCalled();
+    expect(result.branch).toBe("forge/issue-42/abc");
+    expect(result.comment).toContain("forge/issue-42/abc");
+  });
+
+  it("keeps container alive until after validation and output collection", async () => {
+    const callOrder: string[] = [];
+
+    vi.mocked(collectGitOutput).mockImplementation(async () => {
+      callOrder.push("collectGitOutput");
+      return { mode: "git" as const, branch: "b", sha: "s", filesChanged: 0, insertions: 0, deletions: 0 };
+    });
+    mockSession.close.mockImplementation(async () => {
+      callOrder.push("session.close");
+    });
+    vi.mocked(cleanupRun).mockImplementation(async () => {
+      callOrder.push("cleanupRun");
+    });
+
+    const validationConfig = {
+      steps: [{ name: "test", command: "npm test", retries: 3, description: "" }],
+      on_failure: "abandon" as const,
+    };
+    vi.mocked(runValidationLoop).mockImplementation(async () => {
+      callOrder.push("runValidationLoop");
+      return { passed: true, totalAttempts: 1, stepResults: [] };
+    });
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, validationConfig,
+    );
+
+    // validation and output collection must happen before session close and cleanup
+    expect(callOrder.indexOf("runValidationLoop")).toBeLessThan(callOrder.indexOf("session.close"));
+    expect(callOrder.indexOf("collectGitOutput")).toBeLessThan(callOrder.indexOf("session.close"));
+    expect(callOrder.indexOf("session.close")).toBeLessThan(callOrder.indexOf("cleanupRun"));
   });
 });

@@ -380,4 +380,63 @@ describe("dispatchIssue", () => {
       );
     });
   });
+
+  it("calls tracker.updateState('closed') when auto_close=true and agent completed", async () => {
+    vi.mocked(executeWorker).mockResolvedValue({
+      agentResult: { status: "completed", tokenUsage: { input: 0, output: 0, total: 0 }, durationMs: 100, turnCount: 1, stdout: "", stderr: "" },
+      comment: "done",
+    });
+    vi.mocked(classifyFailure).mockReturnValue("continuation");
+
+    const configWithAutoClose = makeConfig();
+    (configWithAutoClose.tracker as any).auto_close = true;
+
+    const issue = makeIssue({ id: "a" });
+    dispatchIssue(issue, state, tracker, configWithAutoClose, workspaceManager, "prompt", logger, metrics);
+
+    await vi.waitFor(() => {
+      expect(tracker.updateState).toHaveBeenCalledWith("a", "closed");
+    });
+  });
+
+  it("calls tracker.updateLabels with done_label when configured and agent completed", async () => {
+    vi.mocked(executeWorker).mockResolvedValue({
+      agentResult: { status: "completed", tokenUsage: { input: 0, output: 0, total: 0 }, durationMs: 100, turnCount: 1, stdout: "", stderr: "" },
+      comment: "done",
+    });
+    vi.mocked(classifyFailure).mockReturnValue("continuation");
+
+    const configWithDoneLabel = makeConfig();
+    (configWithDoneLabel.tracker as any).done_label = "done";
+
+    const issue = makeIssue({ id: "a" });
+    dispatchIssue(issue, state, tracker, configWithDoneLabel, workspaceManager, "prompt", logger, metrics);
+
+    await vi.waitFor(() => {
+      expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["done"], ["in-progress"]);
+    });
+  });
+
+  it("does NOT auto-close on agent failure", async () => {
+    vi.mocked(executeWorker).mockResolvedValue({
+      agentResult: { status: "failed", tokenUsage: { input: 0, output: 0, total: 0 }, durationMs: 100, turnCount: 1, stdout: "", stderr: "" },
+      comment: "failed",
+    });
+    vi.mocked(classifyFailure).mockReturnValue("error");
+
+    const configWithAutoClose = makeConfig();
+    (configWithAutoClose.tracker as any).auto_close = true;
+    (configWithAutoClose.tracker as any).done_label = "done";
+
+    const issue = makeIssue({ id: "a" });
+    dispatchIssue(issue, state, tracker, configWithAutoClose, workspaceManager, "prompt", logger, metrics);
+
+    await vi.waitFor(() => {
+      expect(tracker.postComment).toHaveBeenCalled();
+    });
+
+    // Give time for any async calls to complete
+    await new Promise(r => setTimeout(r, 50));
+    expect(tracker.updateState).not.toHaveBeenCalledWith("a", "closed");
+  });
 });
