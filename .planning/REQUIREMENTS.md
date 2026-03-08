@@ -16,7 +16,7 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 - [x] Support `$VAR` indirection for API tokens (resolve from environment)
 - Adapter validates its own config at startup (missing token, missing project, etc.)
 
-### R1.2: GitHub Issues Adapter
+### R1.2: GitHub Issues Adapter *(Phase 9 — gap closure)*
 - Poll `GET /repos/{owner}/{repo}/issues` with `state`, `since`, `labels`, `sort` parameters
 - Implement conditional requests with ETag caching (304 = free, no rate limit cost)
 - Delta polling: track `updated_at` of most recent issue, use `since` for subsequent polls
@@ -271,7 +271,7 @@ Working demo: GitHub issue → dispatch agent → validate → report back.
 - Validation runs (if configured): tests, lint, typecheck
 - On validation failure: feed errors to agent, retry
 
-### R7.3: Completion
+### R7.3: Completion *(Phase 9 — gap closure)*
 - Agent completes work → commits to branch in workspace
 - Daemon posts comment on GitHub issue with results summary
 - Optionally: creates PR, adds labels, closes issue

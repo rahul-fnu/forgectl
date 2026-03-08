@@ -166,6 +166,20 @@ Plans:
 
 ---
 
+## Phase 9: Fix GitHub Adapter ID/Identifier Mismatch
+**Goal:** Fix the cross-phase wiring bug where the orchestrator passes `issue.id` (GitHub internal numeric ID) to tracker methods, but the GitHub adapter expects the `identifier` ("#N" format), causing 404s on all mutation API calls.
+**Requirements:** R1.2, R7.3
+**Gap Closure:** Closes gaps from v1.0 audit (2 partial requirements, 1 critical integration gap, 1 broken E2E flow)
+**Deliverables:**
+- Fix GitHub adapter to use issue number as `id` (`id: String(ghIssue.number)`) so orchestrator's `issue.id` matches GitHub API expectations
+- Update GitHub adapter unit tests to verify correct ID format throughout
+- Add cross-phase integration test: orchestrator → GitHub adapter mutation calls (postComment, updateState, updateLabels)
+- Verify E2E flow: GitHub issue → dispatch → agent → comment → auto-close
+
+**Depends on:** Phase 1 (GitHub adapter), Phase 5 (Orchestrator)
+
+---
+
 ## Phase Summary
 
 | Phase | Name | Plans | Depends On |
@@ -178,6 +192,7 @@ Plans:
 | 6 | 3/3 | Complete   | 2026-03-08 |
 | 7 | 3/3 | Complete   | 2026-03-08 |
 | 8 | Wire Workflow Runtime Integration | 2 plans | Pending |
+| 9 | Fix GitHub Adapter ID/Identifier Mismatch | 0 plans | Pending |
 
 **Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5. Phase 8 is a gap closure phase (depends on 3, 5).
 
