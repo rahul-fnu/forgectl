@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { RunPlan } from "../workflow/types.js";
 import type { TrackerIssue } from "../tracker/types.js";
-import type { ForgectlConfig } from "../config/schema.js";
+import type { ForgectlConfig, ValidationStep } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { AgentResult } from "../agent/session.js";
 import type { ExecutionResult } from "../orchestration/single.js";
@@ -30,6 +30,7 @@ export function buildOrchestratedRunPlan(
   workspacePath: string,
   promptTemplate: string,
   attempt: number,
+  validationConfig?: { steps: ValidationStep[]; on_failure: string },
 ): RunPlan {
   const runId = crypto.randomUUID();
 
@@ -55,7 +56,10 @@ export function buildOrchestratedRunPlan(
       input: { mode: "repo", mountPath: "/workspace" },
       tools: [],
       system: "",
-      validation: { steps: [], on_failure: "abandon" },
+      validation: {
+        steps: validationConfig?.steps ?? [],
+        on_failure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
+      },
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
     },
@@ -89,8 +93,8 @@ export function buildOrchestratedRunPlan(
       inject: [],
     },
     validation: {
-      steps: [],
-      onFailure: "abandon",
+      steps: validationConfig?.steps ?? [],
+      onFailure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
     },
     output: {
       mode: "git",

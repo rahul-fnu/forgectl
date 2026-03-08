@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
-import { AgentType } from "../config/schema.js";
+import { AgentType, ValidationStepSchema, FailureAction } from "../config/schema.js";
 import type { WorkflowFileConfig, ValidatedWorkflowFile } from "./types.js";
 import yaml from "js-yaml";
 
@@ -70,6 +70,12 @@ export const WorkflowFrontMatterSchema = z
           .string()
           .regex(/^\d+(s|m|h)$/, "Must be a duration like 30s, 5m, 1h")
           .optional(),
+      })
+      .optional(),
+    validation: z
+      .object({
+        steps: z.array(ValidationStepSchema).default([]),
+        on_failure: FailureAction.default("abandon"),
       })
       .optional(),
   })

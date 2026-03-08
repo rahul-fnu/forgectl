@@ -43,6 +43,10 @@ export interface WorkflowFileConfig {
     model?: string;
     timeout?: string;
   };
+  validation?: {
+    steps: ValidationStep[];
+    on_failure: "abandon" | "output-wip" | "pause";
+  };
 }
 
 /**
