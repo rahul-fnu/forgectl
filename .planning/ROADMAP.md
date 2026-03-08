@@ -144,6 +144,23 @@ Plans:
 
 ---
 
+## Phase 8: Wire Workflow Runtime Integration
+**Goal:** Wire WorkflowFileWatcher and mergeWorkflowConfig into the daemon so WORKFLOW.md changes are hot-reloaded and front matter config is merged at startup. Verify integration works with both Claude Code and Codex agent adapters (Codex mocked).
+**Requirements:** R4.3, R4.4
+**Gap Closure:** Closes gaps from v1.0 audit (2 partial requirements, 2 integration gaps)
+**Deliverables:**
+- Wire `WorkflowFileWatcher` into daemon startup (`server.ts`) — start watching on daemon up, stop on shutdown
+- Wire `mergeWorkflowConfig` into config loading path — apply 4-layer merge (defaults → forgectl.yaml → WORKFLOW.md → CLI flags)
+- Pass merged config to orchestrator instead of raw partial extracts
+- On reload: re-merge config, update orchestrator settings (poll interval, concurrency, prompt template, hooks)
+- Integration tests with Claude Code adapter (real adapter, mocked container)
+- Integration tests with Codex adapter (fully mocked — no real Codex CLI calls)
+- Unit tests for wiring: watcher lifecycle, config merge at startup, reload propagation
+
+**Depends on:** Phase 3 (workflow components), Phase 5 (daemon/orchestrator)
+
+---
+
 ## Phase Summary
 
 | Phase | Name | Plans | Depends On |
@@ -155,8 +172,9 @@ Plans:
 | 5 | 4/4 | Complete   | 2026-03-08 |
 | 6 | 3/3 | Complete   | 2026-03-08 |
 | 7 | 3/3 | Complete   | 2026-03-08 |
+| 8 | Wire Workflow Runtime Integration | 0/0 | Pending |
 
-**Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5.
+**Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5. Phase 8 is a gap closure phase (depends on 3, 5).
 
 ---
 *Generated: 2026-03-07*
