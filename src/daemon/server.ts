@@ -18,6 +18,12 @@ import { Orchestrator } from "../orchestrator/index.js";
 import { createTrackerAdapter } from "../tracker/registry.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { loadWorkflowFile } from "../workflow/workflow-file.js";
+import { WorkflowFileWatcher } from "../workflow/watcher.js";
+import { mergeWorkflowConfig } from "../workflow/merge.js";
+import { mapFrontMatterToConfig } from "../workflow/map-front-matter.js";
+import { ConfigSchema } from "../config/schema.js";
+import type { ValidatedWorkflowFile } from "../workflow/types.js";
+import type { ForgectlConfig } from "../config/schema.js";
 
 export async function startDaemon(port = 4856, enableOrchestrator = false): Promise<void> {
   const app = Fastify({ logger: false });
@@ -44,6 +50,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   // Orchestrator initialization (when enabled or forced via CLI)
   const daemonLogger = new Logger(false);
   let orchestrator: Orchestrator | null = null;
+  let watcher: WorkflowFileWatcher | null = null;
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
   if (orchestratorEnabled && config.tracker) {
     try {
@@ -51,17 +58,41 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
       const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
 
-      // Load WORKFLOW.md from cwd if it exists, otherwise use default template
-      let promptTemplate = "Resolve the following issue: {{issue.title}}\n\n{{issue.description}}";
+      // Load WORKFLOW.md from cwd if it exists
+      const workflowPath = join(process.cwd(), "WORKFLOW.md");
+      let wf: ValidatedWorkflowFile | null = null;
       try {
-        const wf = await loadWorkflowFile(join(process.cwd(), "WORKFLOW.md"));
-        if (wf.promptTemplate) promptTemplate = wf.promptTemplate;
+        wf = await loadWorkflowFile(workflowPath);
       } catch {
-        /* no WORKFLOW.md, use default */
+        /* no WORKFLOW.md, use defaults */
       }
 
-      orchestrator = new Orchestrator({ tracker, workspaceManager, config, promptTemplate, logger: daemonLogger });
+      // Four-layer config merge: defaults < yaml < front matter < CLI (CLI empty for now)
+      const defaults = ConfigSchema.parse({});
+      const frontMatterAsConfig = wf ? mapFrontMatterToConfig(wf.config) : {};
+      const mergedConfig = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, frontMatterAsConfig, {});
+
+      const promptTemplate = wf?.promptTemplate
+        ?? "Resolve the following issue: {{issue.title}}\n\n{{issue.description}}";
+
+      orchestrator = new Orchestrator({ tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger });
       await orchestrator.start();
+
+      // Start file watcher for hot-reload (only if WORKFLOW.md exists)
+      if (wf) {
+        watcher = new WorkflowFileWatcher();
+        void watcher.start(workflowPath, {
+          onReload: (newWf: ValidatedWorkflowFile) => {
+            const newFmConfig = mapFrontMatterToConfig(newWf.config);
+            const newMerged = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, newFmConfig, {});
+            orchestrator!.applyConfig(newMerged, newWf.promptTemplate);
+            daemonLogger.info("daemon", "WORKFLOW.md reloaded, config updated");
+          },
+          onWarning: (msg: string) => {
+            daemonLogger.warn("daemon", msg);
+          },
+        });
+      }
     } catch (err) {
       daemonLogger.error("daemon", `Failed to start orchestrator: ${err}`);
     }
@@ -104,6 +135,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
 
   const shutdown = async () => {
     clearInterval(schedulerInterval);
+    watcher?.stop();
     if (orchestrator) {
       await orchestrator.stop();
     }
