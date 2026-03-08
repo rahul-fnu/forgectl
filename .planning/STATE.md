@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-03-08T19:08:33.425Z"
+status: in-progress
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-08T19:52:39Z"
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 18
-  completed_plans: 18
+  total_plans: 19
+  completed_plans: 19
 ---
 
 # Project State
 
 ## Current Phase
-Phase 6 — Observability API Extensions (3/3 plans complete)
+Phase 7 — End-to-End Integration Demo (1/? plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -23,6 +23,7 @@ Phase 6 — Observability API Extensions (3/3 plans complete)
 - Phase 3: Workflow Contract (2/2 plans, verified)
 - Phase 4: Agent Session Abstraction (3/3 plans, verified)
 - Phase 5: Orchestration State Machine (4/4 plans, verified)
+- Phase 6: Observability API Extensions (3/3 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -43,6 +44,7 @@ Phase 6 — Observability API Extensions (3/3 plans complete)
 - 06-01: MetricsCollector with per-issue tracking, enriched LogEntry/RunEvent, wired dispatcher metrics (4 min)
 - 06-02: Four REST API routes for orchestrator observability with structured error envelopes (6 min)
 - 06-03: Orchestrator dashboard page with status banner, slot utilization, running issues, retry queue, metrics, SSE (3 min)
+- 07-01: Validation loop, output collection, enriched write-back, auto-close in orchestrated worker and dispatcher (5 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -106,10 +108,14 @@ Phase 6 — Observability API Extensions (3/3 plans complete)
 - SSE events trigger state re-fetch with 1-second throttle to prevent flood
 - 503 from /api/v1/state shows Orchestrator not configured instead of error
 - Inline row expansion pattern for detail views in dashboard tables
+- Validation and output collection before session.close() to keep container alive
+- collectGitOutput is non-critical: errors caught and logged, worker continues
+- Auto-close and done-label as fire-and-forget .catch() calls on successful completion
+- validationConfig parameter threaded through executeWorker to buildOrchestratedRunPlan
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Completed 06-03-PLAN.md
-- **Timestamp:** 2026-03-08T19:30:00Z
+- **Stopped at:** Completed 07-01-PLAN.md
+- **Timestamp:** 2026-03-08T19:52:39Z
