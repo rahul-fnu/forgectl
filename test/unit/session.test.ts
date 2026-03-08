@@ -12,6 +12,7 @@ import { invokeAgent } from "../../src/agent/invoke.js";
 import { getAgentAdapter } from "../../src/agent/registry.js";
 import { createAgentSession } from "../../src/agent/session.js";
 import { OneShotSession } from "../../src/agent/oneshot-session.js";
+import { AppServerSession } from "../../src/agent/appserver-session.js";
 import type { AgentAdapter, AgentOptions } from "../../src/agent/types.js";
 import type { ExecResult } from "../../src/container/runner.js";
 import type Docker from "dockerode";
@@ -64,6 +65,26 @@ describe("createAgentSession factory", () => {
     expect(() => createAgentSession("unknown", fakeContainer, baseAgentOptions, [])).toThrow(
       /Unknown agent/
     );
+  });
+
+  it("returns AppServerSession when agentType is codex and useAppServer is true", () => {
+    const session = createAgentSession("codex", fakeContainer, baseAgentOptions, [], { useAppServer: true });
+    expect(session).toBeInstanceOf(AppServerSession);
+  });
+
+  it("returns OneShotSession when agentType is codex and useAppServer is false", () => {
+    const session = createAgentSession("codex", fakeContainer, baseAgentOptions, [], { useAppServer: false });
+    expect(session).toBeInstanceOf(OneShotSession);
+  });
+
+  it("returns OneShotSession when agentType is codex and useAppServer is undefined", () => {
+    const session = createAgentSession("codex", fakeContainer, baseAgentOptions, []);
+    expect(session).toBeInstanceOf(OneShotSession);
+  });
+
+  it("returns OneShotSession when agentType is claude-code even with useAppServer true", () => {
+    const session = createAgentSession("claude-code", fakeContainer, baseAgentOptions, [], { useAppServer: true });
+    expect(session).toBeInstanceOf(OneShotSession);
   });
 });
 
