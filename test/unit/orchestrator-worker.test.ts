@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildResultComment, type CommentData } from "../../src/orchestrator/comment.js";
+import type { TrackerIssue } from "../../src/tracker/types.js";
+import type { AgentResult, TokenUsage } from "../../src/agent/session.js";
+import type { ExecutionResult } from "../../src/orchestration/single.js";
+import type { ForgectlConfig } from "../../src/config/schema.js";
+import type { WorkspaceInfo } from "../../src/workspace/manager.js";
 
 describe("buildResultComment", () => {
   const baseData: CommentData = {
@@ -88,5 +93,238 @@ describe("buildResultComment", () => {
   it("formats duration for hour+ durations", () => {
     const result = buildResultComment({ ...baseData, durationMs: 3_661_000 });
     expect(result).toContain("1h 1m 1s");
+  });
+});
+
+// ---- Worker lifecycle tests ----
+
+// Mock dependencies before importing worker
+vi.mock("../../src/orchestration/single.js", () => ({
+  prepareExecution: vi.fn(),
+}));
+
+vi.mock("../../src/agent/session.js", () => ({
+  createAgentSession: vi.fn(),
+}));
+
+vi.mock("../../src/container/cleanup.js", () => ({
+  cleanupRun: vi.fn(),
+}));
+
+vi.mock("../../src/agent/registry.js", () => ({
+  getAgentAdapter: vi.fn(() => ({
+    buildCommand: vi.fn(),
+    buildEnv: vi.fn(),
+  })),
+}));
+
+const { buildOrchestratedRunPlan, executeWorker } = await import("../../src/orchestrator/worker.js");
+const { prepareExecution } = await import("../../src/orchestration/single.js");
+const { createAgentSession } = await import("../../src/agent/session.js");
+const { cleanupRun } = await import("../../src/container/cleanup.js");
+
+function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
+  return {
+    id: "123",
+    identifier: "issue-42",
+    title: "Fix login bug",
+    description: "Login form crashes on empty password",
+    state: "open",
+    priority: "P1",
+    labels: ["bug", "auth"],
+    assignees: ["alice"],
+    url: "https://github.com/test/repo/issues/42",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-02T00:00:00Z",
+    blocked_by: [],
+    metadata: {},
+    ...overrides,
+  };
+}
+
+function makeConfig(overrides: Partial<ForgectlConfig> = {}): ForgectlConfig {
+  return {
+    agent: {
+      type: "claude-code",
+      model: "sonnet",
+      max_turns: 50,
+      timeout: "30m",
+      flags: [],
+    },
+    container: {
+      image: "node:20",
+      network: { mode: "open" },
+      resources: { memory: "4g", cpus: 2 },
+    },
+    repo: {
+      branch: { template: "forge/{{slug}}/{{ts}}", base: "main" },
+      exclude: ["node_modules/", "dist/"],
+    },
+    orchestration: { mode: "single", review: { max_rounds: 3 } },
+    commit: {
+      message: { prefix: "[forge]", template: "{{prefix}} {{summary}}", include_task: true },
+      author: { name: "forgectl", email: "forge@localhost" },
+      sign: false,
+    },
+    output: { dir: "./forge-output", log_dir: ".forgectl/runs" },
+    board: { state_dir: "~/.forgectl/board", scheduler_tick_seconds: 30, max_concurrent_card_runs: 2 },
+    ...overrides,
+  } as ForgectlConfig;
+}
+
+describe("buildOrchestratedRunPlan", () => {
+  const issue = makeIssue();
+  const config = makeConfig();
+  const workspacePath = "/tmp/workspaces/issue-42";
+  const promptTemplate = "Fix this: {{issue.title}}\n\n{{issue.description}}";
+
+  it("sets input.sources[0] to workspace path", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.input.sources[0]).toBe(workspacePath);
+  });
+
+  it("sets input.mode to repo", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.input.mode).toBe("repo");
+  });
+
+  it("renders prompt template with issue data", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.task).toContain("Fix login bug");
+    expect(plan.task).toContain("Login form crashes on empty password");
+  });
+
+  it("generates unique runId", () => {
+    const plan1 = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    const plan2 = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 2);
+    expect(plan1.runId).toBeTruthy();
+    expect(plan2.runId).toBeTruthy();
+    expect(plan1.runId).not.toBe(plan2.runId);
+  });
+
+  it("sets output mode to git with workspace hostDir", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.output.mode).toBe("git");
+    expect(plan.output.hostDir).toBe(workspacePath);
+  });
+
+  it("sets orchestration.mode to single", () => {
+    const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, 1);
+    expect(plan.orchestration.mode).toBe("single");
+  });
+});
+
+describe("executeWorker", () => {
+  const issue = makeIssue();
+  const config = makeConfig();
+  const promptTemplate = "Fix this: {{issue.title}}";
+
+  const mockWorkspaceManager = {
+    ensureWorkspace: vi.fn(),
+    runBeforeHook: vi.fn(),
+    runAfterHook: vi.fn(),
+    removeWorkspace: vi.fn(),
+    cleanupTerminalWorkspaces: vi.fn(),
+    getWorkspacePath: vi.fn(),
+  };
+
+  const mockLogger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  const mockAgentResult: AgentResult = {
+    stdout: "Done",
+    stderr: "",
+    status: "completed",
+    tokenUsage: { input: 1000, output: 500, total: 1500 },
+    durationMs: 30_000,
+    turnCount: 5,
+  };
+
+  const mockSession = {
+    invoke: vi.fn().mockResolvedValue(mockAgentResult),
+    isAlive: vi.fn().mockReturnValue(true),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const mockContainer = { id: "mock-container-id" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWorkspaceManager.ensureWorkspace.mockResolvedValue({
+      path: "/tmp/workspaces/issue-42",
+      identifier: "issue-42",
+      created: false,
+    } as WorkspaceInfo);
+    mockWorkspaceManager.runBeforeHook.mockResolvedValue(undefined);
+    mockWorkspaceManager.runAfterHook.mockResolvedValue(undefined);
+
+    vi.mocked(prepareExecution).mockResolvedValue({
+      container: mockContainer as any,
+      adapter: {} as any,
+      agentOptions: {} as any,
+      agentEnv: [],
+      resolvedImage: "node:20",
+    });
+
+    vi.mocked(createAgentSession).mockReturnValue(mockSession as any);
+    vi.mocked(cleanupRun).mockResolvedValue(undefined);
+  });
+
+  it("calls workspaceManager.ensureWorkspace with issue identifier", async () => {
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(mockWorkspaceManager.ensureWorkspace).toHaveBeenCalledWith("issue-42");
+  });
+
+  it("calls workspaceManager.runBeforeHook before agent invocation", async () => {
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(mockWorkspaceManager.runBeforeHook).toHaveBeenCalledWith("issue-42");
+
+    // Verify before hook called before prepareExecution
+    const beforeHookOrder = mockWorkspaceManager.runBeforeHook.mock.invocationCallOrder[0];
+    const prepareOrder = vi.mocked(prepareExecution).mock.invocationCallOrder[0];
+    expect(beforeHookOrder).toBeLessThan(prepareOrder);
+  });
+
+  it("calls workspaceManager.runAfterHook after completion", async () => {
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(mockWorkspaceManager.runAfterHook).toHaveBeenCalledWith("issue-42");
+  });
+
+  it("creates CleanupContext with empty tempDirs", async () => {
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    const cleanupArg = vi.mocked(prepareExecution).mock.calls[0][2];
+    expect(cleanupArg.tempDirs).toEqual([]);
+  });
+
+  it("returns WorkerResult with agentResult and comment", async () => {
+    const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(result.agentResult).toBeDefined();
+    expect(result.agentResult.status).toBe("completed");
+    expect(result.comment).toContain("forgectl Agent Report");
+    expect(result.comment).toContain("Pass");
+  });
+
+  it("passes onActivity callback to createAgentSession", async () => {
+    const onActivity = vi.fn();
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any, onActivity);
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0][4];
+    expect(sessionOptions?.onActivity).toBe(onActivity);
+  });
+
+  it("calls cleanupRun to destroy container", async () => {
+    await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(cleanupRun).toHaveBeenCalled();
+  });
+
+  it("returns failure result when beforeHook throws", async () => {
+    mockWorkspaceManager.runBeforeHook.mockRejectedValue(new Error("hook failed"));
+    const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
+    expect(result.agentResult.status).toBe("failed");
+    expect(result.comment).toContain("Fail");
   });
 });
