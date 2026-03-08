@@ -8,6 +8,9 @@ export interface LogEntry {
   phase: string;
   message: string;
   data?: Record<string, unknown>;
+  issueId?: string;
+  issueIdentifier?: string;
+  sessionId?: string;
 }
 
 export class Logger {
@@ -28,7 +31,9 @@ export class Logger {
       data,
     };
     this.entries.push(entry);
-    for (const listener of this.listeners) listener(entry);
+    for (const listener of this.listeners) {
+      try { listener(entry); } catch { /* listener failure swallowed */ }
+    }
   }
 
   debug(phase: string, message: string, data?: Record<string, unknown>): void {

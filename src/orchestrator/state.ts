@@ -96,4 +96,11 @@ export class SlotManager {
   hasAvailableSlots(running: Map<string, WorkerInfo>): boolean {
     return this.availableSlots(running) > 0;
   }
+
+  /**
+   * Returns the maximum concurrent slots.
+   */
+  getMax(): number {
+    return this.maxConcurrent;
+  }
 }
