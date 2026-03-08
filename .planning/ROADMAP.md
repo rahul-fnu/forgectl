@@ -70,7 +70,7 @@ Plans:
 - Unit tests: session lifecycle, one-shot backward compat, JSON-RPC protocol
 
 **Depends on:** Nothing (refactors existing agent layer)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 04-01-PLAN.md — AgentSession interface, OneShotSession, factory, unit tests
@@ -135,7 +135,7 @@ Plans:
 | 1 | Tracker Adapter Interface | 4/4 | Complete |
 | 2 | 2/2 | Complete   | 2026-03-07 |
 | 3 | 2/2 | Complete   | 2026-03-08 |
-| 4 | Agent Session Abstraction | 3 | -- |
+| 4 | 1/3 | In Progress|  |
 | 5 | Orchestration State Machine | 4-5 | Phase 1-4 |
 | 6 | Observability + API Extensions | 3 | Phase 5 |
 | 7 | End-to-End Integration + Demo | 3-4 | Phase 5-6 |

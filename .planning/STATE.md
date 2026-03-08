@@ -4,22 +4,23 @@ milestone: v1.0
 milestone_name: milestone
 status: unknown
 stopped_at: Phase 4 context gathered
-last_updated: "2026-03-08T07:20:03.176Z"
+last_updated: "2026-03-08T07:51:16.581Z"
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 11
+  completed_plans: 9
 ---
 
 # Project State
 
 ## Current Phase
-Phase 3 — Workflow Contract (Plan 2/2 complete)
+Phase 4 — Agent Session Abstraction (Plan 1/3 complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
 - Phase 2: Workspace Management (2/2 plans, verified)
+- Phase 3: Workflow Contract (2/2 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -30,6 +31,7 @@ Phase 3 — Workflow Contract (Plan 2/2 complete)
 - 02-02: WorkspaceManager with create/reuse/remove/cleanup lifecycle and hook integration (2 min)
 - 03-01: WORKFLOW.md parser with front matter validation and strict template renderer (3 min)
 - 03-02: Config merge with four-layer priority and debounced file watcher (2 min)
+- 04-01: AgentSession interface with OneShotSession wrapping invokeAgent for unified session abstraction (2 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -57,10 +59,13 @@ Phase 3 — Workflow Contract (Plan 2/2 complete)
 - Sequential deepMerge for config layering (simple, correct, readable)
 - fs/promises watch() with AbortController for clean cancellation
 - Callback-based warning pattern so daemon routes to logger + SSE
+- InvokeOptions type for per-call overrides separate from AgentSessionOptions
+- Activity callback fires once per invoke, not per line of output
+- TokenUsage defaults to zeros for one-shot CLI mode
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Phase 4 context gathered
-- **Timestamp:** 2026-03-08T07:06:59Z
+- **Stopped at:** Completed 04-01-PLAN.md
+- **Timestamp:** 2026-03-08T07:51:00Z
