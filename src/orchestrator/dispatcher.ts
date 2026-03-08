@@ -222,6 +222,22 @@ async function executeWorkerAndHandle(
     );
 
     if (failureType === "continuation") {
+      // Auto-close issue when configured
+      if (config.tracker?.auto_close) {
+        tracker.updateState(issue.id, "closed").catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to auto-close ${issue.identifier}: ${msg}`);
+        });
+      }
+
+      // Add done label when configured
+      if (config.tracker?.done_label) {
+        tracker.updateLabels(issue.id, [config.tracker.done_label], [orchestratorConfig.in_progress_label]).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
+        });
+      }
+
       // Re-dispatch after short delay
       scheduleRetry(
         issue.id,

@@ -7,9 +7,12 @@ import type { AgentResult } from "../agent/session.js";
 import type { ExecutionResult } from "../orchestration/single.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { CleanupContext } from "../container/cleanup.js";
+import type { ValidationResult } from "../validation/runner.js";
 import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
+import { runValidationLoop } from "../validation/runner.js";
+import { collectGitOutput } from "../output/git.js";
 import { buildResultComment } from "./comment.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
@@ -18,6 +21,8 @@ export interface WorkerResult {
   agentResult: AgentResult;
   comment: string;
   executionResult?: ExecutionResult;
+  validationResult?: ValidationResult;
+  branch?: string;
 }
 
 /**
@@ -136,6 +141,7 @@ export async function executeWorker(
   attempt: number,
   logger: Logger,
   onActivity?: () => void,
+  validationConfig?: { steps: ValidationStep[]; on_failure: string },
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   const wsInfo = await workspaceManager.ensureWorkspace(issue.identifier);
@@ -167,17 +173,19 @@ export async function executeWorker(
     };
   }
 
-  // 3. Build RunPlan
-  const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt);
+  // 3. Build RunPlan (with optional validationConfig)
+  const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig);
 
   // 4. Create CleanupContext with empty tempDirs (workspace persists)
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
 
   let agentResult: AgentResult;
+  let validationResult: ValidationResult | undefined;
+  let branch: string | undefined;
 
   try {
     // 5. Prepare execution (container, credentials, network)
-    const { container, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
+    const { container, agentOptions, agentEnv, adapter } = await prepareExecution(plan, logger, cleanup);
 
     // 6. Create agent session with onActivity callback for stall detection
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
@@ -187,6 +195,23 @@ export async function executeWorker(
     // 7. Invoke agent
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(plan.task);
+
+    // 8. Run validation loop BEFORE closing session (container must be alive)
+    if (plan.validation.steps.length > 0) {
+      logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
+      validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
+    }
+
+    // 9. Collect git output (non-critical — catch and log errors)
+    try {
+      const gitResult = await collectGitOutput(container, plan, logger);
+      branch = gitResult.branch;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("worker", `Git output collection failed for ${issue.identifier} (ignored): ${message}`);
+    }
+
+    // 10. Now close session
     await session.close();
 
     logger.info("worker", `Agent finished: status=${agentResult.status}, duration=${agentResult.durationMs}ms`);
@@ -203,16 +228,23 @@ export async function executeWorker(
     };
   }
 
-  // 8. Build structured comment
+  // 11. Build structured comment with validation results and branch
+  const commentValidationResults = validationResult?.stepResults.map(sr => ({
+    name: sr.name,
+    passed: sr.passed,
+  }));
+
   const comment = buildResultComment({
     status: agentResult.status,
     durationMs: agentResult.durationMs,
     agentType: config.agent.type,
     attempt,
     tokenUsage: agentResult.tokenUsage,
+    validationResults: commentValidationResults,
+    branch,
   });
 
-  // 9. Run after hook (catch and log errors)
+  // 12. Run after hook (catch and log errors)
   try {
     await workspaceManager.runAfterHook(issue.identifier);
   } catch (err) {
@@ -220,7 +252,7 @@ export async function executeWorker(
     logger.warn("worker", `After hook failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  // 10. Cleanup container (but not workspace — tempDirs is empty)
+  // 13. Cleanup container (but not workspace — tempDirs is empty)
   try {
     await cleanupRun(cleanup);
   } catch (err) {
@@ -228,5 +260,5 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment };
+  return { agentResult, comment, validationResult, branch };
 }
