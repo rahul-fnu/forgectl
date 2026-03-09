@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 9 context gathered
-last_updated: "2026-03-08T21:42:34.167Z"
+status: complete
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-09T02:05:02Z"
 progress:
   total_phases: 9
-  completed_phases: 8
-  total_plans: 23
-  completed_plans: 23
+  completed_phases: 9
+  total_plans: 24
+  completed_plans: 24
 ---
 
 # Project State
 
 ## Current Phase
-Phase 8 — Wire Workflow Runtime Integration (2/2 plans complete)
+Phase 9 — Fix GitHub ID/Identifier Mismatch (1/1 plans complete)
 
 ## Completed Phases
 - Phase 1: Tracker Adapters (4/4 plans, verified)
@@ -25,6 +25,8 @@ Phase 8 — Wire Workflow Runtime Integration (2/2 plans complete)
 - Phase 5: Orchestration State Machine (4/4 plans, verified)
 - Phase 6: Observability API Extensions (3/3 plans, verified)
 - Phase 7: End-to-End Integration Demo (3/3 plans, verified)
+- Phase 8: Wire Workflow Runtime Integration (2/2 plans, verified)
+- Phase 9: Fix GitHub ID/Identifier Mismatch (1/1 plans, verified)
 
 ## Completed Plans
 - 01-01: TrackerAdapter interface, TrackerIssue model, config schema, token resolution, registry (2 min)
@@ -50,6 +52,7 @@ Phase 8 — Wire Workflow Runtime Integration (2/2 plans complete)
 - 07-03: E2E orchestration integration tests covering dispatch, retry, reconcile, slot limits (3 min)
 - 08-01: Hot-reload wiring for WORKFLOW.md via WorkflowFileWatcher, four-layer config merge, Orchestrator.applyConfig (4 min)
 - 08-02: Integration tests for full reload pipeline with both agent types, sequential reloads, partial overrides (2 min)
+- 09-01: Fix GitHub adapter ID/identifier mismatch — normalizeIssue uses ghIssue.number, hardened parseIssueNumber, cross-phase integration test (6 min)
 
 ## Key Decisions
 - GitHub Issues as first tracker adapter (most accessible)
@@ -124,10 +127,12 @@ Phase 8 — Wire Workflow Runtime Integration (2/2 plans complete)
 - watcher.stop() called before orchestrator.stop() in shutdown sequence
 - CLI flags layer is empty object placeholder for future CLI flag passthrough
 - simulateReload helper mirrors server.ts onReload callback for test fidelity
+- TrackerIssue.id is the API-addressable identifier (issue number for GitHub, page UUID for Notion)
+- parseIssueNumber accepts both "42" and "#42" formats, throws on invalid input
 
 ## Blockers
 (none)
 
 ## Last Session
-- **Stopped at:** Phase 9 context gathered
-- **Timestamp:** 2026-03-08T20:40:42Z
+- **Stopped at:** Completed 09-01-PLAN.md
+- **Timestamp:** 2026-03-09T02:05:02Z
