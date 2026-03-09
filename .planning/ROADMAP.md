@@ -65,11 +65,11 @@ Plans:
   2. `forgectl run inspect <id>` displays the full chronological audit trail for a run
   3. GitHub issue comments include structured summaries with changes, validation results, and cost breakdown
   4. State snapshots are captured at each step boundary and can be queried for a given run
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 11-01: TBD
-- [ ] 11-02: TBD
+- [ ] 11-01-PLAN.md — Schema, repositories, EventRecorder, and extended event types (AUDT-01, AUDT-04)
+- [ ] 11-02-PLAN.md — CLI inspect command and rich write-back comment builder (AUDT-02, AUDT-03)
 
 ### Phase 12: Durable Execution
 **Goal**: Runs survive daemon crashes, can be paused for human input, and resume exactly where they left off
