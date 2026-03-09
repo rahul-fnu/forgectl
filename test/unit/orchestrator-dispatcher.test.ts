@@ -34,8 +34,8 @@ import { classifyFailure, calculateBackoff, scheduleRetry } from "../../src/orch
 
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
-    id: "issue-1",
-    identifier: "GH-1",
+    id: "1",
+    identifier: "#1",
     title: "Test issue",
     description: "desc",
     state: "open",

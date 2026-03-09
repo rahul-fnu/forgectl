@@ -35,8 +35,8 @@ import { classifyFailure, calculateBackoff } from "../../src/orchestrator/retry.
 // Helper: create a mock TrackerIssue
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
-    id: overrides.id ?? "issue-1",
-    identifier: overrides.identifier ?? "GH-1",
+    id: overrides.id ?? "1",
+    identifier: overrides.identifier ?? "#1",
     title: overrides.title ?? "Fix the bug",
     description: overrides.description ?? "Detailed description",
     state: overrides.state ?? "open",
@@ -47,6 +47,7 @@ function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
     created_at: overrides.created_at ?? "2026-01-01T00:00:00Z",
     updated_at: overrides.updated_at ?? "2026-01-01T00:00:00Z",
     blocked_by: overrides.blocked_by ?? [],
+    metadata: overrides.metadata ?? {},
   };
 }
 
@@ -238,7 +239,7 @@ describe("E2E Orchestration", () => {
       dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       // Issue should be claimed and running
-      expect(state.claimed.has("issue-1")).toBe(true);
+      expect(state.claimed.has("1")).toBe(true);
 
       // Wait for the async worker to complete
       await vi.waitFor(() => {
@@ -246,7 +247,7 @@ describe("E2E Orchestration", () => {
       }, { timeout: 2000 });
 
       // Comment should contain the worker's comment
-      expect(tracker.calls.postComment[0].issueId).toBe("issue-1");
+      expect(tracker.calls.postComment[0].issueId).toBe("1");
       expect(tracker.calls.postComment[0].body).toContain("forgectl Agent Report");
     });
 
@@ -263,7 +264,7 @@ describe("E2E Orchestration", () => {
         expect(tracker.calls.updateState.length).toBeGreaterThanOrEqual(1);
       }, { timeout: 2000 });
 
-      expect(tracker.calls.updateState[0]).toEqual({ issueId: "issue-1", state: "closed" });
+      expect(tracker.calls.updateState[0]).toEqual({ issueId: "1", state: "closed" });
 
       await vi.waitFor(() => {
         expect(tracker.calls.updateLabels.length).toBeGreaterThanOrEqual(2);
@@ -331,10 +332,10 @@ describe("E2E Orchestration", () => {
 
       // After failure: retry attempt recorded, retryTimers should have an entry
       // The state.retryAttempts should be incremented
-      expect(state.retryAttempts.get("issue-1")).toBe(1);
+      expect(state.retryAttempts.get("1")).toBe(1);
 
       // A retry timer should be scheduled (issue released after delay)
-      expect(state.retryTimers.has("issue-1")).toBe(true);
+      expect(state.retryTimers.has("1")).toBe(true);
     });
 
     it("exhausts retries and releases issue after max_retries", async () => {
@@ -342,7 +343,7 @@ describe("E2E Orchestration", () => {
       const issue = makeIssue();
 
       // Pre-set retry attempts to max - 1 (so next failure exhausts)
-      state.retryAttempts.set("issue-1", 1);
+      state.retryAttempts.set("1", 1);
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeFailedResult());
 
@@ -359,8 +360,8 @@ describe("E2E Orchestration", () => {
       expect(exhaustionComment).toBeDefined();
 
       // Issue should be fully released
-      expect(state.claimed.has("issue-1")).toBe(false);
-      expect(state.retryAttempts.has("issue-1")).toBe(false);
+      expect(state.claimed.has("1")).toBe(false);
+      expect(state.retryAttempts.has("1")).toBe(false);
     });
 
     it("uses exponential backoff for retry delays", () => {
@@ -382,13 +383,13 @@ describe("E2E Orchestration", () => {
   describe("Issue closed during run (reconciler)", () => {
     it("removes worker when issue reaches terminal state", async () => {
       config = makeConfig();
-      const issue = makeIssue({ id: "issue-2", identifier: "GH-2" });
+      const issue = makeIssue({ id: "2", identifier: "#2" });
 
       // Put worker in running map (simulating active dispatch)
-      state.claimed.add("issue-2");
-      state.running.set("issue-2", {
-        issueId: "issue-2",
-        identifier: "GH-2",
+      state.claimed.add("2");
+      state.running.set("2", {
+        issueId: "2",
+        identifier: "#2",
         issue,
         session: { close: vi.fn(async () => {}) } as any,
         cleanup: { tempDirs: [], secretCleanups: [] },
@@ -398,23 +399,23 @@ describe("E2E Orchestration", () => {
       });
 
       // Tracker reports issue as "closed" (terminal)
-      tracker.issueStates.set("issue-2", "closed");
+      tracker.issueStates.set("2", "closed");
 
       await reconcile(state, tracker, workspaceManager, config, logger);
 
       // Worker should be removed from running and claim released
-      expect(state.running.has("issue-2")).toBe(false);
-      expect(state.claimed.has("issue-2")).toBe(false);
+      expect(state.running.has("2")).toBe(false);
+      expect(state.claimed.has("2")).toBe(false);
     });
 
     it("removes worker when issue is in non-active state", async () => {
       config = makeConfig();
-      const issue = makeIssue({ id: "issue-3", identifier: "GH-3" });
+      const issue = makeIssue({ id: "3", identifier: "#3" });
 
-      state.claimed.add("issue-3");
-      state.running.set("issue-3", {
-        issueId: "issue-3",
-        identifier: "GH-3",
+      state.claimed.add("3");
+      state.running.set("3", {
+        issueId: "3",
+        identifier: "#3",
         issue,
         session: { close: vi.fn(async () => {}) } as any,
         cleanup: { tempDirs: [], secretCleanups: [] },
@@ -424,23 +425,23 @@ describe("E2E Orchestration", () => {
       });
 
       // Tracker reports issue in non-active, non-terminal state (e.g., "review")
-      tracker.issueStates.set("issue-3", "review");
+      tracker.issueStates.set("3", "review");
 
       await reconcile(state, tracker, workspaceManager, config, logger);
 
       // Worker should be stopped and released
-      expect(state.running.has("issue-3")).toBe(false);
-      expect(state.claimed.has("issue-3")).toBe(false);
+      expect(state.running.has("3")).toBe(false);
+      expect(state.claimed.has("3")).toBe(false);
     });
 
     it("keeps worker running when issue is still active", async () => {
       config = makeConfig();
-      const issue = makeIssue({ id: "issue-4", identifier: "GH-4" });
+      const issue = makeIssue({ id: "4", identifier: "#4" });
 
-      state.claimed.add("issue-4");
-      state.running.set("issue-4", {
-        issueId: "issue-4",
-        identifier: "GH-4",
+      state.claimed.add("4");
+      state.running.set("4", {
+        issueId: "4",
+        identifier: "#4",
         issue,
         session: { close: vi.fn(async () => {}) } as any,
         cleanup: { tempDirs: [], secretCleanups: [] },
@@ -450,13 +451,13 @@ describe("E2E Orchestration", () => {
       });
 
       // Tracker reports issue still "open" (active state)
-      tracker.issueStates.set("issue-4", "open");
+      tracker.issueStates.set("4", "open");
 
       await reconcile(state, tracker, workspaceManager, config, logger);
 
       // Worker should still be running
-      expect(state.running.has("issue-4")).toBe(true);
-      expect(state.claimed.has("issue-4")).toBe(true);
+      expect(state.running.has("4")).toBe(true);
+      expect(state.claimed.has("4")).toBe(true);
     });
   });
 
@@ -466,9 +467,9 @@ describe("E2E Orchestration", () => {
       const slotManager = new SlotManager(2);
 
       const issues = [
-        makeIssue({ id: "issue-a", identifier: "GH-A", created_at: "2026-01-01T00:00:00Z" }),
-        makeIssue({ id: "issue-b", identifier: "GH-B", created_at: "2026-01-02T00:00:00Z" }),
-        makeIssue({ id: "issue-c", identifier: "GH-C", created_at: "2026-01-03T00:00:00Z" }),
+        makeIssue({ id: "10", identifier: "#10", created_at: "2026-01-01T00:00:00Z" }),
+        makeIssue({ id: "11", identifier: "#11", created_at: "2026-01-02T00:00:00Z" }),
+        makeIssue({ id: "12", identifier: "#12", created_at: "2026-01-03T00:00:00Z" }),
       ];
 
       // All three are candidates
@@ -490,9 +491,9 @@ describe("E2E Orchestration", () => {
       // Only 2 should be claimed and running
       expect(state.claimed.size).toBe(2);
       expect(state.running.size).toBe(2);
-      expect(state.claimed.has("issue-a")).toBe(true);
-      expect(state.claimed.has("issue-b")).toBe(true);
-      expect(state.claimed.has("issue-c")).toBe(false);
+      expect(state.claimed.has("10")).toBe(true);
+      expect(state.claimed.has("11")).toBe(true);
+      expect(state.claimed.has("12")).toBe(false);
     });
 
     it("dispatches waiting issue after a slot opens", async () => {
@@ -500,9 +501,9 @@ describe("E2E Orchestration", () => {
       const slotManager = new SlotManager(2);
 
       const issues = [
-        makeIssue({ id: "issue-a", identifier: "GH-A", created_at: "2026-01-01T00:00:00Z" }),
-        makeIssue({ id: "issue-b", identifier: "GH-B", created_at: "2026-01-02T00:00:00Z" }),
-        makeIssue({ id: "issue-c", identifier: "GH-C", created_at: "2026-01-03T00:00:00Z" }),
+        makeIssue({ id: "10", identifier: "#10", created_at: "2026-01-01T00:00:00Z" }),
+        makeIssue({ id: "11", identifier: "#11", created_at: "2026-01-02T00:00:00Z" }),
+        makeIssue({ id: "12", identifier: "#12", created_at: "2026-01-03T00:00:00Z" }),
       ];
 
       // First dispatch: issue-a completes quickly, issue-b stays running
@@ -520,7 +521,7 @@ describe("E2E Orchestration", () => {
 
       // Wait for issue-a to complete (releases from running map, but claim stays via continuation)
       await vi.waitFor(() => {
-        expect(state.running.has("issue-a")).toBe(false);
+        expect(state.running.has("10")).toBe(false);
       }, { timeout: 2000 });
 
       // Now 1 slot available, issue-c can be dispatched
@@ -532,38 +533,38 @@ describe("E2E Orchestration", () => {
       expect(remainingCandidates).toHaveLength(1);
 
       dispatchIssue(issues[2], state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
-      expect(state.claimed.has("issue-c")).toBe(true);
+      expect(state.claimed.has("12")).toBe(true);
     });
 
     it("filters out already claimed and running issues", () => {
       const issues = [
-        makeIssue({ id: "issue-x", identifier: "GH-X" }),
-        makeIssue({ id: "issue-y", identifier: "GH-Y" }),
-        makeIssue({ id: "issue-z", identifier: "GH-Z" }),
+        makeIssue({ id: "20", identifier: "#20" }),
+        makeIssue({ id: "21", identifier: "#21" }),
+        makeIssue({ id: "22", identifier: "#22" }),
       ];
 
       // Claim issue-x and add issue-y to running
-      state.claimed.add("issue-x");
-      state.running.set("issue-y", {} as any);
+      state.claimed.add("20");
+      state.running.set("21", {} as any);
 
       const eligible = filterCandidates(issues, state, new Set());
       expect(eligible).toHaveLength(1);
-      expect(eligible[0].id).toBe("issue-z");
+      expect(eligible[0].id).toBe("22");
     });
 
     it("filters out blocked issues when blockers are not terminal", () => {
       const issues = [
-        makeIssue({ id: "issue-blocked", identifier: "GH-BLOCKED", blocked_by: ["issue-blocker"] }),
-        makeIssue({ id: "issue-free", identifier: "GH-FREE" }),
+        makeIssue({ id: "30", identifier: "#30", blocked_by: ["99"] }),
+        makeIssue({ id: "31", identifier: "#31" }),
       ];
 
       // No terminal IDs means blocker is not terminal
       const eligible = filterCandidates(issues, state, new Set());
       expect(eligible).toHaveLength(1);
-      expect(eligible[0].id).toBe("issue-free");
+      expect(eligible[0].id).toBe("31");
 
       // With blocker in terminal set, blocked issue becomes eligible
-      const eligibleWithTerminal = filterCandidates(issues, state, new Set(["issue-blocker"]));
+      const eligibleWithTerminal = filterCandidates(issues, state, new Set(["99"]));
       expect(eligibleWithTerminal).toHaveLength(2);
     });
   });
@@ -571,9 +572,9 @@ describe("E2E Orchestration", () => {
   describe("Priority sorting", () => {
     it("sorts by priority ascending, then by created_at", () => {
       const issues = [
-        makeIssue({ id: "low", identifier: "GH-LOW", priority: "3", created_at: "2026-01-01T00:00:00Z" }),
-        makeIssue({ id: "high", identifier: "GH-HIGH", priority: "1", created_at: "2026-01-03T00:00:00Z" }),
-        makeIssue({ id: "med", identifier: "GH-MED", priority: "2", created_at: "2026-01-02T00:00:00Z" }),
+        makeIssue({ id: "low", identifier: "#LOW", priority: "3", created_at: "2026-01-01T00:00:00Z" }),
+        makeIssue({ id: "high", identifier: "#HIGH", priority: "1", created_at: "2026-01-03T00:00:00Z" }),
+        makeIssue({ id: "med", identifier: "#MED", priority: "2", created_at: "2026-01-02T00:00:00Z" }),
       ];
 
       const sorted = sortCandidates(issues);
@@ -582,8 +583,8 @@ describe("E2E Orchestration", () => {
 
     it("sorts issues without priority after those with priority", () => {
       const issues = [
-        makeIssue({ id: "no-prio", identifier: "GH-NP", priority: null, created_at: "2026-01-01T00:00:00Z" }),
-        makeIssue({ id: "has-prio", identifier: "GH-HP", priority: "1", created_at: "2026-01-02T00:00:00Z" }),
+        makeIssue({ id: "no-prio", identifier: "#NP", priority: null, created_at: "2026-01-01T00:00:00Z" }),
+        makeIssue({ id: "has-prio", identifier: "#HP", priority: "1", created_at: "2026-01-02T00:00:00Z" }),
       ];
 
       const sorted = sortCandidates(issues);

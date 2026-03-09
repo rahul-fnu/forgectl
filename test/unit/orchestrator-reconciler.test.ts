@@ -82,11 +82,11 @@ function makeConfig(): ForgectlConfig {
 
 function makeWorkerInfo(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
   return {
-    issueId: "issue-1",
-    identifier: "GH-1",
+    issueId: "1",
+    identifier: "#1",
     issue: {
-      id: "issue-1",
-      identifier: "GH-1",
+      id: "1",
+      identifier: "#1",
       title: "Test",
       description: "",
       state: "open",
@@ -157,7 +157,7 @@ describe("reconcile", () => {
 
     expect(session.close).toHaveBeenCalled();
     expect(cleanupRun).toHaveBeenCalledWith(cleanup);
-    expect(workspaceManager.removeWorkspace).toHaveBeenCalledWith("GH-1");
+    expect(workspaceManager.removeWorkspace).toHaveBeenCalledWith("#1");
     expect(state.running.has("a")).toBe(false);
     expect(state.claimed.has("a")).toBe(false);
   });
@@ -278,10 +278,10 @@ describe("reconcile", () => {
   it("handles cleanup failure for one worker without affecting others", async () => {
     const session1 = makeSession();
     vi.mocked(session1.close).mockRejectedValue(new Error("close failed"));
-    const worker1 = makeWorkerInfo({ issueId: "a", identifier: "GH-1", session: session1 });
+    const worker1 = makeWorkerInfo({ issueId: "a", identifier: "#1", session: session1 });
 
     const session2 = makeSession();
-    const worker2 = makeWorkerInfo({ issueId: "b", identifier: "GH-2", session: session2 });
+    const worker2 = makeWorkerInfo({ issueId: "b", identifier: "#2", session: session2 });
 
     state.running.set("a", worker1);
     state.running.set("b", worker2);
