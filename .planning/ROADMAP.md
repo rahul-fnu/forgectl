@@ -177,6 +177,10 @@ Plans:
 - Verify E2E flow: GitHub issue → dispatch → agent → comment → auto-close
 
 **Depends on:** Phase 1 (GitHub adapter), Phase 5 (Orchestrator)
+**Plans:** 1 plan
+
+Plans:
+- [ ] 09-01-PLAN.md — Fix normalizeIssue id, harden parseIssueNumber, JSDoc, cross-phase integration test
 
 ---
 
@@ -192,7 +196,7 @@ Plans:
 | 6 | 3/3 | Complete   | 2026-03-08 |
 | 7 | 3/3 | Complete   | 2026-03-08 |
 | 8 | Wire Workflow Runtime Integration | 2 plans | Pending |
-| 9 | Fix GitHub Adapter ID/Identifier Mismatch | 0 plans | Pending |
+| 9 | Fix GitHub Adapter ID/Identifier Mismatch | 1 plan | Pending |
 
 **Parallelizable:** Phases 1, 2, 4 can run in parallel. Phase 3 needs Phase 1. Phase 5 needs all of 1-4. Phases 6-7 are sequential after 5. Phase 8 is a gap closure phase (depends on 3, 5).
 
