@@ -40,8 +40,8 @@ created: 2026-03-09
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
 | 11-01-01 | 01 | 1 | AUDT-01 | unit | `npx vitest run test/unit/storage-events.test.ts` | ❌ W0 | ⬜ pending |
 | 11-01-02 | 01 | 1 | AUDT-04 | unit | `npx vitest run test/unit/storage-snapshots.test.ts` | ❌ W0 | ⬜ pending |
-| 11-02-01 | 02 | 2 | AUDT-02 | unit | `npx vitest run test/unit/cli-inspect.test.ts` | ❌ W0 | ⬜ pending |
-| 11-02-02 | 02 | 2 | AUDT-03 | unit | `npx vitest run test/unit/orchestrator-comment.test.ts` | ✅ | ⬜ pending |
+| 11-02-01 | 02 | 2 | AUDT-03 | unit | `npx vitest run test/unit/cli-inspect.test.ts` | ❌ W0 | ⬜ pending |
+| 11-02-02 | 02 | 2 | AUDT-02 | unit | `npx vitest run test/unit/orchestrator-comment.test.ts` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
