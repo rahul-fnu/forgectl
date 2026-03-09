@@ -1,8 +1,8 @@
-# forgectl v2 — AI Agent Orchestrator
+# forgectl — AI Agent Orchestrator
 
 ## What This Is
 
-forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, raw LLM APIs) in isolated Docker containers. v2 evolves it from a task runner into a continuous autonomous orchestrator — a Symphony-style daemon that polls issue trackers, dispatches agents to isolated workspaces, validates results, and reports back. Think n8n but AI-native, code-first, and autonomous.
+forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. Supports single-agent runs, multi-agent review mode, DAG pipelines, and autonomous orchestration from GitHub Issues and Notion.
 
 ## Core Value
 
@@ -12,81 +12,68 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ### Validated
 
-- CLI single-agent execution (Claude Code + Codex) — existing
-- Docker container isolation with network modes — existing
-- Validation loops with retry (run command → check → feed errors → retry) — existing
-- Multi-agent review mode — existing
-- DAG pipeline orchestration with checkpoints, fan-in, reruns — existing
-- Daemon with REST API and SSE event streaming — existing
-- Web dashboard (basic) — existing
-- YAML configuration with zod validation — existing
-- Output collection (git branches + files) — existing
-- BYOK credential management — existing
+- Pluggable issue tracker adapter (GitHub Issues + Notion) — v1.0
+- Orchestration state machine (claim/running/retry/released with reconciliation) — v1.0
+- Polling loop with candidate selection, concurrency control, dispatch priority — v1.0
+- In-repo WORKFLOW.md contract (YAML front matter + prompt template + hot-reload) — v1.0
+- Workspace persistence and lifecycle management (per-issue, reusable, with hooks) — v1.0
+- Hybrid agent session model (CLI one-shot + JSON-RPC persistent subprocess) — v1.0
+- Dynamic config reload (hot-reload WORKFLOW.md without restart) — v1.0
+- Exponential backoff retry queue with configurable caps — v1.0
+- Stall detection and active run reconciliation — v1.0
+- Structured logging with issue/session context fields — v1.0
+- REST API for orchestrator state (/api/v1/state, /issues, /refresh) — v1.0
+- Real-time dashboard with orchestrator monitoring — v1.0
+- End-to-end demo: GitHub issue → dispatch → validate → comment → auto-close — v1.0
+- Backward compatibility (forgectl run, forgectl pipeline still work) — v1.0
 
 ### Active
 
-- [ ] Pluggable issue tracker adapter (generic interface + GitHub Issues implementation)
-- [ ] Orchestration state machine (claim/running/retry/released with reconciliation)
-- [ ] Polling loop with candidate selection, concurrency control, dispatch priority
-- [ ] In-repo WORKFLOW.md contract (repo-owned agent policy with YAML front matter + prompt template)
-- [ ] Workspace persistence and lifecycle management (per-issue, reusable across runs)
-- [ ] Workspace lifecycle hooks (after_create, before_run, after_run, before_remove)
-- [ ] Hybrid agent session model (CLI calls for simple tasks + persistent subprocess sessions for multi-turn)
-- [ ] Dynamic config reload (hot-reload WORKFLOW.md without restart)
-- [ ] Exponential backoff retry queue with configurable caps
-- [ ] Stall detection (kill agents with no activity past threshold)
-- [ ] Active run reconciliation (stop agents when issue state changes to terminal/inactive)
-- [ ] Startup terminal workspace cleanup
-- [ ] Generic LLM adapter interface (OpenAI, Anthropic, Gemini APIs for non-coding tasks)
-- [ ] Structured logging with issue/session context fields
-- [ ] Cost tracking basics (token counts, runtime seconds per issue)
-- [ ] End-to-end demo: GitHub issue → dispatch agent → validate → report back
+(No active requirements — next milestone not yet defined)
 
 ### Out of Scope
 
 - Visual drag-and-drop workflow builder — deferred to v3, developer dashboard first
 - Distributed multi-worker execution — single machine first, scale later
 - Multi-tenant RBAC — single-user for now
-- Linear/Jira tracker adapters — GitHub first, others after adapter interface is proven
+- Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
 - Conditional/loop pipeline nodes — after core orchestrator is solid
 - Persistent database (Postgres) for run history — file-based first, DB later
 - Manual approval gates in pipelines — future milestone
+- Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
 
 ## Context
 
-forgectl v1 is a mature TypeScript project with 73 source files, 211+ passing tests, and full pipeline support. The codebase is well-structured with clear separation: CLI, config, container, agent, orchestration, validation, output, pipeline, daemon, and UI layers.
+Shipped v1.0 with 11,413 LOC TypeScript (src) + 12,848 LOC tests. 667 tests passing across 56 test files. 9 phases, 24 plans executed in 8 days.
 
-Key technical foundations already in place:
-- Dockerode for container management
-- Fastify daemon on port 4856 with SSE
-- Commander CLI framework
-- Zod config validation
-- Agent adapters (Claude Code + Codex) with credential management
-- Pipeline DAG executor with checkpoint/rerun
+Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup.
 
-The v2 orchestrator builds on the existing daemon, adding the Symphony-style polling loop, state machine, and tracker integration on top of the current execution infrastructure.
+Key subsystems: CLI, config, container, agent (Claude Code + Codex), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI.
 
-Inspiration: OpenAI Symphony SPEC.md — a language-agnostic spec for a long-running automation service that polls issue trackers and dispatches coding agents. We borrow the architectural patterns (state machine, reconciliation, workspace management, WORKFLOW.md contract) while keeping forgectl's strengths (Docker isolation, multi-agent support, validation loops, pluggable adapters).
-
-## Constraints
-
-- **Tech stack**: TypeScript, Node.js 20+, existing dependencies (commander, fastify, dockerode, zod)
-- **Agent model**: Must support both one-shot CLI calls and persistent subprocess sessions
-- **Tracker agnostic**: Generic adapter interface — no hardcoded Linear/GitHub assumptions in core
-- **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
-- **Single process**: No distributed queue yet — single daemon process with in-memory state
-- **Demo target**: Working end-to-end with GitHub Issues as the first tracker
+The v1 foundation covers the full orchestration loop. Areas for future work: real-world stress testing, additional tracker adapters, persistent state storage, and production hardening.
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| GitHub Issues as first tracker | Most accessible, everyone has GitHub, easy to demo | — Pending |
-| Hybrid agent sessions (CLI + persistent) | Flexibility — simple tasks use CLI, complex use persistent sessions | — Pending |
-| Symphony patterns adapted, not copied | Symphony is Codex-specific; forgectl is agent-agnostic | — Pending |
-| Single machine first | Reduce complexity, prove the model before scaling | — Pending |
-| In-repo WORKFLOW.md contract | Teams version-control their agent policy alongside code | — Pending |
-| File-based state (no DB yet) | Matches Symphony's in-memory design, add persistence later | — Pending |
+| GitHub Issues as first tracker | Most accessible, everyone has GitHub | Good |
+| Hybrid agent sessions (CLI + persistent) | Simple tasks use CLI, complex use persistent | Good |
+| Symphony patterns adapted, not copied | Symphony is Codex-specific; forgectl is agent-agnostic | Good |
+| Single machine first | Reduce complexity, prove the model before scaling | Good |
+| In-repo WORKFLOW.md contract | Teams version-control their agent policy alongside code | Good |
+| File-based state (no DB yet) | Matches Symphony's in-memory design, add persistence later | Good |
+| Notion as second adapter | Validates adapter interface is truly pluggable | Good |
+| Factory registry for stateful adapters | Adapters hold private state (ETag, cache, rate limits) | Good |
+| TrackerIssue.id = API-addressable identifier | Issue number for GitHub, page UUID for Notion | Good (Phase 9 fix) |
+| Polling-first (no webhooks yet) | Simpler, works everywhere, webhooks as future enhancement | Good |
+
+## Constraints
+
+- **Tech stack**: TypeScript, Node.js 20+, existing dependencies (commander, fastify, dockerode, zod)
+- **Agent model**: Must support both one-shot CLI calls and persistent subprocess sessions
+- **Tracker agnostic**: Generic adapter interface — no hardcoded assumptions in core
+- **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
+- **Single process**: No distributed queue yet — single daemon process with in-memory state
 
 ---
-*Last updated: 2026-03-07 after initialization*
+*Last updated: 2026-03-09 after v1.0 milestone*
