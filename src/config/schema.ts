@@ -131,6 +131,10 @@ export const ConfigSchema = z.object({
 
   orchestrator: OrchestratorConfigSchema.default({}),
 
+  storage: z.object({
+    db_path: z.string().default("~/.forgectl/forgectl.db"),
+  }).default({}),
+
   board: z.object({
     state_dir: z.string().default("~/.forgectl/board"),
     scheduler_tick_seconds: z.number().int().positive().default(30),

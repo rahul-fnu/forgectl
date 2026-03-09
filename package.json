@@ -20,9 +20,11 @@
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "@fastify/static": "^9.0.0",
+    "better-sqlite3": "^12.6.2",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "dockerode": "^4.0.2",
+    "drizzle-orm": "^0.45.1",
     "fastify": "^5.7.4",
     "js-yaml": "^4.1.0",
     "keytar": "^7.9.0",
@@ -30,10 +32,12 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/dockerode": "^3.3.31",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",
     "@types/picomatch": "^3.0.1",
+    "drizzle-kit": "^0.31.9",
     "eslint": "^9.0.0",
     "prettier": "^3.3.0",
     "tsup": "^8.1.0",
