@@ -11,7 +11,7 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 - [x] **STOR-01**: Daemon uses SQLite database with Drizzle ORM for persistent state
 - [x] **STOR-02**: Database schema auto-migrates on daemon startup
-- [ ] **STOR-03**: All database access uses typed repository pattern (query/mutation functions per entity)
+- [x] **STOR-03**: All database access uses typed repository pattern (query/mutation functions per entity)
 
 ### Identity
 
@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | STOR-01 | Phase 10 | Complete |
 | STOR-02 | Phase 10 | Complete |
-| STOR-03 | Phase 10 | Pending |
+| STOR-03 | Phase 10 | Complete |
 | IDEN-01 | Phase 11 | Pending |
 | IDEN-02 | Phase 11 | Pending |
 | IDEN-03 | Phase 11 | Pending |

@@ -32,7 +32,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - Integer phases (10, 11, 12...): Planned milestone work
 - Decimal phases (10.1, 10.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 10: Persistent Storage Layer** - SQLite database with Drizzle ORM, migrations, and repository pattern
+- [x] **Phase 10: Persistent Storage Layer** - SQLite database with Drizzle ORM, migrations, and repository pattern (completed 2026-03-09)
 - [ ] **Phase 11: Company & Agent Identity** - Entity model for agents and companies with roles, lifecycle, and budget scoping
 - [ ] **Phase 12: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back
 - [ ] **Phase 13: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks
@@ -158,7 +158,7 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 10. Persistent Storage Layer | 1/2 | In progress | - |
+| 10. Persistent Storage Layer | 2/2 | Complete   | 2026-03-09 |
 | 11. Company & Agent Identity | 0/2 | Not started | - |
 | 12. Flight Recorder | 0/2 | Not started | - |
 | 13. Durable Execution | 0/3 | Not started | - |
