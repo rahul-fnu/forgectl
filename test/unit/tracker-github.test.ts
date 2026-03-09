@@ -110,7 +110,7 @@ describe("GitHub Tracker Adapter", () => {
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues).toHaveLength(1);
-      expect(issues[0].id).toBe("123456");
+      expect(issues[0].id).toBe("42");
       expect(issues[0].identifier).toBe("#42");
       expect(issues[0].title).toBe("Fix login bug");
       expect(issues[0].description).toBe("Users cannot login");
@@ -366,6 +366,50 @@ describe("GitHub Tracker Adapter", () => {
     });
   });
 
+  describe("parseIssueNumber hardening", () => {
+    it("handles plain number string for mutation methods", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 201));
+
+      await adapter.postComment("42", "Test comment");
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain("/repos/acme/repo/issues/42/comments");
+    });
+
+    it("throws on invalid input for mutation methods", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      await expect(adapter.postComment("not-a-number", "Test")).rejects.toThrow(
+        /Invalid issue number/,
+      );
+    });
+  });
+
+  describe("normalizeIssue id semantics", () => {
+    it("sets id to issue number not internal id", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([makeGitHubIssue({ id: 999999, number: 7 })]),
+      );
+
+      const issues = await adapter.fetchCandidateIssues();
+      expect(issues[0].id).toBe("7");
+      expect(issues[0].identifier).toBe("#7");
+    });
+  });
+
   describe("rate limiting", () => {
     it("throws when rate limit is exhausted", async () => {
       const { createGitHubAdapter } = await import(
@@ -404,7 +448,7 @@ describe("GitHub Tracker Adapter", () => {
       const issue = issues[0];
 
       expect(issue).toEqual({
-        id: "123456",
+        id: "42",
         identifier: "#42",
         title: "Fix login bug",
         description: "Users cannot login",

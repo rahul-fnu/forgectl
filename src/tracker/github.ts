@@ -47,6 +47,9 @@ function extractPriority(labels: GitHubLabel[]): string | null {
 /**
  * Normalize a GitHub issue JSON object to TrackerIssue.
  * Returns null for pull requests (items with pull_request key).
+ *
+ * id is set to ghIssue.number (the API-addressable issue number),
+ * not ghIssue.id (GitHub's internal numeric ID).
  */
 function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
   if (ghIssue.pull_request) {
@@ -59,7 +62,7 @@ function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
   }
 
   return {
-    id: String(ghIssue.id),
+    id: String(ghIssue.number),
     identifier: `#${ghIssue.number}`,
     title: ghIssue.title,
     description: ghIssue.body ?? "",
@@ -85,10 +88,16 @@ function parseLinkHeader(header: string | null): string | null {
 }
 
 /**
- * Parse an issue identifier like "#42" to a number.
+ * Parse an issue ID or identifier (e.g. "42" or "#42") to a number.
+ * Throws on invalid input.
  */
-function parseIssueNumber(identifier: string): number {
-  return parseInt(identifier.replace("#", ""), 10);
+function parseIssueNumber(idOrIdentifier: string): number {
+  const stripped = idOrIdentifier.replace(/^#/, "");
+  const num = parseInt(stripped, 10);
+  if (Number.isNaN(num)) {
+    throw new Error(`Invalid issue number: "${idOrIdentifier}"`);
+  }
+  return num;
 }
 
 /**

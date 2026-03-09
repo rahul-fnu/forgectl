@@ -95,6 +95,10 @@ function extractProperty(
  * Page normalization
  * ------------------------------------------------------------------ */
 
+/**
+ * Normalize a Notion page to TrackerIssue.
+ * id is set to pageId (the API-addressable Notion page UUID).
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizePage(page: any, propertyMap: Record<string, string>): TrackerIssue {
   const props = page.properties ?? {};

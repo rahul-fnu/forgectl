@@ -2,7 +2,15 @@
  * Normalized issue model — tracker-agnostic representation of a work item.
  */
 export interface TrackerIssue {
+  /**
+   * API-addressable identifier passed to all mutation methods (postComment, updateState, updateLabels).
+   * For GitHub: issue number as string ('42'). For Notion: page UUID.
+   */
   id: string;
+  /**
+   * Human-readable display identifier used in logs, comments, and UI.
+   * For GitHub: '#42'. For Notion: short UUID prefix.
+   */
   identifier: string;
   title: string;
   description: string;
