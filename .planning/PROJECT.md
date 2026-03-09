@@ -8,6 +8,18 @@ forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex) in i
 
 Continuously pull work from issue trackers, dispatch AI agents to execute it in sandboxed environments, validate results, and report back — with zero human intervention after setup.
 
+## Current Milestone: v2.0 Durable Runtime
+
+**Goal:** Evolve forgectl from a task orchestrator into a trusted, durable runtime for coding agents — controllable from your phone through a GitHub App with slash commands, reactions, and conversational clarification.
+
+**Target features:**
+- SQLite persistent storage layer (Drizzle ORM) replacing file-based state
+- Company & agent identity model for multi-tenancy, budget scoping, and audit attribution
+- Flight recorder / run ledger with append-only event sourcing and rich write-back
+- Durable execution with session persistence, pause/resume, and crash recovery
+- Governance, approvals, and budget enforcement with configurable autonomy per workflow
+- GitHub App as primary interaction surface (slash commands, reactions, conversations, check runs)
+
 ## Requirements
 
 ### Validated
@@ -29,7 +41,12 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ### Active
 
-(No active requirements — next milestone not yet defined)
+- [ ] SQLite storage layer with Drizzle ORM, migrations, and repository pattern
+- [ ] Company & agent identity model with roles, lifecycle, permissions, and budget scoping
+- [ ] Append-only flight recorder with event sourcing and rich write-back to GitHub/Notion
+- [ ] Durable execution with checkpointing, session resume, pause/resume for clarification
+- [ ] Governance system with configurable autonomy levels, approval gates, and budget enforcement
+- [ ] GitHub App with webhook receiver, slash commands, reactions, conversational clarification, and check runs
 
 ### Out of Scope
 
@@ -38,9 +55,13 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Multi-tenant RBAC — single-user for now
 - Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
 - Conditional/loop pipeline nodes — after core orchestrator is solid
-- Persistent database (Postgres) for run history — file-based first, DB later
-- Manual approval gates in pipelines — future milestone
 - Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
+- Notion App integration (database triggers, rich write-back) — deferred to v2.1
+- Mirrored task model / tracker normalization — deferred to v2.1
+- Multi-agent delegation with org hierarchy — deferred to v2.1+
+- Dashboard v2 (power-user aggregate views) — deferred to v2.1+
+- Slack/Discord bot — get GitHub + Notion right first
+- Your own mobile app — GitHub and Notion apps are the UI
 
 ## Context
 
@@ -61,11 +82,15 @@ The v1 foundation covers the full orchestration loop. Areas for future work: rea
 | Symphony patterns adapted, not copied | Symphony is Codex-specific; forgectl is agent-agnostic | Good |
 | Single machine first | Reduce complexity, prove the model before scaling | Good |
 | In-repo WORKFLOW.md contract | Teams version-control their agent policy alongside code | Good |
-| File-based state (no DB yet) | Matches Symphony's in-memory design, add persistence later | Good |
+| File-based state (no DB yet) | Matches Symphony's in-memory design, add persistence later | ⚠️ Revisit — v2.0 replaces with SQLite |
 | Notion as second adapter | Validates adapter interface is truly pluggable | Good |
 | Factory registry for stateful adapters | Adapters hold private state (ETag, cache, rate limits) | Good |
 | TrackerIssue.id = API-addressable identifier | Issue number for GitHub, page UUID for Notion | Good (Phase 9 fix) |
-| Polling-first (no webhooks yet) | Simpler, works everywhere, webhooks as future enhancement | Good |
+| Polling-first (no webhooks yet) | Simpler, works everywhere, webhooks as future enhancement | ⚠️ Revisit — v2.0 adds GitHub App webhooks |
+| SQLite over Postgres | Zero-config, embeddable, sufficient for single-machine v2.0 | — Pending |
+| GitHub App as primary UI | Slash commands, reactions, conversations replace dashboard for most workflows | — Pending |
+| Event-sourced audit trail | Flight recorder is append-only, immutable; conversations part of event stream | — Pending |
+| Autonomy per workflow, not global | Different work needs different oversight; configured in WORKFLOW.md | — Pending |
 
 ## Constraints
 
@@ -76,4 +101,4 @@ The v1 foundation covers the full orchestration loop. Areas for future work: rea
 - **Single process**: No distributed queue yet — single daemon process with in-memory state
 
 ---
-*Last updated: 2026-03-09 after v1.0 milestone*
+*Last updated: 2026-03-09 after v2.0 milestone started*

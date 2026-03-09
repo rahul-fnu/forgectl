@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Core Orchestrator
-status: completed
-stopped_at: Milestone v1.0 archived
+milestone: v2.0
+milestone_name: Durable Runtime
+status: active
+stopped_at: Defining requirements
 last_updated: "2026-03-09"
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 24
-  completed_plans: 24
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -19,12 +19,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back — zero human intervention.
-**Current focus:** Planning next milestone
+**Current focus:** Defining requirements for v2.0
 
-## Current Phase
-Milestone v1.0 complete. No active phase.
+## Current Position
 
-## Completed Phases
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-09 — Milestone v2.0 started
+
+## Completed Phases (v1.0)
 - Phase 1: Tracker Adapters (4/4 plans, verified)
 - Phase 2: Workspace Management (2/2 plans, verified)
 - Phase 3: Workflow Contract (2/2 plans, verified)
@@ -39,5 +43,5 @@ Milestone v1.0 complete. No active phase.
 (none)
 
 ## Last Session
-- **Stopped at:** Milestone v1.0 archived
+- **Stopped at:** Milestone v2.0 started — defining requirements
 - **Timestamp:** 2026-03-09
