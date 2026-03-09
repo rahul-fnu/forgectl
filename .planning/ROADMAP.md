@@ -54,7 +54,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **Plans**: 2 plans
 
 Plans:
-- [ ] 10-01-PLAN.md — Database foundation: install deps, schema, database singleton, migrator, config
+- [x] 10-01-PLAN.md — Database foundation: install deps, schema, database singleton, migrator, config
 - [ ] 10-02-PLAN.md — Typed repositories, RunQueue/PipelineRunService integration, daemon wiring
 
 ### Phase 11: Company & Agent Identity
@@ -158,7 +158,7 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 10. Persistent Storage Layer | 0/2 | Not started | - |
+| 10. Persistent Storage Layer | 1/2 | In progress | - |
 | 11. Company & Agent Identity | 0/2 | Not started | - |
 | 12. Flight Recorder | 0/2 | Not started | - |
 | 13. Durable Execution | 0/3 | Not started | - |
