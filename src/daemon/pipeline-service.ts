@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { validateDAG } from "../pipeline/dag.js";
 import { PipelineExecutor } from "../pipeline/executor.js";
 import type { NodeExecution, PipelineDefinition, PipelineRun } from "../pipeline/types.js";
+import type { PipelineRepository } from "../storage/repositories/pipelines.js";
 
 interface PipelineRunEntry {
   pipeline: PipelineDefinition;
@@ -30,7 +31,13 @@ export class PipelineValidationError extends Error {
 }
 
 export class PipelineRunService extends EventEmitter {
-  private runs = new Map<string, PipelineRunEntry>();
+  private activeRuns = new Map<string, PipelineRunEntry>();
+  private repo: PipelineRepository | null;
+
+  constructor(repo?: PipelineRepository) {
+    super();
+    this.repo = repo ?? null;
+  }
 
   submitPipeline(pipelineDef: PipelineDefinition, options: SubmitPipelineOptions = {}): {
     id: string;
@@ -50,15 +57,41 @@ export class PipelineRunService extends EventEmitter {
       checkpointSourceRunId: options.checkpointSourceRunId,
     });
 
+    const createdAt = new Date().toISOString();
+
+    // Persist to database if repository is available
+    if (this.repo) {
+      this.repo.insert({
+        id: executor.runId,
+        pipelineDefinition: pipelineDef,
+        status: "running",
+        nodeStates: Object.fromEntries(executor.getNodeStates()),
+        startedAt: createdAt,
+      });
+    }
+
     const entry: PipelineRunEntry = {
       pipeline: pipelineDef,
       executor,
       result: undefined,
-      createdAt: new Date().toISOString(),
+      createdAt,
       promise: Promise.resolve().then(async () => {
         try {
           const result = await executor.execute();
           entry.result = result;
+          // Persist completion
+          if (this.repo) {
+            this.repo.updateStatus(executor.runId, {
+              status: result.status,
+              completedAt: result.completedAt,
+            });
+            this.repo.updateNodeStates(
+              executor.runId,
+              Object.fromEntries(
+                [...executor.getNodeStates()].map(([k, v]) => [k, { ...v }])
+              ),
+            );
+          }
           this.emit("run-completed", { runId: executor.runId, result, pipeline: pipelineDef });
           return result;
         } catch (err) {
@@ -71,6 +104,19 @@ export class PipelineRunService extends EventEmitter {
             completedAt: new Date().toISOString(),
           };
           entry.result = failed;
+          // Persist failure
+          if (this.repo) {
+            this.repo.updateStatus(executor.runId, {
+              status: "failed",
+              completedAt: failed.completedAt,
+            });
+            this.repo.updateNodeStates(
+              executor.runId,
+              Object.fromEntries(
+                [...executor.getNodeStates()].map(([k, v]) => [k, { ...v }])
+              ),
+            );
+          }
           this.emit("run-completed", {
             runId: executor.runId,
             result: failed,
@@ -78,11 +124,14 @@ export class PipelineRunService extends EventEmitter {
             error: err instanceof Error ? err.message : String(err),
           });
           return failed;
+        } finally {
+          // Keep entry in activeRuns for in-process lookups (e.g., rerun).
+          // Persisted data in repo survives daemon restarts.
         }
       }),
     };
 
-    this.runs.set(executor.runId, entry);
+    this.activeRuns.set(executor.runId, entry);
 
     return {
       id: executor.runId,
@@ -97,17 +146,29 @@ export class PipelineRunService extends EventEmitter {
     verbose?: boolean;
     checkpointRunId?: string;
   }): { id: string; status: "running" } {
-    const entry = this.runs.get(baseRunId);
-    if (!entry) {
+    // Check active runs first, then fall back to repository
+    const entry = this.activeRuns.get(baseRunId);
+    let pipeline: PipelineDefinition | undefined;
+
+    if (entry) {
+      pipeline = entry.pipeline;
+    } else if (this.repo) {
+      const persisted = this.repo.findById(baseRunId);
+      if (persisted) {
+        pipeline = persisted.pipelineDefinition as PipelineDefinition;
+      }
+    }
+
+    if (!pipeline) {
       throw new Error("Pipeline run not found");
     }
 
-    const nodeIds = new Set(entry.pipeline.nodes.map((node) => node.id));
+    const nodeIds = new Set(pipeline.nodes.map((node) => node.id));
     if (!nodeIds.has(options.fromNode)) {
       throw new Error(`Invalid fromNode: ${options.fromNode}`);
     }
 
-    const submitted = this.submitPipeline(entry.pipeline, {
+    const submitted = this.submitPipeline(pipeline, {
       fromNode: options.fromNode,
       repo: options.repo,
       verbose: options.verbose,
@@ -128,21 +189,52 @@ export class PipelineRunService extends EventEmitter {
     startedAt: string;
     completedAt?: string;
   }> {
-    return [...this.runs.entries()].map(([id, entry]) => ({
-      id,
-      status: entry.result?.status ?? "running",
-      pipeline: {
-        name: entry.pipeline.name,
-        description: entry.pipeline.description,
-        nodes: entry.pipeline.nodes.map((node) => ({
-          id: node.id,
-          depends_on: node.depends_on ?? [],
-          workflow: node.workflow ?? entry.pipeline.defaults?.workflow ?? "code",
-        })),
-      },
-      startedAt: entry.result?.startedAt ?? entry.createdAt,
-      completedAt: entry.result?.completedAt,
-    }));
+    // Start with active in-memory runs
+    const result = new Map<string, ReturnType<typeof this.listRuns>[number]>();
+
+    for (const [id, entry] of this.activeRuns.entries()) {
+      result.set(id, {
+        id,
+        status: entry.result?.status ?? "running",
+        pipeline: {
+          name: entry.pipeline.name,
+          description: entry.pipeline.description,
+          nodes: entry.pipeline.nodes.map((node) => ({
+            id: node.id,
+            depends_on: node.depends_on ?? [],
+            workflow: node.workflow ?? entry.pipeline.defaults?.workflow ?? "code",
+          })),
+        },
+        startedAt: entry.result?.startedAt ?? entry.createdAt,
+        completedAt: entry.result?.completedAt,
+      });
+    }
+
+    // Merge with persisted runs from repository
+    if (this.repo) {
+      for (const row of this.repo.list()) {
+        if (!result.has(row.id)) {
+          const def = row.pipelineDefinition as PipelineDefinition;
+          result.set(row.id, {
+            id: row.id,
+            status: row.status as PipelineRun["status"],
+            pipeline: {
+              name: def.name,
+              description: def.description,
+              nodes: def.nodes.map((node) => ({
+                id: node.id,
+                depends_on: node.depends_on ?? [],
+                workflow: node.workflow ?? def.defaults?.workflow ?? "code",
+              })),
+            },
+            startedAt: row.startedAt,
+            completedAt: row.completedAt ?? undefined,
+          });
+        }
+      }
+    }
+
+    return [...result.values()];
   }
 
   getRun(id: string): {
@@ -153,21 +245,39 @@ export class PipelineRunService extends EventEmitter {
     startedAt: string;
     completedAt?: string;
   } | null {
-    const entry = this.runs.get(id);
-    if (!entry) return null;
+    // Check active runs first for live executor data
+    const entry = this.activeRuns.get(id);
+    if (entry) {
+      return {
+        id,
+        status: entry.result?.status ?? "running",
+        pipeline: entry.result?.pipeline ?? entry.pipeline,
+        nodes: serializeNodeStates(entry.executor.getNodeStates(), true),
+        startedAt: entry.result?.startedAt ?? entry.createdAt,
+        completedAt: entry.result?.completedAt,
+      };
+    }
 
-    return {
-      id,
-      status: entry.result?.status ?? "running",
-      pipeline: entry.result?.pipeline ?? entry.pipeline,
-      nodes: serializeNodeStates(entry.executor.getNodeStates(), true),
-      startedAt: entry.result?.startedAt ?? entry.createdAt,
-      completedAt: entry.result?.completedAt,
-    };
+    // Fall back to persisted data
+    if (this.repo) {
+      const row = this.repo.findById(id);
+      if (row) {
+        return {
+          id: row.id,
+          status: row.status as PipelineRun["status"],
+          pipeline: row.pipelineDefinition as PipelineDefinition,
+          nodes: (row.nodeStates as Record<string, NodeExecution>) ?? {},
+          startedAt: row.startedAt,
+          completedAt: row.completedAt ?? undefined,
+        };
+      }
+    }
+
+    return null;
   }
 
   async waitFor(runId: string): Promise<PipelineRun> {
-    const entry = this.runs.get(runId);
+    const entry = this.activeRuns.get(runId);
     if (!entry) {
       throw new Error(`Pipeline run not found: ${runId}`);
     }

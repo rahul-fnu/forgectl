@@ -7,6 +7,10 @@ import { RunQueue } from "./queue.js";
 import { registerRoutes } from "./routes.js";
 import { savePid, removePid } from "./lifecycle.js";
 import { loadConfig } from "../config/loader.js";
+import { createDatabase, closeDatabase } from "../storage/database.js";
+import { runMigrations } from "../storage/migrator.js";
+import { createRunRepository } from "../storage/repositories/runs.js";
+import { createPipelineRepository } from "../storage/repositories/pipelines.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
 import { Logger } from "../logging/logger.js";
@@ -29,15 +33,23 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   const app = Fastify({ logger: false });
   await app.register(cors, { origin: true });
 
-  const queue = new RunQueue(async (run: QueuedRun) => {
-    const config = loadConfig();
-    const plan = resolveRunPlan(config, run.options);
+  const config = loadConfig();
+
+  // Initialize persistent storage
+  const dbPath = config.storage?.db_path?.replace(/^~/, process.env.HOME || "/tmp");
+  const db = createDatabase(dbPath);
+  runMigrations(db);
+  const runRepo = createRunRepository(db);
+  const pipelineRepo = createPipelineRepository(db);
+
+  const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
+    const runConfig = loadConfig();
+    const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
     return executeRun(plan, logger);
   });
 
-  const config = loadConfig();
-  const pipelineService = new PipelineRunService();
+  const pipelineService = new PipelineRunService(pipelineRepo);
   const boardStore = new BoardStore(resolveBoardStateDir(config.board.state_dir));
   const boardEngine = new BoardEngine(boardStore, pipelineService, {
     maxConcurrentCardRuns: config.board.max_concurrent_card_runs,
@@ -139,6 +151,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     if (orchestrator) {
       await orchestrator.stop();
     }
+    closeDatabase(db);
     removePid();
     await app.close();
     process.exit(0);

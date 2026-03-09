@@ -7,6 +7,9 @@ import { BoardEngine } from "../../src/board/engine.js";
 import { BoardStore } from "../../src/board/store.js";
 import { registerRoutes } from "../../src/daemon/routes.js";
 import { RunQueue } from "../../src/daemon/queue.js";
+import { createDatabase, closeDatabase } from "../../src/storage/database.js";
+import { runMigrations } from "../../src/storage/migrator.js";
+import { createRunRepository } from "../../src/storage/repositories/runs.js";
 import type { PipelineDefinition, PipelineRun } from "../../src/pipeline/types.js";
 
 class FakePipelineService {
@@ -92,7 +95,11 @@ templates:
     const engine = new BoardEngine(store, pipelineService as never, { maxConcurrentCardRuns: 3 });
 
     const app = Fastify();
-    const queue = new RunQueue(async () => ({
+    const dbDir = mkdtempSync(join(tmpdir(), "forgectl-board-route-test-"));
+    const db = createDatabase(join(dbDir, "test.db"));
+    runMigrations(db);
+    const runRepo = createRunRepository(db);
+    const queue = new RunQueue(runRepo, async () => ({
       success: true,
       validation: { passed: true, totalAttempts: 0, stepResults: [] },
       durationMs: 1,
@@ -143,6 +150,8 @@ templates:
       return parsed.some((entry) => entry.status === "completed");
     });
 
+    closeDatabase(db);
+    rmSync(dbDir, { recursive: true, force: true });
     await app.close();
   });
 });

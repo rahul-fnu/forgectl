@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Fastify from "fastify";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { RunQueue } from "../../src/daemon/queue.js";
+import { createDatabase, closeDatabase, type AppDatabase } from "../../src/storage/database.js";
+import { runMigrations } from "../../src/storage/migrator.js";
+import { createRunRepository, type RunRepository } from "../../src/storage/repositories/runs.js";
 
 const pipelineExecutorCtor = vi.fn();
 let runCounter = 0;
@@ -42,15 +48,28 @@ vi.mock("../../src/pipeline/executor.js", () => ({
 }));
 
 describe("pipeline rerun route validation", () => {
+  let db: AppDatabase;
+  let repo: RunRepository;
+  let tmpDir: string;
+
   beforeEach(() => {
     pipelineExecutorCtor.mockClear();
     runCounter = 0;
+    tmpDir = mkdtempSync(join(tmpdir(), "forgectl-pipe-rerun-test-"));
+    db = createDatabase(join(tmpDir, "test.db"));
+    runMigrations(db);
+    repo = createRunRepository(db);
+  });
+
+  afterEach(() => {
+    closeDatabase(db);
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("returns 400 when fromNode is invalid", async () => {
     const { registerRoutes } = await import("../../src/daemon/routes.js");
     const app = Fastify();
-    const queue = new RunQueue(async () => ({
+    const queue = new RunQueue(repo, async () => ({
       success: true,
       validation: { passed: true, totalAttempts: 0, stepResults: [] },
       durationMs: 1,
@@ -84,7 +103,7 @@ describe("pipeline rerun route validation", () => {
   it("defaults checkpointRunId to base run id and supports override", async () => {
     const { registerRoutes } = await import("../../src/daemon/routes.js");
     const app = Fastify();
-    const queue = new RunQueue(async () => ({
+    const queue = new RunQueue(repo, async () => ({
       success: true,
       validation: { passed: true, totalAttempts: 0, stepResults: [] },
       durationMs: 1,
