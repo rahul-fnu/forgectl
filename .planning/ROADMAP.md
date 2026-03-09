@@ -3,7 +3,7 @@
 ## Milestones
 
 - [x] **v1.0 Core Orchestrator** - Phases 1-9 (shipped 2026-03-09)
-- [ ] **v2.0 Durable Runtime** - Phases 10-16 (in progress)
+- [ ] **v2.0 Durable Runtime** - Phases 10-15 (in progress)
 
 ## Phases
 
@@ -33,12 +33,11 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - Decimal phases (10.1, 10.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 10: Persistent Storage Layer** - SQLite database with Drizzle ORM, migrations, and repository pattern (completed 2026-03-09)
-- [ ] **Phase 11: Company & Agent Identity** - Entity model for agents and companies with roles, lifecycle, and budget scoping
-- [ ] **Phase 12: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back
-- [ ] **Phase 13: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks
-- [ ] **Phase 14: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement
-- [ ] **Phase 15: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs
-- [ ] **Phase 16: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow
+- [ ] **Phase 11: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back
+- [ ] **Phase 12: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks
+- [ ] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement
+- [ ] **Phase 14: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs
+- [ ] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow
 
 ## Phase Details
 
@@ -57,24 +56,9 @@ Plans:
 - [x] 10-01-PLAN.md — Database foundation: install deps, schema, database singleton, migrator, config
 - [ ] 10-02-PLAN.md — Typed repositories, RunQueue/PipelineRunService integration, daemon wiring
 
-### Phase 11: Company & Agent Identity
-**Goal**: Agents and companies exist as first-class entities with roles, lifecycle states, and budget scoping so that runs can be attributed and constrained
-**Depends on**: Phase 10
-**Requirements**: IDEN-01, IDEN-02, IDEN-03, IDEN-04
-**Success Criteria** (what must be TRUE):
-  1. User can create and list companies via `forgectl company create/list`
-  2. User can create agents with roles and view their status via `forgectl agent create/list/status`
-  3. Each agent belongs to a company and has per-agent budget caps stored in the database
-  4. Company-level config and budget caps scope all agents within that company
-**Plans**: TBD
-
-Plans:
-- [ ] 11-01: TBD
-- [ ] 11-02: TBD
-
-### Phase 12: Flight Recorder
+### Phase 11: Flight Recorder
 **Goal**: Every run produces a complete, immutable audit trail that can be inspected after the fact and formatted into rich write-back comments
-**Depends on**: Phase 10, Phase 11
+**Depends on**: Phase 10
 **Requirements**: AUDT-01, AUDT-02, AUDT-03, AUDT-04
 **Success Criteria** (what must be TRUE):
   1. Every run action (prompt, tool call, validation, retry, cost) is recorded as an append-only event in the database
@@ -84,12 +68,12 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
+- [ ] 11-01: TBD
+- [ ] 11-02: TBD
 
-### Phase 13: Durable Execution
+### Phase 12: Durable Execution
 **Goal**: Runs survive daemon crashes, can be paused for human input, and resume exactly where they left off
-**Depends on**: Phase 10, Phase 12
+**Depends on**: Phase 10, Phase 11
 **Requirements**: DURA-01, DURA-02, DURA-03, DURA-04
 **Success Criteria** (what must be TRUE):
   1. If the daemon crashes mid-run, restarting the daemon resumes interrupted runs or marks them as failed with explanation
@@ -99,13 +83,13 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 13-01: TBD
-- [ ] 13-02: TBD
-- [ ] 13-03: TBD
+- [ ] 12-01: TBD
+- [ ] 12-02: TBD
+- [ ] 12-03: TBD
 
-### Phase 14: Governance & Approvals
+### Phase 13: Governance & Approvals
 **Goal**: Each workflow has a configurable autonomy level that determines whether runs need human approval, and budgets are enforced before execution begins
-**Depends on**: Phase 11, Phase 12
+**Depends on**: Phase 11
 **Requirements**: GOVN-01, GOVN-02, GOVN-03
 **Success Criteria** (what must be TRUE):
   1. WORKFLOW.md supports an `autonomy` field with levels (full/semi/interactive/supervised) that controls whether runs auto-execute or wait for approval
@@ -114,12 +98,12 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 14-01: TBD
-- [ ] 14-02: TBD
+- [ ] 13-01: TBD
+- [ ] 13-02: TBD
 
-### Phase 15: GitHub App
+### Phase 14: GitHub App
 **Goal**: Users interact with forgectl entirely through GitHub -- triggering runs, approving work, asking questions, and reviewing results without leaving their browser or phone
-**Depends on**: Phase 13, Phase 14
+**Depends on**: Phase 12, Phase 13
 **Requirements**: GHAP-01, GHAP-02, GHAP-03, GHAP-04, GHAP-05, GHAP-06, GHAP-07, GHAP-08, GHAP-09
 **Success Criteria** (what must be TRUE):
   1. A GitHub App receives webhooks with HMAC-SHA256 verification and dispatches runs based on labels or issue events
@@ -130,13 +114,13 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 15-01: TBD
-- [ ] 15-02: TBD
-- [ ] 15-03: TBD
-- [ ] 15-04: TBD
-- [ ] 15-05: TBD
+- [ ] 14-01: TBD
+- [ ] 14-02: TBD
+- [ ] 14-03: TBD
+- [ ] 14-04: TBD
+- [ ] 14-05: TBD
 
-### Phase 16: Browser-Use Integration
+### Phase 15: Browser-Use Integration
 **Goal**: forgectl can dispatch browser-based agents for research and web tasks using the same workflow system as code agents
 **Depends on**: Phase 10
 **Requirements**: BROW-01, BROW-02, BROW-03
@@ -147,21 +131,20 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 16-01: TBD
-- [ ] 16-02: TBD
+- [ ] 15-01: TBD
+- [ ] 15-02: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
+Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 (Decimal phases, if inserted, execute between their surrounding integers)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Persistent Storage Layer | 2/2 | Complete    | 2026-03-09 |
-| 11. Company & Agent Identity | 0/2 | Not started | - |
-| 12. Flight Recorder | 0/2 | Not started | - |
-| 13. Durable Execution | 0/3 | Not started | - |
-| 14. Governance & Approvals | 0/2 | Not started | - |
-| 15. GitHub App | 0/5 | Not started | - |
-| 16. Browser-Use Integration | 0/2 | Not started | - |
+| 11. Flight Recorder | 0/2 | Not started | - |
+| 12. Durable Execution | 0/3 | Not started | - |
+| 13. Governance & Approvals | 0/2 | Not started | - |
+| 14. GitHub App | 0/5 | Not started | - |
+| 15. Browser-Use Integration | 0/2 | Not started | - |

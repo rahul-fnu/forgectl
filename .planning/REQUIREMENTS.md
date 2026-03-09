@@ -13,13 +13,6 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 - [x] **STOR-02**: Database schema auto-migrates on daemon startup
 - [x] **STOR-03**: All database access uses typed repository pattern (query/mutation functions per entity)
 
-### Identity
-
-- [ ] **IDEN-01**: Agent entity with role, status, lifecycle states, and budget scope
-- [ ] **IDEN-02**: Company entity with tenant isolation and per-company config
-- [ ] **IDEN-03**: Per-agent and per-company budget caps
-- [ ] **IDEN-04**: CLI commands: `forgectl company create/list`, `forgectl agent create/list/status`
-
 ### Audit
 
 - [ ] **AUDT-01**: Append-only event log records all run actions (prompts, tool calls, validation, retries, costs)
@@ -119,37 +112,33 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STOR-01 | Phase 10 | Complete |
 | STOR-02 | Phase 10 | Complete |
 | STOR-03 | Phase 10 | Complete |
-| IDEN-01 | Phase 11 | Pending |
-| IDEN-02 | Phase 11 | Pending |
-| IDEN-03 | Phase 11 | Pending |
-| IDEN-04 | Phase 11 | Pending |
-| AUDT-01 | Phase 12 | Pending |
-| AUDT-02 | Phase 12 | Pending |
-| AUDT-03 | Phase 12 | Pending |
-| AUDT-04 | Phase 12 | Pending |
-| DURA-01 | Phase 13 | Pending |
-| DURA-02 | Phase 13 | Pending |
-| DURA-03 | Phase 13 | Pending |
-| DURA-04 | Phase 13 | Pending |
-| GOVN-01 | Phase 14 | Pending |
-| GOVN-02 | Phase 14 | Pending |
-| GOVN-03 | Phase 14 | Pending |
-| GHAP-01 | Phase 15 | Pending |
-| GHAP-02 | Phase 15 | Pending |
-| GHAP-03 | Phase 15 | Pending |
-| GHAP-04 | Phase 15 | Pending |
-| GHAP-05 | Phase 15 | Pending |
-| GHAP-06 | Phase 15 | Pending |
-| GHAP-07 | Phase 15 | Pending |
-| GHAP-08 | Phase 15 | Pending |
-| GHAP-09 | Phase 15 | Pending |
-| BROW-01 | Phase 16 | Pending |
-| BROW-02 | Phase 16 | Pending |
-| BROW-03 | Phase 16 | Pending |
+| AUDT-01 | Phase 11 | Pending |
+| AUDT-02 | Phase 11 | Pending |
+| AUDT-03 | Phase 11 | Pending |
+| AUDT-04 | Phase 11 | Pending |
+| DURA-01 | Phase 12 | Pending |
+| DURA-02 | Phase 12 | Pending |
+| DURA-03 | Phase 12 | Pending |
+| DURA-04 | Phase 12 | Pending |
+| GOVN-01 | Phase 13 | Pending |
+| GOVN-02 | Phase 13 | Pending |
+| GOVN-03 | Phase 13 | Pending |
+| GHAP-01 | Phase 14 | Pending |
+| GHAP-02 | Phase 14 | Pending |
+| GHAP-03 | Phase 14 | Pending |
+| GHAP-04 | Phase 14 | Pending |
+| GHAP-05 | Phase 14 | Pending |
+| GHAP-06 | Phase 14 | Pending |
+| GHAP-07 | Phase 14 | Pending |
+| GHAP-08 | Phase 14 | Pending |
+| GHAP-09 | Phase 14 | Pending |
+| BROW-01 | Phase 15 | Pending |
+| BROW-02 | Phase 15 | Pending |
+| BROW-03 | Phase 15 | Pending |
 
 **Coverage:**
-- v2.0 requirements: 30 total
-- Mapped to phases: 30
+- v2.0 requirements: 26 total
+- Mapped to phases: 26
 - Unmapped: 0
 
 ---
