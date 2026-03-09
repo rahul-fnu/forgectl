@@ -1,7 +1,7 @@
 # Requirements: forgectl v2.0 Durable Runtime
 
 **Defined:** 2026-03-09
-**Core Value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back — zero human intervention, now with durable execution, governance, and GitHub App interaction.
+**Core Value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention, now with durable execution, governance, and GitHub App interaction.
 
 ## v2.0 Requirements
 
@@ -37,7 +37,7 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 ### Governance
 
 - [ ] **GOVN-01**: Configurable autonomy levels per workflow (full/semi/interactive/supervised) in WORKFLOW.md
-- [ ] **GOVN-02**: Approval state machine (pending → approved/rejected/revision_requested)
+- [ ] **GOVN-02**: Approval state machine (pending -> approved/rejected/revision_requested)
 - [ ] **GOVN-03**: Auto-approve rules (cost < $X, files < N, specific label, workflow pattern)
 
 ### GitHub App
@@ -48,8 +48,8 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 - [ ] **GHAP-04**: Slash commands: /forgectl run, rerun, stop, status, approve, reject, help
 - [ ] **GHAP-05**: Permission checks: only repo collaborators can issue commands
 - [ ] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
-- [ ] **GHAP-07**: Reactions as approvals (👍=approve, 👎=reject, 🚀=trigger, 🔄=rerun)
-- [ ] **GHAP-08**: Check runs on PRs (pending → in_progress → success/failure)
+- [ ] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
+- [ ] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
 - [ ] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
 
 ### Browser-Use
@@ -116,42 +116,42 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STOR-01 | — | Pending |
-| STOR-02 | — | Pending |
-| STOR-03 | — | Pending |
-| IDEN-01 | — | Pending |
-| IDEN-02 | — | Pending |
-| IDEN-03 | — | Pending |
-| IDEN-04 | — | Pending |
-| AUDT-01 | — | Pending |
-| AUDT-02 | — | Pending |
-| AUDT-03 | — | Pending |
-| AUDT-04 | — | Pending |
-| DURA-01 | — | Pending |
-| DURA-02 | — | Pending |
-| DURA-03 | — | Pending |
-| DURA-04 | — | Pending |
-| GOVN-01 | — | Pending |
-| GOVN-02 | — | Pending |
-| GOVN-03 | — | Pending |
-| GHAP-01 | — | Pending |
-| GHAP-02 | — | Pending |
-| GHAP-03 | — | Pending |
-| GHAP-04 | — | Pending |
-| GHAP-05 | — | Pending |
-| GHAP-06 | — | Pending |
-| GHAP-07 | — | Pending |
-| GHAP-08 | — | Pending |
-| GHAP-09 | — | Pending |
-| BROW-01 | — | Pending |
-| BROW-02 | — | Pending |
-| BROW-03 | — | Pending |
+| STOR-01 | Phase 10 | Pending |
+| STOR-02 | Phase 10 | Pending |
+| STOR-03 | Phase 10 | Pending |
+| IDEN-01 | Phase 11 | Pending |
+| IDEN-02 | Phase 11 | Pending |
+| IDEN-03 | Phase 11 | Pending |
+| IDEN-04 | Phase 11 | Pending |
+| AUDT-01 | Phase 12 | Pending |
+| AUDT-02 | Phase 12 | Pending |
+| AUDT-03 | Phase 12 | Pending |
+| AUDT-04 | Phase 12 | Pending |
+| DURA-01 | Phase 13 | Pending |
+| DURA-02 | Phase 13 | Pending |
+| DURA-03 | Phase 13 | Pending |
+| DURA-04 | Phase 13 | Pending |
+| GOVN-01 | Phase 14 | Pending |
+| GOVN-02 | Phase 14 | Pending |
+| GOVN-03 | Phase 14 | Pending |
+| GHAP-01 | Phase 15 | Pending |
+| GHAP-02 | Phase 15 | Pending |
+| GHAP-03 | Phase 15 | Pending |
+| GHAP-04 | Phase 15 | Pending |
+| GHAP-05 | Phase 15 | Pending |
+| GHAP-06 | Phase 15 | Pending |
+| GHAP-07 | Phase 15 | Pending |
+| GHAP-08 | Phase 15 | Pending |
+| GHAP-09 | Phase 15 | Pending |
+| BROW-01 | Phase 16 | Pending |
+| BROW-02 | Phase 16 | Pending |
+| BROW-03 | Phase 16 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 30 total
-- Mapped to phases: 0
-- Unmapped: 30 ⚠️
+- Mapped to phases: 30
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-09*
-*Last updated: 2026-03-09 after initial definition*
+*Last updated: 2026-03-09 after roadmap creation*
