@@ -51,11 +51,11 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. Schema migrations run automatically on daemon startup without manual intervention
   3. All database reads and writes go through typed repository functions (no raw SQL in business logic)
   4. Existing `forgectl run` and `forgectl pipeline` commands still work after storage migration
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 10-01: TBD
-- [ ] 10-02: TBD
+- [ ] 10-01-PLAN.md — Database foundation: install deps, schema, database singleton, migrator, config
+- [ ] 10-02-PLAN.md — Typed repositories, RunQueue/PipelineRunService integration, daemon wiring
 
 ### Phase 11: Company & Agent Identity
 **Goal**: Agents and companies exist as first-class entities with roles, lifecycle states, and budget scoping so that runs can be attributed and constrained
