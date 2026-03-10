@@ -16,6 +16,13 @@ export const OutputMode = z.enum(["git", "files"]);
 export const AutonomyLevelEnum = z.enum(["full", "interactive", "semi", "supervised"]);
 export type AutonomyLevelEnum = z.infer<typeof AutonomyLevelEnum>;
 
+export const GitHubAppConfigSchema = z.object({
+  app_id: z.number().int().positive(),
+  private_key_path: z.string(),
+  webhook_secret: z.string(),
+  installation_id: z.number().int().positive().optional(),
+});
+
 export const AutoApproveRuleSchema = z.object({
   label: z.string().optional(),
   workflow_pattern: z.string().optional(),
@@ -151,6 +158,8 @@ export const ConfigSchema = z.object({
     scheduler_tick_seconds: z.number().int().positive().default(30),
     max_concurrent_card_runs: z.number().int().positive().default(2),
   }).default({}),
+
+  github_app: GitHubAppConfigSchema.optional(),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

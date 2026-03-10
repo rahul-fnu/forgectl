@@ -15,6 +15,7 @@ export const runs = sqliteTable("runs", {
   pauseContext: text("pause_context"), // JSON-serialized
   approvalContext: text("approval_context"), // JSON-serialized
   approvalAction: text("approval_action"),
+  githubCommentId: integer("github_comment_id"),
 });
 
 export const pipelineRuns = sqliteTable("pipeline_runs", {

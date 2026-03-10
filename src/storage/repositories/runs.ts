@@ -18,6 +18,7 @@ export interface RunRow {
   pauseContext: unknown;
   approvalContext: unknown;
   approvalAction: string | null;
+  githubCommentId: number | null;
 }
 
 export interface RunInsertParams {
@@ -39,6 +40,7 @@ export interface RunUpdateParams {
   pauseContext?: unknown;
   approvalContext?: unknown;
   approvalAction?: string;
+  githubCommentId?: number;
 }
 
 export interface RunRepository {
@@ -48,6 +50,8 @@ export interface RunRepository {
   findByStatus(status: string): RunRow[];
   list(): RunRow[];
   clearPauseContext(id: string): void;
+  findByGithubCommentId(commentId: number): RunRow | undefined;
+  setGithubCommentId(runId: string, commentId: number): void;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -66,6 +70,7 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     pauseContext: raw.pauseContext ? JSON.parse(raw.pauseContext) : null,
     approvalContext: raw.approvalContext ? JSON.parse(raw.approvalContext) : null,
     approvalAction: raw.approvalAction ?? null,
+    githubCommentId: raw.githubCommentId ?? null,
   };
 }
 
@@ -103,6 +108,8 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         updates.approvalContext = JSON.stringify(params.approvalContext);
       if (params.approvalAction !== undefined)
         updates.approvalAction = params.approvalAction;
+      if (params.githubCommentId !== undefined)
+        updates.githubCommentId = params.githubCommentId;
       db.update(runs).set(updates).where(eq(runs.id, id)).run();
     },
 
@@ -118,6 +125,22 @@ export function createRunRepository(db: AppDatabase): RunRepository {
       db.update(runs)
         .set({ pauseReason: null, pauseContext: null })
         .where(eq(runs.id, id))
+        .run();
+    },
+
+    findByGithubCommentId(commentId: number): RunRow | undefined {
+      const row = db
+        .select()
+        .from(runs)
+        .where(eq(runs.githubCommentId, commentId))
+        .get();
+      return row ? deserializeRow(row) : undefined;
+    },
+
+    setGithubCommentId(runId: string, commentId: number): void {
+      db.update(runs)
+        .set({ githubCommentId: commentId })
+        .where(eq(runs.id, runId))
         .run();
     },
   };
