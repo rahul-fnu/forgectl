@@ -15,6 +15,7 @@ import type { PipelineDefinition } from "../pipeline/types.js";
 import type { Orchestrator } from "../orchestrator/index.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { resumeRun } from "../durability/pause.js";
+import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
 
 interface InlineContext {
   name: string;
@@ -607,6 +608,67 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       try {
         const result = resumeRun(runRepo, id, input);
         return { status: "resumed", runId: result.runId };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("not found")) {
+          reply.code(404);
+          return { error: { code: "NOT_FOUND", message } };
+        }
+        reply.code(409);
+        return { error: { code: "CONFLICT", message } };
+      }
+    },
+  );
+
+  // --- Governance Approval API ---
+
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/runs/:id/approve",
+    async (request, reply) => {
+      if (!runRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Run repository not available" } };
+      }
+
+      const { id } = request.params;
+
+      try {
+        const { previousStatus } = approveRun(runRepo, id);
+        return { status: "approved", runId: id, previousStatus };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("not found")) {
+          reply.code(404);
+          return { error: { code: "NOT_FOUND", message } };
+        }
+        reply.code(409);
+        return { error: { code: "CONFLICT", message } };
+      }
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { reason?: string; action?: string; feedback?: string };
+  }>(
+    "/api/v1/runs/:id/reject",
+    async (request, reply) => {
+      if (!runRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Run repository not available" } };
+      }
+
+      const { id } = request.params;
+      const body = (request.body ?? {}) as { reason?: string; action?: string; feedback?: string };
+
+      try {
+        if (body.action === "revision_requested" && body.feedback) {
+          requestRevision(runRepo, id, body.feedback);
+          return { status: "revision_requested", runId: id };
+        }
+
+        rejectRun(runRepo, id, body.reason);
+        return { status: "rejected", runId: id };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes("not found")) {
