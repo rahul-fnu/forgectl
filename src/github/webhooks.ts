@@ -2,7 +2,8 @@ import type { App } from "@octokit/app";
 import type { Octokit } from "@octokit/core";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { ParsedCommand, RepoContext, IssueContext } from "./types.js";
-import type { RunRepository } from "../storage/repositories/runs.js";
+import type { RunRepository, RunRow } from "../storage/repositories/runs.js";
+import type { ResumeResult } from "../durability/pause.js";
 import { parseSlashCommand, buildErrorMessage } from "./commands.js";
 import { hasWriteAccess } from "./permissions.js";
 
@@ -22,6 +23,10 @@ export interface WebhookDeps {
   ) => Promise<void>;
   /** Run repository for looking up runs. */
   runRepo: RunRepository;
+  /** Find a run in waiting_for_input status for a given issue. */
+  findWaitingRunForIssue?: (owner: string, repo: string, issueNumber: number) => RunRow | undefined;
+  /** Resume a paused run with human input. */
+  resumeRun?: (runRepo: RunRepository, runId: string, humanInput: string) => ResumeResult;
 }
 
 /**
@@ -108,8 +113,29 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
     // Skip bot comments
     if (comment.user?.type === "Bot") return;
 
-    // Parse slash command from comment body
+    // Check for clarification reply before slash command parsing
     const cmd = parseSlashCommand(comment.body);
+    if (!cmd && deps.findWaitingRunForIssue && deps.resumeRun) {
+      const owner = repository.owner.login;
+      const repo = repository.name;
+      const waitingRun = deps.findWaitingRunForIssue(owner, repo, issue.number);
+      if (waitingRun) {
+        // Only the issue author can resume a waiting run
+        const commenter = comment.user?.login;
+        const issueAuthor = issue.user?.login;
+        if (commenter && commenter === issueAuthor) {
+          deps.resumeRun(deps.runRepo, waitingRun.id, comment.body);
+          await (octokit as any).rest.reactions.createForIssueComment({
+            owner,
+            repo,
+            comment_id: comment.id,
+            content: "eyes",
+          });
+        }
+      }
+      return;
+    }
+
     if (!cmd) return;
 
     const owner = repository.owner.login;
