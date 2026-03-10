@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: in-progress
-stopped_at: Completed 14-04-PLAN.md
-last_updated: "2026-03-10T06:44:16.000Z"
-last_activity: 2026-03-10 -- Completed plan 14-04 (Checks, PR Descriptions, Clarification & Daemon Wiring)
+stopped_at: Completed 14-05-PLAN.md
+last_updated: "2026-03-10T07:08:19.000Z"
+last_activity: 2026-03-10 -- Completed plan 14-05 (Daemon Wiring - gap closure)
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 14
+  completed_plans: 14
   percent: 85
 ---
 
@@ -26,16 +26,16 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 14 of 16 (GitHub App) -- COMPLETE
-Plan: 4 of 4 in current phase (all complete)
-Status: Phase 14 complete, ready for Phase 15
-Last activity: 2026-03-10 -- Completed plan 14-04 (Checks, PR Descriptions, Clarification & Daemon Wiring)
+Plan: 5 of 5 in current phase (all complete, including gap closure)
+Status: Phase 14 fully complete with gap closure, ready for Phase 15
+Last activity: 2026-03-10 -- Completed plan 14-05 (Daemon Wiring - gap closure)
 
-Progress: [████████░░] 85% (phase 14 complete)
+Progress: [████████░░] 85% (phase 14 complete with gap closure)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13
+- Total plans completed: 14
 - Average duration: 5min
 - Total execution time: 1.05 hours
 
@@ -47,16 +47,17 @@ Progress: [████████░░] 85% (phase 14 complete)
 | 11 | 2 | 9min | 4.5min |
 | 12 | 3 | 13min | 4.3min |
 | 13 | 2 | 13min | 6.5min |
-| 14 | 4 | 19min | 4.8min |
+| 14 | 5 | 23min | 4.6min |
 
 **Recent Trend:**
-- Last 5 plans: 4min, 8min, 5min, 7min, 4min
+- Last 5 plans: 8min, 5min, 7min, 4min, 4min
 - Trend: --
 
 *Updated after each plan completion*
 | Phase 14 P02 | 4min | 2 tasks | 6 files |
 | Phase 14 P03 | 4min | 2 tasks | 4 files |
 | Phase 14 P04 | 4min | 3 tasks | 7 files |
+| Phase 14 P05 | 4min | 1 task  | 4 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase 14]: Dynamic imports for GitHub modules in daemon keeps them optional (14-04)
 - [Phase 14]: Clarification reply check runs before slash command parsing (14-04)
 - [Phase 14]: Only issue author can resume paused run, non-authors silently ignored (14-04)
+- [Phase 14]: Extracted handleSlashCommand into separate command-handler module for testability (14-05)
+- [Phase 14]: findRunForIssue matches by issueContext in options or task string containing identifier (14-05)
+- [Phase 14]: OrchestratorLike interface decouples command handler from full Orchestrator class (14-05)
 
 ### Pending Todos
 
@@ -121,6 +125,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T06:44:16Z
-Stopped at: Completed 14-04-PLAN.md
+Last session: 2026-03-10T07:08:19Z
+Stopped at: Completed 14-05-PLAN.md
 Resume file: None
