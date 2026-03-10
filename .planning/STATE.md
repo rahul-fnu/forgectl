@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: in-progress
-stopped_at: Completed 14-01-PLAN.md
-last_updated: "2026-03-10T06:30:00.000Z"
-last_activity: 2026-03-10 -- Completed plan 14-01 (GitHub App Foundation)
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-03-10T06:36:34.000Z"
+last_activity: 2026-03-10 -- Completed plan 14-03 (Comments & Reactions)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 13
-  completed_plans: 10
-  percent: 77
+  completed_plans: 12
+  percent: 92
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 14 of 16 (GitHub App)
-Plan: 1 of 4 in current phase
-Status: Plan 14-01 complete, ready for 14-02
-Last activity: 2026-03-10 -- Completed plan 14-01 (GitHub App Foundation)
+Plan: 2 of 4 in current phase
+Status: Plan 14-02 complete, ready for 14-03
+Last activity: 2026-03-10 -- Completed plan 14-02 (Commands & Webhooks)
 
-Progress: [██░░░░░░░░] 25% (phase 14)
+Progress: [█████░░░░░] 50% (phase 14)
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [██░░░░░░░░] 25% (phase 14)
 - Trend: --
 
 *Updated after each plan completion*
+| Phase 14 P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,9 @@ Recent decisions affecting current work:
 - Encapsulated Fastify plugin scopes raw-body parser to webhook prefix only (14-01)
 - Private key validated at service construction time with descriptive error (14-01)
 - Webhook signature errors detected by message content matching from @octokit/webhooks (14-01)
+- [Phase 14]: Regex uses [ \t]+ instead of \s+ to avoid matching newlines in command args
+- [Phase 14]: WebhookDeps interface for dependency injection keeps handlers testable without real GitHub App
+- [Phase 14]: Permission check returns false on any error (non-collaborators silently denied)
 
 ### Pending Todos
 
@@ -108,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T06:30:00.000Z
-Stopped at: Completed 14-01-PLAN.md
-Resume file: .planning/phases/14-github-app/14-01-SUMMARY.md
+Last session: 2026-03-10T06:37:14.287Z
+Stopped at: Completed 14-02-PLAN.md
+Resume file: None

@@ -145,5 +145,5 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 11. Flight Recorder | 2/2 | Complete    | 2026-03-10 |
 | 12. Durable Execution | 3/3 | Complete    | 2026-03-10 |
 | 13. Governance & Approvals | 2/2 | Complete    | 2026-03-10 |
-| 14. GitHub App | 1/4 | In Progress|  |
+| 14. GitHub App | 3/4 | In Progress|  |
 | 15. Browser-Use Integration | 0/2 | Not started | - |
