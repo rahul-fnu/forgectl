@@ -145,7 +145,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. EventRecorder is instantiated in startDaemon() and events are persisted to SQLite
   2. `forgectl run inspect <id>` returns actual event data from the database
-**Plans**: 0 plans (needs `/gsd:plan-phase 16`)
+**Plans**: 1 plan
+
+Plans:
+- [ ] 16-01-PLAN.md — Wire EventRecorder in daemon startup with shutdown cleanup (AUDT-01, AUDT-03)
 
 ### Phase 17: Wire Governance Gates
 **Goal**: Governance gates actually fire during execution — GovernanceOpts flows from workflow config to dispatcher, and runRepo is available for post-gate checks
@@ -184,6 +187,6 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 13. Governance & Approvals | 2/2 | Complete    | 2026-03-10 |
 | 14. GitHub App | 5/5 | Complete    | 2026-03-10 |
 | 15. Browser-Use Integration | 2/2 | Complete    | 2026-03-10 |
-| 16. Wire Flight Recorder | 0/0 | Not Started | -- |
+| 16. Wire Flight Recorder | 0/1 | Not Started | -- |
 | 17. Wire Governance Gates | 0/0 | Not Started | -- |
 | 18. Wire GitHub App Utilities | 0/0 | Not Started | -- |
