@@ -3,6 +3,7 @@ import type { AgentAdapter, AgentOptions } from "./types.js";
 import { getAgentAdapter } from "./registry.js";
 import { OneShotSession } from "./oneshot-session.js";
 import { AppServerSession } from "./appserver-session.js";
+import { BrowserUseSession } from "./browser-use-session.js";
 
 /**
  * Status of a completed agent invocation.
@@ -69,6 +70,11 @@ export function createAgentSession(
   env: string[],
   sessionOptions?: AgentSessionOptions,
 ): AgentSession {
+  // BrowserUseSession communicates with a Python sidecar over HTTP
+  if (agentType === "browser-use") {
+    return new BrowserUseSession(container, agentOptions, env, sessionOptions);
+  }
+
   // AppServerSession is only supported for codex agent type
   if (agentType === "codex" && sessionOptions?.useAppServer) {
     return new AppServerSession(container, agentOptions, env, sessionOptions);
