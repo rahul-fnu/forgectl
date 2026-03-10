@@ -3,7 +3,7 @@
 ## Milestones
 
 - [x] **v1.0 Core Orchestrator** - Phases 1-9 (shipped 2026-03-09)
-- [ ] **v2.0 Durable Runtime** - Phases 10-15 (in progress)
+- [ ] **v2.0 Durable Runtime** - Phases 10-18 (in progress, gap closure 16-18)
 
 ## Phases
 
@@ -38,6 +38,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement (completed 2026-03-10)
 - [x] **Phase 14: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs (gap closure in progress) (completed 2026-03-10)
 - [x] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow (completed 2026-03-10)
+- [ ] **Phase 16: Wire Flight Recorder** - Instantiate EventRecorder in daemon, fix audit trail pipeline (gap closure)
+- [ ] **Phase 17: Wire Governance Gates** - Pass GovernanceOpts to dispatcher, fix pre/post gates (gap closure)
+- [ ] **Phase 18: Wire GitHub App Utilities** - Register reaction handler, wire check runs and PR descriptions (gap closure)
 
 ## Phase Details
 
@@ -134,6 +137,39 @@ Plans:
 - [ ] 15-01-PLAN.md — BrowserUseSession adapter, Python sidecar, Dockerfile update, schema and factory wiring (BROW-01, BROW-02)
 - [ ] 15-02-PLAN.md — Browser-research workflow template, credential pass-through, container ShmSize (BROW-02, BROW-03)
 
+### Phase 16: Wire Flight Recorder
+**Goal**: EventRecorder is instantiated in the daemon so the flight recorder audit trail actually persists events to the database
+**Depends on**: Phase 11
+**Requirements**: AUDT-01, AUDT-03
+**Gap Closure:** Closes gaps from audit
+**Success Criteria** (what must be TRUE):
+  1. EventRecorder is instantiated in startDaemon() and events are persisted to SQLite
+  2. `forgectl run inspect <id>` returns actual event data from the database
+**Plans**: 0 plans (needs `/gsd:plan-phase 16`)
+
+### Phase 17: Wire Governance Gates
+**Goal**: Governance gates actually fire during execution — GovernanceOpts flows from workflow config to dispatcher, and runRepo is available for post-gate checks
+**Depends on**: Phase 13
+**Requirements**: GOVN-01, GOVN-02, GOVN-03
+**Gap Closure:** Closes gaps from audit
+**Success Criteria** (what must be TRUE):
+  1. GovernanceOpts from workflow config is passed to dispatchIssue() so pre-gate evaluates autonomy level
+  2. runRepo is passed to executeRun() in server.ts so post-gate guard works
+  3. evaluateAutoApprove is reachable through the normal execution path
+**Plans**: 0 plans (needs `/gsd:plan-phase 17`)
+
+### Phase 18: Wire GitHub App Utilities
+**Goal**: All GitHub App utility modules (reactions, check runs, PR descriptions) are wired into the execution lifecycle instead of being dead code
+**Depends on**: Phase 14
+**Requirements**: GHAP-03, GHAP-07, GHAP-08, GHAP-09
+**Gap Closure:** Closes gaps from audit
+**Success Criteria** (what must be TRUE):
+  1. handleReactionEvent is registered as a webhook handler in registerWebhookHandlers()
+  2. Check run lifecycle (create/update/complete) is called during PR execution flow
+  3. PR descriptions are auto-generated when forgectl creates or updates a PR
+  4. GitHub comments module is either wired into the execution flow or consolidated with orchestrator comments
+**Plans**: 0 plans (needs `/gsd:plan-phase 18`)
+
 ## Progress
 
 **Execution Order:**
@@ -148,3 +184,6 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 13. Governance & Approvals | 2/2 | Complete    | 2026-03-10 |
 | 14. GitHub App | 5/5 | Complete    | 2026-03-10 |
 | 15. Browser-Use Integration | 2/2 | Complete    | 2026-03-10 |
+| 16. Wire Flight Recorder | 0/0 | Not Started | -- |
+| 17. Wire Governance Gates | 0/0 | Not Started | -- |
+| 18. Wire GitHub App Utilities | 0/0 | Not Started | -- |

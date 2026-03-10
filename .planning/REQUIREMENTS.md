@@ -15,9 +15,9 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 ### Audit
 
-- [x] **AUDT-01**: Append-only event log records all run actions (prompts, tool calls, validation, retries, costs)
+- [ ] **AUDT-01**: Append-only event log records all run actions (prompts, tool calls, validation, retries, costs)
 - [x] **AUDT-02**: Rich write-back: structured GitHub comments with changes, validation results, cost breakdown
-- [x] **AUDT-03**: CLI: `forgectl run inspect <id>` shows full audit trail
+- [ ] **AUDT-03**: CLI: `forgectl run inspect <id>` shows full audit trail
 - [x] **AUDT-04**: State snapshots captured at each step boundary
 
 ### Durability
@@ -29,21 +29,21 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 ### Governance
 
-- [x] **GOVN-01**: Configurable autonomy levels per workflow (full/semi/interactive/supervised) in WORKFLOW.md
-- [x] **GOVN-02**: Approval state machine (pending -> approved/rejected/revision_requested)
-- [x] **GOVN-03**: Auto-approve rules (cost < $X, files < N, specific label, workflow pattern)
+- [ ] **GOVN-01**: Configurable autonomy levels per workflow (full/semi/interactive/supervised) in WORKFLOW.md
+- [ ] **GOVN-02**: Approval state machine (pending -> approved/rejected/revision_requested)
+- [ ] **GOVN-03**: Auto-approve rules (cost < $X, files < N, specific label, workflow pattern)
 
 ### GitHub App
 
 - [x] **GHAP-01**: GitHub App with webhook receiver, HMAC-SHA256 verification, bot identity
 - [x] **GHAP-02**: Label-based and event-based triggers for dispatching runs
-- [x] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
+- [ ] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
 - [x] **GHAP-04**: Slash commands: /forgectl run, rerun, stop, status, approve, reject, help
 - [x] **GHAP-05**: Permission checks: only repo collaborators can issue commands
 - [x] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
-- [x] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
-- [x] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
-- [x] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
+- [ ] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
+- [ ] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
+- [ ] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
 
 ### Browser-Use
 
@@ -112,35 +112,36 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STOR-01 | Phase 10 | Complete |
 | STOR-02 | Phase 10 | Complete |
 | STOR-03 | Phase 10 | Complete |
-| AUDT-01 | Phase 11 | Complete |
+| AUDT-01 | Phase 16 | Pending |
 | AUDT-02 | Phase 11 | Complete |
-| AUDT-03 | Phase 11 | Complete |
+| AUDT-03 | Phase 16 | Pending |
 | AUDT-04 | Phase 11 | Complete |
 | DURA-01 | Phase 12 | Complete |
 | DURA-02 | Phase 12 | Complete |
 | DURA-03 | Phase 12 | Complete |
 | DURA-04 | Phase 12 | Complete |
-| GOVN-01 | Phase 13 | Complete |
-| GOVN-02 | Phase 13 | Complete |
-| GOVN-03 | Phase 13 | Complete |
+| GOVN-01 | Phase 17 | Pending |
+| GOVN-02 | Phase 17 | Pending |
+| GOVN-03 | Phase 17 | Pending |
 | GHAP-01 | Phase 14 | Complete |
 | GHAP-02 | Phase 14 | Complete |
-| GHAP-03 | Phase 14 | Complete |
+| GHAP-03 | Phase 18 | Pending |
 | GHAP-04 | Phase 14 | Complete |
 | GHAP-05 | Phase 14 | Complete |
 | GHAP-06 | Phase 14 | Complete |
-| GHAP-07 | Phase 14 | Complete |
-| GHAP-08 | Phase 14 | Complete |
-| GHAP-09 | Phase 14 | Complete |
+| GHAP-07 | Phase 18 | Pending |
+| GHAP-08 | Phase 18 | Pending |
+| GHAP-09 | Phase 18 | Pending |
 | BROW-01 | Phase 15 | Complete |
 | BROW-02 | Phase 15 | Complete |
 | BROW-03 | Phase 15 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 26 total
-- Mapped to phases: 26
+- Satisfied: 17
+- Pending (gap closure): 9 (AUDT-01, AUDT-03, GOVN-01, GOVN-02, GOVN-03, GHAP-03, GHAP-07, GHAP-08, GHAP-09)
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-09*
-*Last updated: 2026-03-09 after roadmap creation*
+*Last updated: 2026-03-10 after gap closure phase creation*
