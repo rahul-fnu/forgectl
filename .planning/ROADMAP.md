@@ -33,7 +33,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - Decimal phases (10.1, 10.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 10: Persistent Storage Layer** - SQLite database with Drizzle ORM, migrations, and repository pattern (completed 2026-03-09)
-- [ ] **Phase 11: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back
+- [x] **Phase 11: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back (completed 2026-03-10)
 - [ ] **Phase 12: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks
 - [ ] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement
 - [ ] **Phase 14: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs
@@ -143,7 +143,7 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Persistent Storage Layer | 2/2 | Complete    | 2026-03-09 |
-| 11. Flight Recorder | 1/2 | In progress | - |
+| 11. Flight Recorder | 2/2 | Complete   | 2026-03-10 |
 | 12. Durable Execution | 0/3 | Not started | - |
 | 13. Governance & Approvals | 0/2 | Not started | - |
 | 14. GitHub App | 0/5 | Not started | - |

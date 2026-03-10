@@ -16,8 +16,8 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 ### Audit
 
 - [x] **AUDT-01**: Append-only event log records all run actions (prompts, tool calls, validation, retries, costs)
-- [ ] **AUDT-02**: Rich write-back: structured GitHub comments with changes, validation results, cost breakdown
-- [ ] **AUDT-03**: CLI: `forgectl run inspect <id>` shows full audit trail
+- [x] **AUDT-02**: Rich write-back: structured GitHub comments with changes, validation results, cost breakdown
+- [x] **AUDT-03**: CLI: `forgectl run inspect <id>` shows full audit trail
 - [x] **AUDT-04**: State snapshots captured at each step boundary
 
 ### Durability
@@ -113,8 +113,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STOR-02 | Phase 10 | Complete |
 | STOR-03 | Phase 10 | Complete |
 | AUDT-01 | Phase 11 | Complete |
-| AUDT-02 | Phase 11 | Pending |
-| AUDT-03 | Phase 11 | Pending |
+| AUDT-02 | Phase 11 | Complete |
+| AUDT-03 | Phase 11 | Complete |
 | AUDT-04 | Phase 11 | Complete |
 | DURA-01 | Phase 12 | Pending |
 | DURA-02 | Phase 12 | Pending |

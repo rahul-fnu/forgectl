@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: in_progress
-stopped_at: Completed 11-01-PLAN.md (Flight Recorder Foundation)
-last_updated: "2026-03-10T02:11:22Z"
-last_activity: 2026-03-10 -- Completed plan 11-01 (Flight Recorder Foundation)
+stopped_at: Completed 11-02-PLAN.md (Inspect & Comments)
+last_updated: "2026-03-10T02:19:07Z"
+last_activity: 2026-03-10 -- Completed plan 11-02 (Inspect & Comments)
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State
@@ -21,33 +21,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Phase 11: Flight Recorder
+**Current focus:** Phase 11: Flight Recorder (complete)
 
 ## Current Position
 
 Phase: 11 of 16 (Flight Recorder)
-Plan: 1 of 2 in current phase
-Status: Plan 11-01 complete, 11-02 remaining
-Last activity: 2026-03-10 -- Completed plan 11-01 (Flight Recorder Foundation)
+Plan: 2 of 2 in current phase
+Status: Phase 11 complete (all plans done)
+Last activity: 2026-03-10 -- Completed plan 11-02 (Inspect & Comments)
 
-Progress: [█████-----] 50% (phase 11)
+Progress: [██████████] 100% (phase 11)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: 5min
-- Total execution time: 0.23 hours
+- Total execution time: 0.31 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 10 | 2 | 10min | 5min |
-| 11 | 1 | 4min | 4min |
+| 11 | 2 | 9min | 4.5min |
 
 **Recent Trend:**
-- Last 5 plans: 3min, 7min, 4min
+- Last 5 plans: 3min, 7min, 4min, 5min
 - Trend: --
 
 *Updated after each plan completion*
@@ -71,6 +71,9 @@ Recent decisions affecting current work:
 - EventRecorder swallows insert errors to never crash the emitter (11-01)
 - Auto-increment integer PKs for event/snapshot ordering, not UUIDs (11-01)
 - Snapshot capture is explicit via captureSnapshot(), not automatic (11-01)
+- inspect is top-level CLI command, not run subcommand (commander limitations) (11-02)
+- Progressive truncation for comment length guard: files to 10, stderr to 500, then remove files (11-02)
+- Rough cost estimate uses $3/MTok input, $15/MTok output pricing (11-02)
 
 ### Pending Todos
 
@@ -82,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T02:07:52Z
-Stopped at: Completed 11-01-PLAN.md (Flight Recorder Foundation)
+Last session: 2026-03-10T02:19:07Z
+Stopped at: Completed 11-02-PLAN.md (Inspect & Comments)
 Resume file: None
