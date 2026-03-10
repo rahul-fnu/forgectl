@@ -11,8 +11,12 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createRunRepository } from "../storage/repositories/runs.js";
 import { createPipelineRepository } from "../storage/repositories/pipelines.js";
+import { createSnapshotRepository } from "../storage/repositories/snapshots.js";
+import { createLockRepository } from "../storage/repositories/locks.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
+import { recoverInterruptedRuns } from "../durability/recovery.js";
+import { releaseAllStaleLocks } from "../durability/locks.js";
 import { Logger } from "../logging/logger.js";
 import type { QueuedRun } from "./queue.js";
 import { BoardEngine } from "../board/engine.js";
@@ -41,12 +45,30 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   runMigrations(db);
   const runRepo = createRunRepository(db);
   const pipelineRepo = createPipelineRepository(db);
+  const snapshotRepo = createSnapshotRepository(db);
+  const lockRepo = createLockRepository(db);
+
+  // --- Startup recovery (before accepting requests) ---
+  const daemonLogger = new Logger(false);
+  const currentPid = process.pid;
+
+  // Clean up stale locks from previous daemon instance
+  const staleLockCount = releaseAllStaleLocks(lockRepo, currentPid);
+  if (staleLockCount > 0) {
+    daemonLogger.info("recovery", `Released ${staleLockCount} stale execution lock(s) from previous daemon`);
+  }
+
+  // Mark interrupted runs
+  const recoveryResults = recoverInterruptedRuns(runRepo, snapshotRepo);
+  for (const r of recoveryResults) {
+    daemonLogger.info("recovery", `Run ${r.runId}: ${r.action} -- ${r.reason}`);
+  }
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
     const runConfig = loadConfig();
     const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
-    return executeRun(plan, logger);
+    return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid });
   });
 
   const pipelineService = new PipelineRunService(pipelineRepo);
@@ -60,7 +82,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   }, config.board.scheduler_tick_seconds * 1000);
 
   // Orchestrator initialization (when enabled or forced via CLI)
-  const daemonLogger = new Logger(false);
   let orchestrator: Orchestrator | null = null;
   let watcher: WorkflowFileWatcher | null = null;
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;

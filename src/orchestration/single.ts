@@ -2,6 +2,8 @@ import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
+import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
+import type { LockRepository } from "../storage/repositories/locks.js";
 import { getAgentAdapter } from "../agent/registry.js";
 import { createAgentSession } from "../agent/session.js";
 import { buildPrompt } from "../context/prompt.js";
@@ -17,6 +19,15 @@ import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
 import { emitRunEvent } from "../logging/events.js";
+import { saveCheckpoint } from "../durability/checkpoint.js";
+import { acquireLock, releaseLock } from "../durability/locks.js";
+
+/** Optional durability dependencies for checkpoint/lock support. */
+export interface DurabilityDeps {
+  snapshotRepo?: SnapshotRepository;
+  lockRepo?: LockRepository;
+  daemonPid?: number;
+}
 
 export interface ReviewSummary {
   totalRounds: number;
@@ -128,14 +139,32 @@ export async function prepareExecution(
 export async function executeSingleAgent(
   plan: RunPlan,
   logger: Logger,
-  noCleanup = false
+  noCleanup = false,
+  deps: DurabilityDeps = {},
 ): Promise<ExecutionResult> {
   const timer = new Timer();
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
+  const { snapshotRepo, lockRepo, daemonPid } = deps;
+
+  // --- Lock acquisition ---
+  // Acquire workspace lock using the runId as both key and owner
+  const workspaceKey = plan.input.sources[0];
+  if (lockRepo && daemonPid && workspaceKey) {
+    const gotLock = acquireLock(lockRepo, {
+      lockType: "workspace",
+      lockKey: workspaceKey,
+      ownerId: plan.runId,
+      daemonPid,
+    });
+    if (!gotLock) {
+      throw new Error(`Cannot execute run ${plan.runId}: workspace ${workspaceKey} is locked by another run`);
+    }
+  }
 
   try {
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
+    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
 
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
@@ -157,6 +186,7 @@ export async function executeSingleAgent(
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
     }
+    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
 
     // --- Phase: Validate ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "validate" } });
@@ -165,6 +195,7 @@ export async function executeSingleAgent(
     const validationResult = await runValidationLoop(
       container, plan, adapter, agentOptions, agentEnv, logger
     );
+    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
     // --- Phase: Collect Output ---
     if (validationResult.passed || plan.validation.onFailure === "output-wip") {
@@ -172,6 +203,7 @@ export async function executeSingleAgent(
 
       logger.info("output", `Collecting ${plan.output.mode} output...`);
       const output = await collectOutput(container, plan, logger);
+      if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "output");
 
       emitRunEvent({
         runId: plan.runId,
@@ -219,6 +251,11 @@ export async function executeSingleAgent(
       error: message,
     };
   } finally {
+    // --- Lock release ---
+    if (lockRepo && workspaceKey) {
+      releaseLock(lockRepo, "workspace", workspaceKey, plan.runId);
+    }
+
     if (!noCleanup) {
       logger.info("cleanup", "Cleaning up...");
       await cleanupRun(cleanup);
