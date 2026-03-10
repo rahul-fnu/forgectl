@@ -3,7 +3,6 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createRunRepository } from "../storage/repositories/runs.js";
 import { createEventRepository } from "../storage/repositories/events.js";
-import { createSnapshotRepository } from "../storage/repositories/snapshots.js";
 import type { EventRow } from "../storage/repositories/events.js";
 import type { RunRow } from "../storage/repositories/runs.js";
 
@@ -112,8 +111,6 @@ export async function inspectCommand(runId: string): Promise<void> {
 
     const runRepo = createRunRepository(db);
     const eventRepo = createEventRepository(db);
-    const _snapshotRepo = createSnapshotRepository(db);
-
     const run = runRepo.findById(runId);
     if (!run) {
       console.error(chalk.red(`Run not found: ${runId}`));
