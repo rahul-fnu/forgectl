@@ -35,7 +35,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 10: Persistent Storage Layer** - SQLite database with Drizzle ORM, migrations, and repository pattern (completed 2026-03-09)
 - [x] **Phase 11: Flight Recorder** - Append-only event log with audit trail, state snapshots, and rich write-back (completed 2026-03-10)
 - [x] **Phase 12: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks (completed 2026-03-10)
-- [ ] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement
+- [x] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement (completed 2026-03-10)
 - [ ] **Phase 14: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs
 - [ ] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow
 
@@ -145,6 +145,6 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 10. Persistent Storage Layer | 2/2 | Complete    | 2026-03-09 |
 | 11. Flight Recorder | 2/2 | Complete    | 2026-03-10 |
 | 12. Durable Execution | 3/3 | Complete    | 2026-03-10 |
-| 13. Governance & Approvals | 1/2 | In Progress|  |
+| 13. Governance & Approvals | 2/2 | Complete   | 2026-03-10 |
 | 14. GitHub App | 0/5 | Not started | - |
 | 15. Browser-Use Integration | 0/2 | Not started | - |

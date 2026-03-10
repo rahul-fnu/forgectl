@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: in-progress
-stopped_at: Completed 13-01-PLAN.md (Governance Module)
-last_updated: "2026-03-10T03:39:15Z"
-last_activity: 2026-03-10 -- Completed plan 13-01 (Governance Module)
+stopped_at: Completed 13-02-PLAN.md (Governance Integration)
+last_updated: "2026-03-10T03:46:30Z"
+last_activity: 2026-03-10 -- Completed plan 13-02 (Governance Integration)
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 8
-  completed_plans: 8
+  completed_plans: 9
   percent: 100
 ---
 
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 13 of 16 (Governance & Approvals)
-Plan: 1 of 2 in current phase
-Status: Plan 13-01 complete, ready for 13-02
-Last activity: 2026-03-10 -- Completed plan 13-01 (Governance Module)
+Plan: 2 of 2 in current phase
+Status: Phase 13 complete, ready for Phase 14
+Last activity: 2026-03-10 -- Completed plan 13-02 (Governance Integration)
 
-Progress: [█████-----] 50% (phase 13)
+Progress: [██████████] 100% (phase 13)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: 5min
-- Total execution time: 0.66 hours
+- Total execution time: 0.74 hours
 
 **By Phase:**
 
@@ -46,10 +46,10 @@ Progress: [█████-----] 50% (phase 13)
 | 10 | 2 | 10min | 5min |
 | 11 | 2 | 9min | 4.5min |
 | 12 | 3 | 13min | 4.3min |
-| 13 | 1 | 8min | 8min |
+| 13 | 2 | 13min | 6.5min |
 
 **Recent Trend:**
-- Last 5 plans: 5min, 5min, 4min, 4min, 8min
+- Last 5 plans: 5min, 4min, 4min, 8min, 5min
 - Trend: --
 
 *Updated after each plan completion*
@@ -89,6 +89,10 @@ Recent decisions affecting current work:
 - Auto-approve uses AND logic: all specified conditions must pass (13-01)
 - Cost threshold returns false when actualCost undefined (safe pre-gate default) (13-01)
 - autonomy defaults to "full" for backward compatibility with existing workflows (13-01)
+- GovernanceOpts optional parameter preserves backward compat for all dispatcher callers (13-02)
+- Post-gate collects output BEFORE entering pending_output_approval (container cleanup safe) (13-02)
+- Cost estimate uses $3/MTok input + $15/MTok output for auto-approve threshold (13-02)
+- Pre-gate proceeds without gating when runRepo unavailable (graceful fallback) (13-02)
 
 ### Pending Todos
 
@@ -100,6 +104,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T03:39:15Z
-Stopped at: Completed 13-01-PLAN.md (Governance Module)
-Resume file: .planning/phases/13-governance-approvals/13-01-SUMMARY.md
+Last session: 2026-03-10T03:46:30Z
+Stopped at: Completed 13-02-PLAN.md (Governance Integration)
+Resume file: .planning/phases/13-governance-approvals/13-02-SUMMARY.md
