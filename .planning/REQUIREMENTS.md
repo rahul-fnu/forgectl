@@ -49,7 +49,7 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 - [x] **BROW-01**: Browser-use agent adapter implementing AgentSession interface
 - [x] **BROW-02**: Self-hosted Python sidecar in Docker container with HTTP bridge
-- [ ] **BROW-03**: Research/web workflow template for competitive analysis, data gathering
+- [x] **BROW-03**: Research/web workflow template for competitive analysis, data gathering
 
 ## v2.1 Requirements
 
@@ -134,7 +134,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GHAP-09 | Phase 14 | Complete |
 | BROW-01 | Phase 15 | Complete |
 | BROW-02 | Phase 15 | Complete |
-| BROW-03 | Phase 15 | Pending |
+| BROW-03 | Phase 15 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 26 total

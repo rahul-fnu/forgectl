@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
-status: in_progress
-stopped_at: Completed 15-01-PLAN.md
-last_updated: "2026-03-10T11:27:00.000Z"
-last_activity: 2026-03-10 -- Completed plan 15-01 (Browser-Use Session Adapter)
+status: completed
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-03-10T11:33:46.034Z"
+last_activity: 2026-03-10 -- Completed plan 15-02 (Browser-Research Workflow)
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 16
-  completed_plans: 15
-  percent: 94
+  completed_plans: 16
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Phase 15: Browser-Use Integration (in progress)
+**Current focus:** v2.0 Durable Runtime milestone complete
 
 ## Current Position
 
-Phase: 15 of 16 (Browser-Use Integration)
-Plan: 1 of 1 in current phase (15-01 complete)
-Status: Plan 15-01 complete, phase 15 may have additional plans
-Last activity: 2026-03-10 -- Completed plan 15-01 (Browser-Use Session Adapter)
+Phase: 15 of 16 (Browser-Use Integration) -- COMPLETE
+Plan: 2 of 2 in current phase (all complete)
+Status: All v2.0 phases complete
+Last activity: 2026-03-10 -- Completed plan 15-02 (Browser-Research Workflow)
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [█████████░] 94%
 | Phase 14 P04 | 4min | 3 tasks | 7 files |
 | Phase 14 P05 | 4min | 1 task  | 4 files |
 | Phase 15 P01 | 5min | 2 tasks | 6 files |
+| Phase 15 P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,9 @@ Recent decisions affecting current work:
 - [Phase 15]: Provider auto-detected from model name prefix (gpt-/o1/o3 = openai, else anthropic) (15-01)
 - [Phase 15]: Zero tokenUsage for browser-use since it does not expose token counts (15-01)
 - [Phase 15]: Health polling at 500ms intervals with 30s timeout (60 attempts) (15-01)
+- [Phase 15]: Dual credential pass: try both Anthropic and OpenAI keys for browser-use (neither required)
+- [Phase 15]: 256MB ShmSize for research-browser images based on Chromium Docker requirements
+- [Phase 15]: Dummy AgentAdapter for browser-use since BrowserUseSession bypasses CLI adapter path
 
 ### Pending Todos
 
@@ -130,6 +134,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T11:27:00.000Z
-Stopped at: Completed 15-01-PLAN.md
-Resume file: .planning/phases/15-browser-use-integration/15-01-SUMMARY.md
+Last session: 2026-03-10T11:33:46.029Z
+Stopped at: Completed 15-02-PLAN.md
+Resume file: None

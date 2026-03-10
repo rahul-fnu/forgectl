@@ -37,7 +37,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 12: Durable Execution** - Crash recovery, checkpoint/resume, pause for human input, execution locks (completed 2026-03-10)
 - [x] **Phase 13: Governance & Approvals** - Configurable autonomy levels, approval gates, and budget enforcement (completed 2026-03-10)
 - [x] **Phase 14: GitHub App** - Webhook receiver, slash commands, reactions, conversations, check runs (gap closure in progress) (completed 2026-03-10)
-- [ ] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow
+- [x] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow (completed 2026-03-10)
 
 ## Phase Details
 
@@ -147,4 +147,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 12. Durable Execution | 3/3 | Complete    | 2026-03-10 |
 | 13. Governance & Approvals | 2/2 | Complete    | 2026-03-10 |
 | 14. GitHub App | 5/5 | Complete    | 2026-03-10 |
-| 15. Browser-Use Integration | 1/2 | In Progress|  |
+| 15. Browser-Use Integration | 2/2 | Complete   | 2026-03-10 |
