@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Completed 13-02-PLAN.md (Governance Integration)
-last_updated: "2026-03-10T03:50:51.573Z"
+stopped_at: Phase 14 context gathered
+last_updated: "2026-03-10T06:03:40.364Z"
 last_activity: 2026-03-10 -- Completed plan 13-02 (Governance Integration)
 progress:
   total_phases: 6
@@ -104,6 +104,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T03:46:30Z
-Stopped at: Completed 13-02-PLAN.md (Governance Integration)
-Resume file: .planning/phases/13-governance-approvals/13-02-SUMMARY.md
+Last session: 2026-03-10T06:03:40.359Z
+Stopped at: Phase 14 context gathered
+Resume file: .planning/phases/14-github-app/14-CONTEXT.md
