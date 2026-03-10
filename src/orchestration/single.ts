@@ -21,12 +21,17 @@ import { Timer } from "../utils/timer.js";
 import { emitRunEvent } from "../logging/events.js";
 import { saveCheckpoint } from "../durability/checkpoint.js";
 import { acquireLock, releaseLock } from "../durability/locks.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import { needsPostApproval } from "../governance/autonomy.js";
+import { enterPendingOutputApproval } from "../governance/approval.js";
+import { evaluateAutoApprove } from "../governance/rules.js";
 
 /** Optional durability dependencies for checkpoint/lock support. */
 export interface DurabilityDeps {
   snapshotRepo?: SnapshotRepository;
   lockRepo?: LockRepository;
   daemonPid?: number;
+  runRepo?: RunRepository;
 }
 
 export interface ReviewSummary {
@@ -144,7 +149,7 @@ export async function executeSingleAgent(
 ): Promise<ExecutionResult> {
   const timer = new Timer();
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
-  const { snapshotRepo, lockRepo, daemonPid } = deps;
+  const { snapshotRepo, lockRepo, daemonPid, runRepo } = deps;
 
   // --- Lock acquisition ---
   // Acquire workspace lock using the runId as both key and owner
@@ -204,6 +209,33 @@ export async function executeSingleAgent(
       logger.info("output", `Collecting ${plan.output.mode} output...`);
       const output = await collectOutput(container, plan, logger);
       if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "output");
+
+      // --- Post-execution approval gate ---
+      const autonomy = plan.workflow.autonomy ?? "full";
+      if (needsPostApproval(autonomy) && runRepo) {
+        // Check auto-approve bypass (with actual cost from token usage)
+        const actualCost = agentResult.tokenUsage
+          ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
+          : undefined;
+        const autoApproveCtx = {
+          labels: [] as string[],
+          workflowName: plan.workflow.name,
+          actualCost,
+        };
+        if (plan.workflow.auto_approve && evaluateAutoApprove(plan.workflow.auto_approve, autoApproveCtx)) {
+          logger.info("governance", `Auto-approved post-gate for run ${plan.runId}`);
+        } else {
+          // Output is collected; enter pending_output_approval and return early
+          enterPendingOutputApproval(runRepo, plan.runId);
+          logger.info("governance", `Run ${plan.runId} requires output approval (autonomy=${autonomy})`);
+          return {
+            success: validationResult.passed,
+            output,
+            validation: validationResult,
+            durationMs: timer.elapsed(),
+          };
+        }
+      }
 
       emitRunEvent({
         runId: plan.runId,

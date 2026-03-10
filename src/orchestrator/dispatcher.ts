@@ -4,10 +4,23 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
 import { executeWorker } from "./worker.js";
 import { emitRunEvent } from "../logging/events.js";
+import { needsPreApproval } from "../governance/autonomy.js";
+import { enterPendingApproval } from "../governance/approval.js";
+import { evaluateAutoApprove } from "../governance/rules.js";
+
+/** Optional governance context for pre-execution approval gate. */
+export interface GovernanceOpts {
+  autonomy?: AutonomyLevel;
+  autoApprove?: AutoApproveRule;
+  runRepo?: RunRepository;
+  runId?: string;
+}
 
 /**
  * Extract a numeric priority from issue priority field and labels.
@@ -116,6 +129,7 @@ export function dispatchIssue(
   promptTemplate: string,
   logger: Logger,
   metrics: MetricsCollector,
+  governance?: GovernanceOpts,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -142,6 +156,7 @@ export function dispatchIssue(
     promptTemplate,
     logger,
     metrics,
+    governance,
   );
 }
 
@@ -154,6 +169,7 @@ async function executeWorkerAndHandle(
   promptTemplate: string,
   logger: Logger,
   metrics: MetricsCollector,
+  governance?: GovernanceOpts,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -187,6 +203,33 @@ async function executeWorkerAndHandle(
     timestamp: new Date().toISOString(),
     data: { issueId: issue.id, identifier: issue.identifier, attempt },
   });
+
+  // --- Pre-execution approval gate ---
+  const autonomy = governance?.autonomy ?? "full";
+  if (needsPreApproval(autonomy)) {
+    // Check auto-approve bypass
+    const autoApproveCtx = {
+      labels: issue.labels,
+      workflowName: promptTemplate, // best available workflow identifier
+    };
+    if (governance?.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
+      logger.info("dispatcher", `Auto-approved pre-gate for ${issue.identifier}`);
+    } else if (governance?.runRepo && governance?.runId) {
+      // Gate the run: enter pending_approval and return early
+      enterPendingApproval(governance.runRepo, governance.runId);
+      emitRunEvent({
+        runId: "orchestrator",
+        type: "approval_required",
+        timestamp: new Date().toISOString(),
+        data: { issueId: issue.id, identifier: issue.identifier, autonomy },
+      });
+      logger.info("dispatcher", `Run ${issue.identifier} requires pre-approval (autonomy=${autonomy})`);
+      state.running.delete(issue.id);
+      return;
+    } else {
+      logger.warn("dispatcher", `Pre-approval needed for ${issue.identifier} but no runRepo available, proceeding`);
+    }
+  }
 
   try {
     const result = await executeWorker(
