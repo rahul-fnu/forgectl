@@ -99,7 +99,6 @@ export async function completeCheckRun(
  */
 export function buildCheckSummary(result: RunResult): string {
   const lines: string[] = [];
-  const emoji = result.status === "success" ? "+" : "x";
 
   lines.push(`## Run \`${result.runId}\``);
   lines.push("");

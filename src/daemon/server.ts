@@ -139,6 +139,53 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     runRepo,
   });
 
+  // GitHub App initialization (optional, only when config.github_app is present)
+  if (config.github_app) {
+    try {
+      const { createGitHubAppService } = await import("../github/app.js");
+      const { registerGitHubRoutes } = await import("../github/routes.js");
+      const { registerWebhookHandlers } = await import("../github/webhooks.js");
+      const { resumeRun } = await import("../durability/pause.js");
+
+      const ghAppService = createGitHubAppService({
+        appId: config.github_app.app_id,
+        privateKeyPath: config.github_app.private_key_path,
+        webhookSecret: config.github_app.webhook_secret,
+        installationId: config.github_app.installation_id,
+      });
+
+      registerWebhookHandlers(ghAppService.app, {
+        triggerLabel: "forgectl",
+        onDispatch: (issue, _octokit, _repo) => {
+          if (orchestrator) {
+            daemonLogger.info("github", `Dispatching issue ${issue.identifier} via webhook`);
+          } else {
+            daemonLogger.warn("github", `Webhook trigger for ${issue.identifier} but orchestrator not running`);
+          }
+        },
+        onCommand: async (cmd, _octokit, context, sender) => {
+          daemonLogger.info("github", `Command /${cmd.command} from @${sender} on ${context.owner}/${context.repo}#${context.issueNumber}`);
+        },
+        runRepo,
+        findWaitingRunForIssue: (owner: string, repo: string, issueNumber: number) => {
+          const waitingRuns = runRepo.findByStatus("waiting_for_input");
+          return waitingRuns.find((r) => {
+            const ctx = r.pauseContext as Record<string, unknown> | null;
+            if (!ctx) return false;
+            const issueCtx = ctx.issueContext as { owner?: string; repo?: string; issueNumber?: number } | undefined;
+            return issueCtx?.owner === owner && issueCtx?.repo === repo && issueCtx?.issueNumber === issueNumber;
+          });
+        },
+        resumeRun,
+      });
+
+      registerGitHubRoutes(app, ghAppService);
+      daemonLogger.info("daemon", "GitHub App initialized, webhook route registered");
+    } catch (err) {
+      daemonLogger.error("daemon", `Failed to initialize GitHub App: ${err}`);
+    }
+  }
+
   // Serve dashboard UI — find the index.html from src/ui or bundled location
   const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
   const uiCandidates = [
