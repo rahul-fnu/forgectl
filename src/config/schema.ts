@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const duration = z.string().regex(/^\d+(s|m|h)$/, "Must be a duration like 30s, 5m, 1h");
 
-export const AgentType = z.enum(["claude-code", "codex"]);
+export const AgentType = z.enum(["claude-code", "codex", "browser-use"]);
 export type AgentType = z.infer<typeof AgentType>;
 
 export const NetworkMode = z.enum(["open", "allowlist", "airgapped"]);

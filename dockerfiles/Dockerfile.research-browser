@@ -12,7 +12,8 @@ RUN pip install --break-system-packages \
     langchain-anthropic \
     beautifulsoup4 \
     trafilatura \
-    markdownify
+    markdownify \
+    aiohttp
 
 # Agent CLIs
 RUN npm install -g @anthropic-ai/claude-code
@@ -25,5 +26,9 @@ RUN playwright install --with-deps chromium
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh
 
-RUN mkdir -p /input /output
+COPY sidecar/browser-use-sidecar.py /usr/local/bin/browser-use-sidecar.py
+
+ENV IN_DOCKER=True BROWSER_USE_CHROME_NO_SANDBOX=1
+
+RUN mkdir -p /input /output/screenshots
 WORKDIR /workspace
