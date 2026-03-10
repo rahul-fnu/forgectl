@@ -111,14 +111,13 @@ Plans:
   3. Only repository collaborators can issue commands (permission checks on every interaction)
   4. An agent mid-run can post a clarification question on the issue, pause, and resume when the user replies
   5. PRs created by forgectl include check runs (pending/in_progress/success/failure) and auto-generated descriptions with changes, validation, cost, and linked issue
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 14-01: TBD
-- [ ] 14-02: TBD
-- [ ] 14-03: TBD
-- [ ] 14-04: TBD
-- [ ] 14-05: TBD
+- [ ] 14-01-PLAN.md — GitHub App foundation: config schema, @octokit/app init, webhook route with HMAC verification, DB migration (GHAP-01)
+- [ ] 14-02-PLAN.md — Slash command parser, permission checks, webhook handlers for triggers and commands (GHAP-02, GHAP-04, GHAP-05)
+- [ ] 14-03-PLAN.md — Bot comment builder with structured templates and reaction event handlers (GHAP-03, GHAP-07)
+- [ ] 14-04-PLAN.md — Clarification flow, check runs, PR descriptions, and daemon wiring (GHAP-06, GHAP-08, GHAP-09)
 
 ### Phase 15: Browser-Use Integration
 **Goal**: forgectl can dispatch browser-based agents for research and web tasks using the same workflow system as code agents
@@ -146,5 +145,5 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 11. Flight Recorder | 2/2 | Complete    | 2026-03-10 |
 | 12. Durable Execution | 3/3 | Complete    | 2026-03-10 |
 | 13. Governance & Approvals | 2/2 | Complete    | 2026-03-10 |
-| 14. GitHub App | 0/5 | Not started | - |
+| 14. GitHub App | 0/4 | Not started | - |
 | 15. Browser-Use Integration | 0/2 | Not started | - |
