@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { executionLocks } from "../schema.js";
 import type { AppDatabase } from "../database.js";
 
@@ -23,6 +23,7 @@ export interface LockRepository {
   insert(params: LockInsertParams): LockRow;
   findByDaemonPid(pid: number): LockRow[];
   deleteByOwner(ownerId: string): void;
+  deleteByStale(currentPid: number): number;
   deleteAll(): void;
 }
 
@@ -73,6 +74,14 @@ export function createLockRepository(db: AppDatabase): LockRepository {
       db.delete(executionLocks)
         .where(eq(executionLocks.ownerId, ownerId))
         .run();
+    },
+
+    deleteByStale(currentPid: number): number {
+      const result = db
+        .delete(executionLocks)
+        .where(ne(executionLocks.daemonPid, currentPid))
+        .run();
+      return result.changes;
     },
 
     deleteAll(): void {
