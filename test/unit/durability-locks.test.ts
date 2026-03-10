@@ -16,6 +16,11 @@ import {
   createRunRepository,
   type RunRepository,
 } from "../../src/storage/repositories/runs.js";
+import {
+  acquireLock,
+  releaseLock,
+  releaseAllStaleLocks,
+} from "../../src/durability/locks.js";
 
 describe("storage/repositories/locks", () => {
   let db: AppDatabase;
@@ -244,5 +249,124 @@ describe("storage/repositories/runs - pause context extensions", () => {
     const row = runRepo.findById("run-clr");
     expect(row!.pauseReason).toBeNull();
     expect(row!.pauseContext).toBeNull();
+  });
+});
+
+describe("durability/locks - acquire/release business logic", () => {
+  let db: AppDatabase;
+  let tmpDir: string;
+  let lockRepo: LockRepository;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "forgectl-lock-logic-test-"));
+    db = createDatabase(join(tmpDir, "test.db"));
+    runMigrations(db);
+    lockRepo = createLockRepository(db);
+  });
+
+  afterEach(() => {
+    closeDatabase(db);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("acquireLock returns true when lock is available", () => {
+    const result = acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "owner/repo#1",
+      ownerId: "run-1",
+      daemonPid: 1000,
+    });
+    expect(result).toBe(true);
+  });
+
+  it("acquireLock returns false when lock is already held", () => {
+    acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "owner/repo#1",
+      ownerId: "run-1",
+      daemonPid: 1000,
+    });
+    const result = acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "owner/repo#1",
+      ownerId: "run-2",
+      daemonPid: 1000,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("releaseLock removes the lock so re-acquire succeeds", () => {
+    acquireLock(lockRepo, {
+      lockType: "workspace",
+      lockKey: "/tmp/ws1",
+      ownerId: "run-1",
+      daemonPid: 1000,
+    });
+    releaseLock(lockRepo, "workspace", "/tmp/ws1", "run-1");
+
+    const result = acquireLock(lockRepo, {
+      lockType: "workspace",
+      lockKey: "/tmp/ws1",
+      ownerId: "run-2",
+      daemonPid: 1000,
+    });
+    expect(result).toBe(true);
+  });
+
+  it("releaseLock is idempotent (no-op if lock does not exist)", () => {
+    // Should not throw
+    expect(() =>
+      releaseLock(lockRepo, "issue", "nonexistent", "run-99")
+    ).not.toThrow();
+  });
+
+  it("releaseAllStaleLocks removes locks from different PIDs", () => {
+    acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "key-1",
+      ownerId: "run-1",
+      daemonPid: 999, // old crashed daemon
+    });
+    acquireLock(lockRepo, {
+      lockType: "workspace",
+      lockKey: "key-2",
+      ownerId: "run-2",
+      daemonPid: 888, // another old daemon
+    });
+    acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "key-3",
+      ownerId: "run-3",
+      daemonPid: 1000, // current daemon
+    });
+
+    const released = releaseAllStaleLocks(lockRepo, 1000);
+    expect(released).toBe(2);
+
+    // Current PID lock should still be there
+    const remaining = lockRepo.findByDaemonPid(1000);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].ownerId).toBe("run-3");
+  });
+
+  it("releaseAllStaleLocks preserves locks owned by current PID", () => {
+    acquireLock(lockRepo, {
+      lockType: "issue",
+      lockKey: "key-1",
+      ownerId: "run-1",
+      daemonPid: 1000,
+    });
+    acquireLock(lockRepo, {
+      lockType: "workspace",
+      lockKey: "key-2",
+      ownerId: "run-2",
+      daemonPid: 1000,
+    });
+
+    const released = releaseAllStaleLocks(lockRepo, 1000);
+    expect(released).toBe(0);
+
+    const remaining = lockRepo.findByDaemonPid(1000);
+    expect(remaining).toHaveLength(2);
   });
 });
