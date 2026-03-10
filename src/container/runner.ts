@@ -29,6 +29,7 @@ export async function createContainer(
       NanoCpus: plan.container.resources.cpus * 1e9,
       Binds: binds,
       CapAdd: plan.container.network.mode === "allowlist" ? ["NET_ADMIN"] : [],
+      ShmSize: plan.container.image.includes("research-browser") ? 256 * 1024 * 1024 : undefined,
     },
     Tty: false,
     OpenStdin: false,
