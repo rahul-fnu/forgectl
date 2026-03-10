@@ -1,4 +1,4 @@
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -20,4 +20,20 @@ export const pipelineRuns = sqliteTable("pipeline_runs", {
   nodeStates: text("node_states"), // JSON-serialized node states
   startedAt: text("started_at").notNull(),
   completedAt: text("completed_at"),
+});
+
+export const runEvents = sqliteTable("run_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  type: text("type").notNull(),
+  timestamp: text("timestamp").notNull(),
+  data: text("data"), // JSON-serialized
+});
+
+export const runSnapshots = sqliteTable("run_snapshots", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  stepName: text("step_name").notNull(),
+  timestamp: text("timestamp").notNull(),
+  state: text("state").notNull(), // JSON-serialized
 });
