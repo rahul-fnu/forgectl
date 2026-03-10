@@ -24,7 +24,7 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 - [ ] **DURA-01**: Interrupted runs resume or fail cleanly on daemon restart
 - [ ] **DURA-02**: Checkpoint/resume at step boundaries with idempotent replay
-- [ ] **DURA-03**: Agent can pause into `waiting_for_input` state, persist context, resume on human reply
+- [x] **DURA-03**: Agent can pause into `waiting_for_input` state, persist context, resume on human reply
 - [x] **DURA-04**: Atomic execution locks per issue/workspace via SQLite transactions
 
 ### Governance
@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUDT-04 | Phase 11 | Complete |
 | DURA-01 | Phase 12 | Pending |
 | DURA-02 | Phase 12 | Pending |
-| DURA-03 | Phase 12 | Pending |
+| DURA-03 | Phase 12 | Complete |
 | DURA-04 | Phase 12 | Complete |
 | GOVN-01 | Phase 13 | Pending |
 | GOVN-02 | Phase 13 | Pending |

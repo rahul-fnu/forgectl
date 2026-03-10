@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: in-progress
-stopped_at: Completed 12-01-PLAN.md (Execution Locks)
-last_updated: "2026-03-10T02:48:00.000Z"
-last_activity: 2026-03-10 -- Completed plan 12-01 (Execution Locks)
+stopped_at: Completed 12-03-PLAN.md (Pause/Resume)
+last_updated: "2026-03-10T02:54:30Z"
+last_activity: 2026-03-10 -- Completed plan 12-03 (Pause/Resume)
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 12 of 16 (Durable Execution)
-Plan: 1 of 3 in current phase
-Status: Plan 12-01 complete, continuing phase 12
-Last activity: 2026-03-10 -- Completed plan 12-01 (Execution Locks)
+Plan: 3 of 3 in current phase
+Status: Phase 12 complete, ready for Phase 13
+Last activity: 2026-03-10 -- Completed plan 12-03 (Pause/Resume)
 
-Progress: [███░░░░░░░] 33% (phase 12)
+Progress: [██████████] 100% (phase 12)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 7
 - Average duration: 5min
-- Total execution time: 0.40 hours
+- Total execution time: 0.53 hours
 
 **By Phase:**
 
@@ -45,10 +45,10 @@ Progress: [███░░░░░░░] 33% (phase 12)
 |-------|-------|-------|----------|
 | 10 | 2 | 10min | 5min |
 | 11 | 2 | 9min | 4.5min |
-| 12 | 1 | 5min | 5min |
+| 12 | 3 | 13min | 4.3min |
 
 **Recent Trend:**
-- Last 5 plans: 3min, 7min, 4min, 5min, 5min
+- Last 5 plans: 4min, 5min, 5min, 4min, 4min
 - Trend: --
 
 *Updated after each plan completion*
@@ -78,6 +78,8 @@ Recent decisions affecting current work:
 - Unique constraint on (lockType, lockKey) for atomic lock exclusivity (12-01)
 - deleteByStale uses SQL ne() filter for atomic stale lock cleanup (12-01)
 - releaseLock delegates to deleteByOwner for simplicity (12-01)
+- resumeRun returns stored PauseContext so caller can re-enter execution with context (12-03)
+- Resume endpoint uses standard { error: { code, message } } envelope matching observability routes (12-03)
 
 ### Pending Todos
 
@@ -89,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T02:43:10Z
-Stopped at: Completed 12-01-PLAN.md (Execution Locks)
+Last session: 2026-03-10T02:54:30Z
+Stopped at: Completed 12-03-PLAN.md (Pause/Resume)
 Resume file: None
