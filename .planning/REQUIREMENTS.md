@@ -35,7 +35,7 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 ### GitHub App
 
-- [ ] **GHAP-01**: GitHub App with webhook receiver, HMAC-SHA256 verification, bot identity
+- [x] **GHAP-01**: GitHub App with webhook receiver, HMAC-SHA256 verification, bot identity
 - [ ] **GHAP-02**: Label-based and event-based triggers for dispatching runs
 - [ ] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
 - [ ] **GHAP-04**: Slash commands: /forgectl run, rerun, stop, status, approve, reject, help
@@ -123,7 +123,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GOVN-01 | Phase 13 | Complete |
 | GOVN-02 | Phase 13 | Complete |
 | GOVN-03 | Phase 13 | Complete |
-| GHAP-01 | Phase 14 | Pending |
+| GHAP-01 | Phase 14 | Complete |
 | GHAP-02 | Phase 14 | Pending |
 | GHAP-03 | Phase 14 | Pending |
 | GHAP-04 | Phase 14 | Pending |

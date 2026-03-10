@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
-status: completed
-stopped_at: Phase 14 context gathered
-last_updated: "2026-03-10T06:03:40.364Z"
-last_activity: 2026-03-10 -- Completed plan 13-02 (Governance Integration)
+status: in-progress
+stopped_at: Completed 14-01-PLAN.md
+last_updated: "2026-03-10T06:30:00.000Z"
+last_activity: 2026-03-10 -- Completed plan 14-01 (GitHub App Foundation)
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_plans: 13
+  completed_plans: 10
+  percent: 77
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Phase 13: Governance & Approvals (in progress)
+**Current focus:** Phase 14: GitHub App (in progress)
 
 ## Current Position
 
-Phase: 13 of 16 (Governance & Approvals)
-Plan: 2 of 2 in current phase
-Status: Phase 13 complete, ready for Phase 14
-Last activity: 2026-03-10 -- Completed plan 13-02 (Governance Integration)
+Phase: 14 of 16 (GitHub App)
+Plan: 1 of 4 in current phase
+Status: Plan 14-01 complete, ready for 14-02
+Last activity: 2026-03-10 -- Completed plan 14-01 (GitHub App Foundation)
 
-Progress: [██████████] 100% (phase 13)
+Progress: [██░░░░░░░░] 25% (phase 14)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 5min
-- Total execution time: 0.74 hours
+- Total execution time: 0.86 hours
 
 **By Phase:**
 
@@ -47,9 +47,10 @@ Progress: [██████████] 100% (phase 13)
 | 11 | 2 | 9min | 4.5min |
 | 12 | 3 | 13min | 4.3min |
 | 13 | 2 | 13min | 6.5min |
+| 14 | 1 | 7min | 7min |
 
 **Recent Trend:**
-- Last 5 plans: 5min, 4min, 4min, 8min, 5min
+- Last 5 plans: 4min, 4min, 8min, 5min, 7min
 - Trend: --
 
 *Updated after each plan completion*
@@ -93,6 +94,9 @@ Recent decisions affecting current work:
 - Post-gate collects output BEFORE entering pending_output_approval (container cleanup safe) (13-02)
 - Cost estimate uses $3/MTok input + $15/MTok output for auto-approve threshold (13-02)
 - Pre-gate proceeds without gating when runRepo unavailable (graceful fallback) (13-02)
+- Encapsulated Fastify plugin scopes raw-body parser to webhook prefix only (14-01)
+- Private key validated at service construction time with descriptive error (14-01)
+- Webhook signature errors detected by message content matching from @octokit/webhooks (14-01)
 
 ### Pending Todos
 
@@ -104,6 +108,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T06:03:40.359Z
-Stopped at: Phase 14 context gathered
-Resume file: .planning/phases/14-github-app/14-CONTEXT.md
+Last session: 2026-03-10T06:30:00.000Z
+Stopped at: Completed 14-01-PLAN.md
+Resume file: .planning/phases/14-github-app/14-01-SUMMARY.md
