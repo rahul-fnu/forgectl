@@ -14,6 +14,8 @@ export interface RunRow {
   completedAt: string | null;
   result: unknown;
   error: string | null;
+  pauseReason: string | null;
+  pauseContext: unknown;
 }
 
 export interface RunInsertParams {
@@ -31,6 +33,8 @@ export interface RunUpdateParams {
   completedAt?: string;
   result?: unknown;
   error?: string;
+  pauseReason?: string;
+  pauseContext?: unknown;
 }
 
 export interface RunRepository {
@@ -39,6 +43,7 @@ export interface RunRepository {
   updateStatus(id: string, params: RunUpdateParams): void;
   findByStatus(status: string): RunRow[];
   list(): RunRow[];
+  clearPauseContext(id: string): void;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -53,6 +58,8 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     completedAt: raw.completedAt,
     result: raw.result ? JSON.parse(raw.result) : null,
     error: raw.error,
+    pauseReason: raw.pauseReason ?? null,
+    pauseContext: raw.pauseContext ? JSON.parse(raw.pauseContext) : null,
   };
 }
 
@@ -82,6 +89,10 @@ export function createRunRepository(db: AppDatabase): RunRepository {
       if (params.completedAt !== undefined) updates.completedAt = params.completedAt;
       if (params.result !== undefined) updates.result = JSON.stringify(params.result);
       if (params.error !== undefined) updates.error = params.error;
+      if (params.pauseReason !== undefined)
+        updates.pauseReason = params.pauseReason;
+      if (params.pauseContext !== undefined)
+        updates.pauseContext = JSON.stringify(params.pauseContext);
       db.update(runs).set(updates).where(eq(runs.id, id)).run();
     },
 
@@ -91,6 +102,13 @@ export function createRunRepository(db: AppDatabase): RunRepository {
 
     list(): RunRow[] {
       return db.select().from(runs).all().map(deserializeRow);
+    },
+
+    clearPauseContext(id: string): void {
+      db.update(runs)
+        .set({ pauseReason: null, pauseContext: null })
+        .where(eq(runs.id, id))
+        .run();
     },
   };
 }

@@ -15,6 +15,13 @@
       "when": 1773108528772,
       "tag": "0001_shiny_joshua_kane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1773110656103,
+      "tag": "0002_condemned_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -11,6 +11,8 @@ export const runs = sqliteTable("runs", {
   completedAt: text("completed_at"),
   result: text("result"), // JSON-serialized ExecutionResult
   error: text("error"),
+  pauseReason: text("pause_reason"),
+  pauseContext: text("pause_context"), // JSON-serialized
 });
 
 export const pipelineRuns = sqliteTable("pipeline_runs", {
@@ -37,3 +39,16 @@ export const runSnapshots = sqliteTable("run_snapshots", {
   timestamp: text("timestamp").notNull(),
   state: text("state").notNull(), // JSON-serialized
 });
+
+export const executionLocks = sqliteTable(
+  "execution_locks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    lockType: text("lock_type").notNull(), // "issue" | "workspace"
+    lockKey: text("lock_key").notNull(), // issue ID or workspace path
+    ownerId: text("owner_id").notNull(), // run ID
+    daemonPid: integer("daemon_pid").notNull(),
+    acquiredAt: text("acquired_at").notNull(),
+  },
+  (table) => [unique().on(table.lockType, table.lockKey)]
+);
