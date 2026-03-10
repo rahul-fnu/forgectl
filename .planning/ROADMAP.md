@@ -88,18 +88,18 @@ Plans:
 - [ ] 12-03-PLAN.md — Pause/resume state management and REST API resume endpoint (DURA-03)
 
 ### Phase 13: Governance & Approvals
-**Goal**: Each workflow has a configurable autonomy level that determines whether runs need human approval, and budgets are enforced before execution begins
+**Goal**: Each workflow has a configurable autonomy level that determines whether runs need human approval, and auto-approve rules can bypass approval gates when conditions are met
 **Depends on**: Phase 11
 **Requirements**: GOVN-01, GOVN-02, GOVN-03
 **Success Criteria** (what must be TRUE):
   1. WORKFLOW.md supports an `autonomy` field with levels (full/semi/interactive/supervised) that controls whether runs auto-execute or wait for approval
   2. Runs requiring approval enter a pending state and transition to approved/rejected/revision_requested based on human action
-  3. Auto-approve rules (cost threshold, file count, label match, workflow pattern) bypass the approval gate when conditions are met
-**Plans**: TBD
+  3. Auto-approve rules (cost threshold, label match, workflow pattern) bypass the approval gate when conditions are met
+**Plans**: 2 plans
 
 Plans:
-- [ ] 13-01: TBD
-- [ ] 13-02: TBD
+- [ ] 13-01-PLAN.md — Governance module: types, autonomy config, approval state machine, auto-approve rules (GOVN-01, GOVN-02, GOVN-03)
+- [ ] 13-02-PLAN.md — REST API endpoints and execution flow wiring (pre-gate, post-gate, auto-approve bypass) (GOVN-02, GOVN-03)
 
 ### Phase 14: GitHub App
 **Goal**: Users interact with forgectl entirely through GitHub -- triggering runs, approving work, asking questions, and reviewing results without leaving their browser or phone
