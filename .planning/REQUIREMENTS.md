@@ -40,10 +40,10 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 - [x] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
 - [x] **GHAP-04**: Slash commands: /forgectl run, rerun, stop, status, approve, reject, help
 - [x] **GHAP-05**: Permission checks: only repo collaborators can issue commands
-- [ ] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
+- [x] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
 - [x] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
-- [ ] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
-- [ ] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
+- [x] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
+- [x] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
 
 ### Browser-Use
 
@@ -128,10 +128,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GHAP-03 | Phase 14 | Complete |
 | GHAP-04 | Phase 14 | Complete |
 | GHAP-05 | Phase 14 | Complete |
-| GHAP-06 | Phase 14 | Pending |
+| GHAP-06 | Phase 14 | Complete |
 | GHAP-07 | Phase 14 | Complete |
-| GHAP-08 | Phase 14 | Pending |
-| GHAP-09 | Phase 14 | Pending |
+| GHAP-08 | Phase 14 | Complete |
+| GHAP-09 | Phase 14 | Complete |
 | BROW-01 | Phase 15 | Pending |
 | BROW-02 | Phase 15 | Pending |
 | BROW-03 | Phase 15 | Pending |
