@@ -2,11 +2,13 @@ import type { TrackerAdapter } from "../tracker/types.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
+import type { TrackerIssue } from "../tracker/types.js";
 import { createState, type OrchestratorState, SlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { MetricsCollector } from "./metrics.js";
+import { dispatchIssue as dispatchIssueImpl } from "./dispatcher.js";
 
 export interface OrchestratorOptions {
   tracker: TrackerAdapter;
@@ -184,6 +186,28 @@ export class Orchestrator {
       active: this.state.running.size,
       max: this.slotManager.getMax(),
     };
+  }
+
+  /**
+   * Dispatch an issue for immediate processing.
+   * Delegates to the standalone dispatchIssue function using orchestrator internals.
+   * No-op if the orchestrator is not running.
+   */
+  dispatchIssue(issue: TrackerIssue): void {
+    if (!this.running) {
+      this.logger.warn("orchestrator", `dispatchIssue called but orchestrator not running`);
+      return;
+    }
+    dispatchIssueImpl(
+      issue,
+      this.state,
+      this.tracker,
+      this.config,
+      this.workspaceManager,
+      this.promptTemplate,
+      this.logger,
+      this.metrics,
+    );
   }
 
   /**

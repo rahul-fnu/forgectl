@@ -154,17 +154,27 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
         installationId: config.github_app.installation_id,
       });
 
+      const { handleSlashCommand } = await import("../github/command-handler.js");
+      const { approveRun, rejectRun } = await import("../governance/approval.js");
+
       registerWebhookHandlers(ghAppService.app, {
         triggerLabel: "forgectl",
         onDispatch: (issue, _octokit, _repo) => {
           if (orchestrator) {
             daemonLogger.info("github", `Dispatching issue ${issue.identifier} via webhook`);
+            orchestrator.dispatchIssue(issue);
           } else {
             daemonLogger.warn("github", `Webhook trigger for ${issue.identifier} but orchestrator not running`);
           }
         },
-        onCommand: async (cmd, _octokit, context, sender) => {
+        onCommand: async (cmd, octokit, context, sender, commentId) => {
           daemonLogger.info("github", `Command /${cmd.command} from @${sender} on ${context.owner}/${context.repo}#${context.issueNumber}`);
+          await handleSlashCommand(cmd, octokit as any, context, sender, commentId, {
+            orchestrator,
+            runRepo,
+            approveRun,
+            rejectRun,
+          });
         },
         runRepo,
         findWaitingRunForIssue: (owner: string, repo: string, issueNumber: number) => {
