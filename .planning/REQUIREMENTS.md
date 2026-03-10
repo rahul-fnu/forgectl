@@ -37,11 +37,11 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 - [x] **GHAP-01**: GitHub App with webhook receiver, HMAC-SHA256 verification, bot identity
 - [x] **GHAP-02**: Label-based and event-based triggers for dispatching runs
-- [ ] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
+- [x] **GHAP-03**: Structured bot comments on issues/PRs with run status, results, cost summary
 - [x] **GHAP-04**: Slash commands: /forgectl run, rerun, stop, status, approve, reject, help
 - [x] **GHAP-05**: Permission checks: only repo collaborators can issue commands
 - [ ] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
-- [ ] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
+- [x] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
 - [ ] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
 - [ ] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
 
@@ -125,11 +125,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GOVN-03 | Phase 13 | Complete |
 | GHAP-01 | Phase 14 | Complete |
 | GHAP-02 | Phase 14 | Complete |
-| GHAP-03 | Phase 14 | Pending |
+| GHAP-03 | Phase 14 | Complete |
 | GHAP-04 | Phase 14 | Complete |
 | GHAP-05 | Phase 14 | Complete |
 | GHAP-06 | Phase 14 | Pending |
-| GHAP-07 | Phase 14 | Pending |
+| GHAP-07 | Phase 14 | Complete |
 | GHAP-08 | Phase 14 | Pending |
 | GHAP-09 | Phase 14 | Pending |
 | BROW-01 | Phase 15 | Pending |

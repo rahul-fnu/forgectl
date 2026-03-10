@@ -4,14 +4,14 @@ milestone: v2.0
 milestone_name: Durable Runtime
 status: in-progress
 stopped_at: Completed 14-03-PLAN.md
-last_updated: "2026-03-10T06:36:34.000Z"
+last_updated: "2026-03-10T06:38:10.143Z"
 last_activity: 2026-03-10 -- Completed plan 14-03 (Comments & Reactions)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 13
   completed_plans: 12
-  percent: 92
+  percent: 75
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 14 of 16 (GitHub App)
-Plan: 2 of 4 in current phase
-Status: Plan 14-02 complete, ready for 14-03
-Last activity: 2026-03-10 -- Completed plan 14-02 (Commands & Webhooks)
+Plan: 3 of 4 in current phase
+Status: Plan 14-03 complete, ready for 14-04
+Last activity: 2026-03-10 -- Completed plan 14-03 (Comments & Reactions)
 
-Progress: [█████░░░░░] 50% (phase 14)
+Progress: [███████░░░] 75% (phase 14)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
+- Total plans completed: 12
 - Average duration: 5min
-- Total execution time: 0.86 hours
+- Total execution time: 0.98 hours
 
 **By Phase:**
 
@@ -47,7 +47,7 @@ Progress: [█████░░░░░] 50% (phase 14)
 | 11 | 2 | 9min | 4.5min |
 | 12 | 3 | 13min | 4.3min |
 | 13 | 2 | 13min | 6.5min |
-| 14 | 1 | 7min | 7min |
+| 14 | 3 | 15min | 5min |
 
 **Recent Trend:**
 - Last 5 plans: 4min, 4min, 8min, 5min, 7min
@@ -55,6 +55,7 @@ Progress: [█████░░░░░] 50% (phase 14)
 
 *Updated after each plan completion*
 | Phase 14 P02 | 4min | 2 tasks | 6 files |
+| Phase 14 P03 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Recent decisions affecting current work:
 - [Phase 14]: Regex uses [ \t]+ instead of \s+ to avoid matching newlines in command args
 - [Phase 14]: WebhookDeps interface for dependency injection keeps handlers testable without real GitHub App
 - [Phase 14]: Permission check returns false on any error (non-collaborators silently denied)
+- [Phase 14]: arrows_counterclockwise not available as GitHub reaction -- rerun via slash command only (14-03)
+- [Phase 14]: OctokitLike interface typed locally to avoid tight coupling to @octokit/rest types (14-03)
+- [Phase 14]: Reaction handler adds eyes acknowledgment before processing action (14-03)
 
 ### Pending Todos
 
@@ -112,6 +116,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T06:37:14.287Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-03-10T06:38:10.138Z
+Stopped at: Completed 14-03-PLAN.md
 Resume file: None
