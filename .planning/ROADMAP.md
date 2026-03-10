@@ -69,7 +69,7 @@ Plans:
 
 Plans:
 - [x] 11-01-PLAN.md — Schema, repositories, EventRecorder, and extended event types (AUDT-01, AUDT-04)
-- [ ] 11-02-PLAN.md — CLI inspect command and rich write-back comment builder (AUDT-02, AUDT-03)
+- [x] 11-02-PLAN.md — CLI inspect command and rich write-back comment builder (AUDT-02, AUDT-03)
 
 ### Phase 12: Durable Execution
 **Goal**: Runs survive daemon crashes, can be paused for human input, and resume exactly where they left off
@@ -80,12 +80,12 @@ Plans:
   2. Runs checkpoint at step boundaries and replay idempotently from the last checkpoint on resume
   3. An agent can pause into a `waiting_for_input` state, persist its context, and resume when a human replies
   4. Two runs targeting the same issue/workspace cannot execute simultaneously (atomic locks via SQLite)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
-- [ ] 12-03: TBD
+- [ ] 12-01-PLAN.md — Schema extensions, execution locks table, lock repository and acquire/release logic (DURA-04)
+- [ ] 12-02-PLAN.md — Checkpoint helpers, startup recovery routine, daemon and execution wiring (DURA-01, DURA-02)
+- [ ] 12-03-PLAN.md — Pause/resume state management and REST API resume endpoint (DURA-03)
 
 ### Phase 13: Governance & Approvals
 **Goal**: Each workflow has a configurable autonomy level that determines whether runs need human approval, and budgets are enforced before execution begins
