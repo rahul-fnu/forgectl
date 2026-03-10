@@ -20,6 +20,7 @@ import {
   boardListCommand,
   boardShowCommand,
 } from "./cli/board.js";
+import { inspectCommand } from "./cli/inspect.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -91,6 +92,12 @@ workflows
   .command("show <name>")
   .description("Show workflow definition")
   .action((name: string) => { workflowsCommand("show", name); });
+
+// forgectl inspect
+program
+  .command("inspect <runId>")
+  .description("Show the full audit trail for a run")
+  .action(inspectCommand);
 
 // forgectl orchestrate — start daemon with orchestration enabled
 program
