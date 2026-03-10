@@ -118,7 +118,7 @@ Plans:
 - [x] 14-02-PLAN.md — Slash command parser, permission checks, webhook handlers for triggers and commands (GHAP-02, GHAP-04, GHAP-05)
 - [x] 14-03-PLAN.md — Bot comment builder with structured templates and reaction event handlers (GHAP-03, GHAP-07)
 - [x] 14-04-PLAN.md — Clarification flow, check runs, PR descriptions, and daemon wiring (GHAP-06, GHAP-08, GHAP-09)
-- [ ] 14-05-PLAN.md — Gap closure: wire onDispatch and onCommand callbacks to orchestrator and governance (GHAP-01, GHAP-02, GHAP-04)
+- [x] 14-05-PLAN.md — Gap closure: wire onDispatch and onCommand callbacks to orchestrator and governance (GHAP-01, GHAP-02, GHAP-04)
 
 ### Phase 15: Browser-Use Integration
 **Goal**: forgectl can dispatch browser-based agents for research and web tasks using the same workflow system as code agents
@@ -127,12 +127,12 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A BrowserUseSession adapter implements the AgentSession interface and can be selected via workflow config
   2. A self-hosted Python sidecar runs inside a Docker container with an HTTP bridge that the TypeScript adapter calls
-  3. A `research` workflow template exists that configures browser-use for competitive analysis and data gathering tasks
-**Plans**: TBD
+  3. A `browser-research` workflow template exists that configures browser-use for competitive analysis and data gathering tasks
+**Plans**: 2 plans
 
 Plans:
-- [ ] 15-01: TBD
-- [ ] 15-02: TBD
+- [ ] 15-01-PLAN.md — BrowserUseSession adapter, Python sidecar, Dockerfile update, schema and factory wiring (BROW-01, BROW-02)
+- [ ] 15-02-PLAN.md — Browser-research workflow template, credential pass-through, container ShmSize (BROW-02, BROW-03)
 
 ## Progress
 
