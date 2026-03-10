@@ -54,7 +54,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 Plans:
 - [x] 10-01-PLAN.md — Database foundation: install deps, schema, database singleton, migrator, config
-- [ ] 10-02-PLAN.md — Typed repositories, RunQueue/PipelineRunService integration, daemon wiring
+- [x] 10-02-PLAN.md — Typed repositories, RunQueue/PipelineRunService integration, daemon wiring
 
 ### Phase 11: Flight Recorder
 **Goal**: Every run produces a complete, immutable audit trail that can be inspected after the fact and formatted into rich write-back comments
@@ -68,7 +68,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 11-01-PLAN.md — Schema, repositories, EventRecorder, and extended event types (AUDT-01, AUDT-04)
+- [x] 11-01-PLAN.md — Schema, repositories, EventRecorder, and extended event types (AUDT-01, AUDT-04)
 - [ ] 11-02-PLAN.md — CLI inspect command and rich write-back comment builder (AUDT-02, AUDT-03)
 
 ### Phase 12: Durable Execution
@@ -143,7 +143,7 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Persistent Storage Layer | 2/2 | Complete    | 2026-03-09 |
-| 11. Flight Recorder | 0/2 | Not started | - |
+| 11. Flight Recorder | 1/2 | In progress | - |
 | 12. Durable Execution | 0/3 | Not started | - |
 | 13. Governance & Approvals | 0/2 | Not started | - |
 | 14. GitHub App | 0/5 | Not started | - |
