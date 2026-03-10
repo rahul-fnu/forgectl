@@ -78,6 +78,10 @@ Recent decisions affecting current work:
 - Unique constraint on (lockType, lockKey) for atomic lock exclusivity (12-01)
 - deleteByStale uses SQL ne() filter for atomic stale lock cleanup (12-01)
 - releaseLock delegates to deleteByOwner for simplicity (12-01)
+- DurabilityDeps optional parameter preserves backward compat for CLI and test callers (12-02)
+- Workspace lock uses input.sources[0] as lock key since RunPlan has no trackerIssue field (12-02)
+- Recovery runs synchronously before HTTP server accepts requests (12-02)
+- v2.0 marks interrupted runs as failed only, no container re-creation attempt (12-02)
 - resumeRun returns stored PauseContext so caller can re-enter execution with context (12-03)
 - Resume endpoint uses standard { error: { code, message } } envelope matching observability routes (12-03)
 
