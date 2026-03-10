@@ -16,6 +16,8 @@ export interface RunRow {
   error: string | null;
   pauseReason: string | null;
   pauseContext: unknown;
+  approvalContext: unknown;
+  approvalAction: string | null;
 }
 
 export interface RunInsertParams {
@@ -35,6 +37,8 @@ export interface RunUpdateParams {
   error?: string;
   pauseReason?: string;
   pauseContext?: unknown;
+  approvalContext?: unknown;
+  approvalAction?: string;
 }
 
 export interface RunRepository {
@@ -60,6 +64,8 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     error: raw.error,
     pauseReason: raw.pauseReason ?? null,
     pauseContext: raw.pauseContext ? JSON.parse(raw.pauseContext) : null,
+    approvalContext: raw.approvalContext ? JSON.parse(raw.approvalContext) : null,
+    approvalAction: raw.approvalAction ?? null,
   };
 }
 
@@ -93,6 +99,10 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         updates.pauseReason = params.pauseReason;
       if (params.pauseContext !== undefined)
         updates.pauseContext = JSON.stringify(params.pauseContext);
+      if (params.approvalContext !== undefined)
+        updates.approvalContext = JSON.stringify(params.approvalContext);
+      if (params.approvalAction !== undefined)
+        updates.approvalAction = params.approvalAction;
       db.update(runs).set(updates).where(eq(runs.id, id)).run();
     },
 

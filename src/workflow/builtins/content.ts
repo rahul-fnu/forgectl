@@ -34,4 +34,5 @@ Check for: factual errors, unclear writing, tone inconsistency, missing sections
 If acceptable, respond with: APPROVED
 If issues exist, list them numbered.`,
   },
+  autonomy: "full",
 };

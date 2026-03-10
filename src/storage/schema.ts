@@ -13,6 +13,8 @@ export const runs = sqliteTable("runs", {
   error: text("error"),
   pauseReason: text("pause_reason"),
   pauseContext: text("pause_context"), // JSON-serialized
+  approvalContext: text("approval_context"), // JSON-serialized
+  approvalAction: text("approval_action"),
 });
 
 export const pipelineRuns = sqliteTable("pipeline_runs", {
