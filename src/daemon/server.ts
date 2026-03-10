@@ -115,6 +115,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     boardStore,
     boardEngine,
     orchestrator: orchestrator ?? undefined,
+    runRepo,
   });
 
   // Serve dashboard UI — find the index.html from src/ui or bundled location

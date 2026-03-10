@@ -13,6 +13,8 @@ import { CreateCardSchema, TriggerCardSchema, UpdateCardSchema } from "../board/
 import { PipelineRunService, PipelineValidationError } from "./pipeline-service.js";
 import type { PipelineDefinition } from "../pipeline/types.js";
 import type { Orchestrator } from "../orchestrator/index.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import { resumeRun } from "../durability/pause.js";
 
 interface InlineContext {
   name: string;
@@ -24,6 +26,7 @@ interface RouteServices {
   boardStore?: BoardStore;
   boardEngine?: BoardEngine;
   orchestrator?: Orchestrator;
+  runRepo?: RunRepository;
 }
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
@@ -31,6 +34,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const boardStore = services.boardStore;
   const boardEngine = services.boardEngine;
   const orchestrator = services.orchestrator;
+  const runRepo = services.runRepo;
 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -581,4 +585,37 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       runEvents.off("run:orchestrator", handler);
     });
   });
+
+  // --- Run Pause/Resume API ---
+
+  app.post<{ Params: { id: string }; Body: { input: string } }>(
+    "/api/v1/runs/:id/resume",
+    async (request, reply) => {
+      if (!runRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Run repository not available" } };
+      }
+
+      const { id } = request.params;
+      const body = request.body as { input?: string } | null;
+      const input = body?.input;
+      if (!input || typeof input !== "string") {
+        reply.code(400);
+        return { error: { code: "BAD_REQUEST", message: "input field is required" } };
+      }
+
+      try {
+        const result = resumeRun(runRepo, id, input);
+        return { status: "resumed", runId: result.runId };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("not found")) {
+          reply.code(404);
+          return { error: { code: "NOT_FOUND", message } };
+        }
+        reply.code(409);
+        return { error: { code: "CONFLICT", message } };
+      }
+    },
+  );
 }

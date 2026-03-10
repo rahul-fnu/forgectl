@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Fastify from "fastify";
 import {
   createDatabase,
   closeDatabase,
@@ -17,6 +18,8 @@ import {
   resumeRun,
   type PauseContext,
 } from "../../src/durability/pause.js";
+import { registerRoutes } from "../../src/daemon/routes.js";
+import { RunQueue } from "../../src/daemon/queue.js";
 
 describe("durability/pause", () => {
   let db: AppDatabase;
@@ -115,6 +118,74 @@ describe("durability/pause", () => {
       expect(() => resumeRun(runRepo, "run-5", "input")).toThrow(
         "not waiting_for_input",
       );
+    });
+  });
+
+  describe("POST /api/v1/runs/:id/resume", () => {
+    async function buildApp(repo: RunRepository) {
+      const app = Fastify({ logger: false });
+      const queue = new RunQueue(repo, async () => ({ success: true }));
+      registerRoutes(app, queue, { runRepo: repo });
+      await app.ready();
+      return app;
+    }
+
+    it("resumes a waiting run and returns 200", async () => {
+      insertRun("api-1", "running");
+      pauseRun(runRepo, "api-1", { reason: "needs-input", phase: "exec" });
+
+      const app = await buildApp(runRepo);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/runs/api-1/resume",
+        payload: { input: "go ahead" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe("resumed");
+      expect(body.runId).toBe("api-1");
+      await app.close();
+    });
+
+    it("returns 404 for non-existent run", async () => {
+      const app = await buildApp(runRepo);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/runs/no-such-run/resume",
+        payload: { input: "hello" },
+      });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.error.code).toBe("NOT_FOUND");
+      await app.close();
+    });
+
+    it("returns 409 for a run not in waiting_for_input", async () => {
+      insertRun("api-2", "running");
+
+      const app = await buildApp(runRepo);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/runs/api-2/resume",
+        payload: { input: "hello" },
+      });
+      expect(res.statusCode).toBe(409);
+      const body = JSON.parse(res.body);
+      expect(body.error.code).toBe("CONFLICT");
+      await app.close();
+    });
+
+    it("returns 400 when input field is missing", async () => {
+      const app = await buildApp(runRepo);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/runs/api-3/resume",
+        payload: {},
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.code).toBe("BAD_REQUEST");
+      await app.close();
     });
   });
 });
