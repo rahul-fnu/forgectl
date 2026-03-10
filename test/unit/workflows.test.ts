@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { getWorkflow, listWorkflowNames, listWorkflows } from "../../src/workflow/registry.js";
 
 describe("workflow registry", () => {
-  it("lists all 6 built-in workflow names", () => {
+  it("lists all 7 built-in workflow names", () => {
     const names = listWorkflowNames();
     expect(names).toContain("code");
     expect(names).toContain("research");
@@ -10,12 +10,13 @@ describe("workflow registry", () => {
     expect(names).toContain("data");
     expect(names).toContain("ops");
     expect(names).toContain("general");
-    expect(names).toHaveLength(6);
+    expect(names).toContain("browser-research");
+    expect(names).toHaveLength(7);
   });
 
-  it("lists all 6 built-in workflow definitions", () => {
+  it("lists all 7 built-in workflow definitions", () => {
     const workflows = listWorkflows();
-    expect(workflows).toHaveLength(6);
+    expect(workflows).toHaveLength(7);
     for (const w of workflows) {
       expect(w.name).toBeTruthy();
       expect(w.container.image).toBeTruthy();
@@ -73,6 +74,18 @@ describe("workflow registry", () => {
     expect(workflow.input.mode).toBe("files");
     expect(workflow.output.mode).toBe("files");
     expect(workflow.review.enabled).toBe(false);
+  });
+
+  it("getWorkflow('browser-research') returns valid definition", () => {
+    const workflow = getWorkflow("browser-research");
+    expect(workflow.name).toBe("browser-research");
+    expect(workflow.container.image).toBe("forgectl/research-browser");
+    expect(workflow.input.mode).toBe("files");
+    expect(workflow.output.mode).toBe("files");
+    expect(workflow.output.path).toBe("/output");
+    expect(workflow.validation.steps).toHaveLength(3);
+    expect(workflow.review.enabled).toBe(true);
+    expect(workflow.autonomy).toBe("full");
   });
 
   it("getWorkflow('nonexistent') throws", () => {

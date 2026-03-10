@@ -5,6 +5,7 @@ import { contentWorkflow } from "./builtins/content.js";
 import { dataWorkflow } from "./builtins/data.js";
 import { opsWorkflow } from "./builtins/ops.js";
 import { generalWorkflow } from "./builtins/general.js";
+import { browserResearchWorkflow } from "./builtins/browser-research.js";
 import { loadCustomWorkflows } from "./custom.js";
 import { deepMerge } from "../config/loader.js";
 
@@ -15,6 +16,7 @@ const BUILTINS: Record<string, WorkflowDefinition> = {
   data: dataWorkflow,
   ops: opsWorkflow,
   general: generalWorkflow,
+  "browser-research": browserResearchWorkflow,
 };
 
 /**
