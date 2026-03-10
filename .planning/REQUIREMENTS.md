@@ -29,9 +29,9 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 
 ### Governance
 
-- [ ] **GOVN-01**: Configurable autonomy levels per workflow (full/semi/interactive/supervised) in WORKFLOW.md
-- [ ] **GOVN-02**: Approval state machine (pending -> approved/rejected/revision_requested)
-- [ ] **GOVN-03**: Auto-approve rules (cost < $X, files < N, specific label, workflow pattern)
+- [x] **GOVN-01**: Configurable autonomy levels per workflow (full/semi/interactive/supervised) in WORKFLOW.md
+- [x] **GOVN-02**: Approval state machine (pending -> approved/rejected/revision_requested)
+- [x] **GOVN-03**: Auto-approve rules (cost < $X, files < N, specific label, workflow pattern)
 
 ### GitHub App
 
@@ -120,9 +120,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DURA-02 | Phase 12 | Complete |
 | DURA-03 | Phase 12 | Complete |
 | DURA-04 | Phase 12 | Complete |
-| GOVN-01 | Phase 13 | Pending |
-| GOVN-02 | Phase 13 | Pending |
-| GOVN-03 | Phase 13 | Pending |
+| GOVN-01 | Phase 13 | Complete |
+| GOVN-02 | Phase 13 | Complete |
+| GOVN-03 | Phase 13 | Complete |
 | GHAP-01 | Phase 14 | Pending |
 | GHAP-02 | Phase 14 | Pending |
 | GHAP-03 | Phase 14 | Pending |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
-status: completed
-stopped_at: Phase 13 context gathered
-last_updated: "2026-03-10T03:18:17.654Z"
-last_activity: 2026-03-10 -- Completed plan 12-03 (Pause/Resume)
+status: in-progress
+stopped_at: Completed 13-01-PLAN.md (Governance Module)
+last_updated: "2026-03-10T03:39:15Z"
+last_activity: 2026-03-10 -- Completed plan 13-01 (Governance Module)
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 8
+  completed_plans: 8
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Phase 12: Durable Execution (in progress)
+**Current focus:** Phase 13: Governance & Approvals (in progress)
 
 ## Current Position
 
-Phase: 12 of 16 (Durable Execution)
-Plan: 3 of 3 in current phase
-Status: Phase 12 complete, ready for Phase 13
-Last activity: 2026-03-10 -- Completed plan 12-03 (Pause/Resume)
+Phase: 13 of 16 (Governance & Approvals)
+Plan: 1 of 2 in current phase
+Status: Plan 13-01 complete, ready for 13-02
+Last activity: 2026-03-10 -- Completed plan 13-01 (Governance Module)
 
-Progress: [██████████] 100% (phase 12)
+Progress: [█████-----] 50% (phase 13)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 5min
-- Total execution time: 0.53 hours
+- Total execution time: 0.66 hours
 
 **By Phase:**
 
@@ -46,9 +46,10 @@ Progress: [██████████] 100% (phase 12)
 | 10 | 2 | 10min | 5min |
 | 11 | 2 | 9min | 4.5min |
 | 12 | 3 | 13min | 4.3min |
+| 13 | 1 | 8min | 8min |
 
 **Recent Trend:**
-- Last 5 plans: 4min, 5min, 5min, 4min, 4min
+- Last 5 plans: 5min, 5min, 4min, 4min, 8min
 - Trend: --
 
 *Updated after each plan completion*
@@ -84,6 +85,10 @@ Recent decisions affecting current work:
 - v2.0 marks interrupted runs as failed only, no container re-creation attempt (12-02)
 - resumeRun returns stored PauseContext so caller can re-enter execution with context (12-03)
 - Resume endpoint uses standard { error: { code, message } } envelope matching observability routes (12-03)
+- Approval state machine follows pause.ts pattern: pure functions taking RunRepository (13-01)
+- Auto-approve uses AND logic: all specified conditions must pass (13-01)
+- Cost threshold returns false when actualCost undefined (safe pre-gate default) (13-01)
+- autonomy defaults to "full" for backward compatibility with existing workflows (13-01)
 
 ### Pending Todos
 
@@ -95,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T03:18:17.648Z
-Stopped at: Phase 13 context gathered
-Resume file: .planning/phases/13-governance-approvals/13-CONTEXT.md
+Last session: 2026-03-10T03:39:15Z
+Stopped at: Completed 13-01-PLAN.md (Governance Module)
+Resume file: .planning/phases/13-governance-approvals/13-01-SUMMARY.md
