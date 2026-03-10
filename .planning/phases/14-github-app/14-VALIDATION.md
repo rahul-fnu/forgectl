@@ -45,8 +45,8 @@ created: 2026-03-10
 | 14-03-01 | 03 | 2 | GHAP-03 | unit | `npx vitest run test/unit/github-comments.test.ts` | Wave 0 | ⬜ pending |
 | 14-03-02 | 03 | 2 | GHAP-07 | unit | `npx vitest run test/unit/github-reactions.test.ts` | Wave 0 | ⬜ pending |
 | 14-04-01 | 04 | 3 | GHAP-06 | unit | `npx vitest run test/unit/github-clarification.test.ts` | Wave 0 | ⬜ pending |
-| 14-05-01 | 05 | 3 | GHAP-08 | unit | `npx vitest run test/unit/github-checks.test.ts` | Wave 0 | ⬜ pending |
-| 14-05-02 | 05 | 3 | GHAP-09 | unit | `npx vitest run test/unit/github-pr-description.test.ts` | Wave 0 | ⬜ pending |
+| 14-04-02 | 04 | 3 | GHAP-08 | unit | `npx vitest run test/unit/github-checks.test.ts` | Wave 0 | ⬜ pending |
+| 14-04-03 | 04 | 3 | GHAP-09 | unit | `npx vitest run test/unit/github-pr-description.test.ts` | Wave 0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
