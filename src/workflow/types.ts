@@ -47,6 +47,12 @@ export interface WorkflowFileConfig {
     steps: ValidationStep[];
     on_failure: "abandon" | "output-wip" | "pause";
   };
+  autonomy?: "full" | "interactive" | "semi" | "supervised";
+  auto_approve?: {
+    label?: string;
+    workflow_pattern?: string;
+    max_cost?: number;
+  };
 }
 
 /**

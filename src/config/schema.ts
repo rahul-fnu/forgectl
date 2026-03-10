@@ -13,6 +13,15 @@ export const OrchestrationMode = z.enum(["single", "review", "parallel"]);
 export const InputMode = z.enum(["repo", "files", "both"]);
 export const OutputMode = z.enum(["git", "files"]);
 
+export const AutonomyLevelEnum = z.enum(["full", "interactive", "semi", "supervised"]);
+export type AutonomyLevelEnum = z.infer<typeof AutonomyLevelEnum>;
+
+export const AutoApproveRuleSchema = z.object({
+  label: z.string().optional(),
+  workflow_pattern: z.string().optional(),
+  max_cost: z.number().positive().optional(),
+}).optional();
+
 export const ValidationStepSchema = z.object({
   name: z.string(),
   command: z.string(),
@@ -52,6 +61,8 @@ export const WorkflowSchema = z.object({
     enabled: z.boolean().default(false),
     system: z.string().default(""),
   }).default({}),
+  autonomy: AutonomyLevelEnum.default("full"),
+  auto_approve: AutoApproveRuleSchema,
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
 
