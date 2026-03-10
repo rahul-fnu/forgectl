@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 
 export interface RunEvent {
   runId: string;
-  type: "started" | "phase" | "validation" | "retry" | "output" | "completed" | "failed" | "dispatch" | "reconcile" | "stall" | "orch_retry";
+  type: "started" | "phase" | "validation" | "retry" | "output" | "completed" | "failed" | "dispatch" | "reconcile" | "stall" | "orch_retry" | "prompt" | "agent_response" | "validation_step" | "cost" | "snapshot";
   timestamp: string;
   data: Record<string, unknown>;
 }
