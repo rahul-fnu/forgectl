@@ -3,12 +3,14 @@ import type { WorkspaceManager } from "../workspace/manager.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { TrackerIssue } from "../tracker/types.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import { createState, type OrchestratorState, SlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { MetricsCollector } from "./metrics.js";
-import { dispatchIssue as dispatchIssueImpl } from "./dispatcher.js";
+import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispatcher.js";
 
 export interface OrchestratorOptions {
   tracker: TrackerAdapter;
@@ -16,6 +18,9 @@ export interface OrchestratorOptions {
   config: ForgectlConfig;
   promptTemplate: string;
   logger: Logger;
+  runRepo?: RunRepository;
+  autonomy?: AutonomyLevel;
+  autoApprove?: AutoApproveRule;
 }
 
 /**
@@ -30,6 +35,9 @@ export class Orchestrator {
   private config: ForgectlConfig;
   private promptTemplate: string;
   private readonly logger: Logger;
+  private readonly runRepo?: RunRepository;
+  private readonly autonomy?: AutonomyLevel;
+  private readonly autoApprove?: AutoApproveRule;
   private stopScheduler: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
@@ -42,6 +50,9 @@ export class Orchestrator {
     this.config = opts.config;
     this.promptTemplate = opts.promptTemplate;
     this.logger = opts.logger;
+    this.runRepo = opts.runRepo;
+    this.autonomy = opts.autonomy;
+    this.autoApprove = opts.autoApprove;
   }
 
   /**
@@ -70,6 +81,9 @@ export class Orchestrator {
       promptTemplate: this.promptTemplate,
       logger: this.logger,
       metrics: this.metrics,
+      runRepo: this.runRepo,
+      autonomy: this.autonomy,
+      autoApprove: this.autoApprove,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -198,6 +212,13 @@ export class Orchestrator {
       this.logger.warn("orchestrator", `dispatchIssue called but orchestrator not running`);
       return;
     }
+    const governance: GovernanceOpts | undefined = this.runRepo
+      ? {
+          autonomy: this.autonomy ?? "full",
+          autoApprove: this.autoApprove,
+          runRepo: this.runRepo,
+        }
+      : undefined;
     dispatchIssueImpl(
       issue,
       this.state,
@@ -207,6 +228,7 @@ export class Orchestrator {
       this.promptTemplate,
       this.logger,
       this.metrics,
+      governance,
     );
   }
 

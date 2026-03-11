@@ -3,8 +3,14 @@ import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
+import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import { getWorkflow } from "./registry.js";
 import { parseDuration } from "../utils/duration.js";
+
+export interface WorkflowOverrides {
+  autonomy?: AutonomyLevel;
+  auto_approve?: AutoApproveRule;
+}
 
 export interface CLIOptions {
   task: string;
@@ -86,10 +92,18 @@ function resolveNetwork(
  */
 export function resolveRunPlan(
   config: ForgectlConfig,
-  options: CLIOptions
+  options: CLIOptions,
+  workflowOverrides?: WorkflowOverrides,
 ): RunPlan {
   const workflowName = detectWorkflow(options);
-  const workflow = getWorkflow(workflowName);
+  const baseWorkflow = getWorkflow(workflowName);
+  const workflow: WorkflowDefinition = workflowOverrides
+    ? {
+        ...baseWorkflow,
+        ...(workflowOverrides.autonomy !== undefined && { autonomy: workflowOverrides.autonomy }),
+        ...(workflowOverrides.auto_approve !== undefined && { auto_approve: workflowOverrides.auto_approve }),
+      }
+    : baseWorkflow;
   const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 

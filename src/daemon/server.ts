@@ -72,7 +72,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     const runConfig = loadConfig();
     const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
-    return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid });
+    return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid, runRepo });
   });
 
   const pipelineService = new PipelineRunService(pipelineRepo);
@@ -112,7 +112,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       const promptTemplate = wf?.promptTemplate
         ?? "Resolve the following issue: {{issue.title}}\n\n{{issue.description}}";
 
-      orchestrator = new Orchestrator({ tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger });
+      orchestrator = new Orchestrator({
+        tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
+        runRepo,
+        autonomy: wf?.config?.autonomy,
+        autoApprove: wf?.config?.auto_approve,
+      });
       await orchestrator.start();
 
       // Start file watcher for hot-reload (only if WORKFLOW.md exists)

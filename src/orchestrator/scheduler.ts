@@ -5,8 +5,10 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import { reconcile } from "./reconciler.js";
-import { filterCandidates, sortCandidates, dispatchIssue } from "./dispatcher.js";
+import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -20,6 +22,9 @@ export interface TickDeps {
   promptTemplate: string;
   logger: Logger;
   metrics: MetricsCollector;
+  runRepo?: RunRepository;
+  autonomy?: AutonomyLevel;
+  autoApprove?: AutoApproveRule;
 }
 
 /**
@@ -65,9 +70,14 @@ export async function tick(deps: TickDeps): Promise<void> {
   // Step 6: Get available slots
   const available = slotManager.availableSlots(state.running);
 
-  // Step 7: Dispatch up to available slots
+  // Step 7: Build governance opts if runRepo available
+  const governance: GovernanceOpts | undefined = deps.runRepo
+    ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo }
+    : undefined;
+
+  // Step 8: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance);
   }
 }
 
