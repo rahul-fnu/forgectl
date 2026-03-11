@@ -13,6 +13,8 @@ import { createRunRepository } from "../storage/repositories/runs.js";
 import { createPipelineRepository } from "../storage/repositories/pipelines.js";
 import { createSnapshotRepository } from "../storage/repositories/snapshots.js";
 import { createLockRepository } from "../storage/repositories/locks.js";
+import { createEventRepository } from "../storage/repositories/events.js";
+import { EventRecorder } from "../logging/recorder.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
 import { recoverInterruptedRuns } from "../durability/recovery.js";
@@ -47,6 +49,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   const pipelineRepo = createPipelineRepository(db);
   const snapshotRepo = createSnapshotRepository(db);
   const lockRepo = createLockRepository(db);
+  const eventRepo = createEventRepository(db);
+  const recorder = new EventRecorder(eventRepo, snapshotRepo);
 
   // --- Startup recovery (before accepting requests) ---
   const daemonLogger = new Logger(false);
@@ -230,6 +234,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
     if (orchestrator) {
       await orchestrator.stop();
     }
+    recorder.close();
     closeDatabase(db);
     removePid();
     await app.close();
