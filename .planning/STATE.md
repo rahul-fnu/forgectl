@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-03-11T05:36:01.512Z"
+stopped_at: Phase 18 context gathered
+last_updated: "2026-03-11T06:03:59.269Z"
 last_activity: 2026-03-11 -- Completed plan 16-01 (Wire EventRecorder)
 progress:
   total_phases: 9
@@ -140,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T05:33:21.855Z
-Stopped at: Completed 17-01-PLAN.md
-Resume file: None
+Last session: 2026-03-11T06:03:59.261Z
+Stopped at: Phase 18 context gathered
+Resume file: .planning/phases/18-wire-github-app-utilities/18-CONTEXT.md
