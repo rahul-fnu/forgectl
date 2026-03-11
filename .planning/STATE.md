@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-03-10T11:36:57.329Z"
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-03-11T05:04:23.496Z"
 last_activity: 2026-03-10 -- Completed plan 15-02 (Browser-Research Workflow)
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 16
-  completed_plans: 16
+  total_phases: 9
+  completed_phases: 7
+  total_plans: 17
+  completed_plans: 17
   percent: 100
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 15 of 16 (Browser-Use Integration) -- COMPLETE
-Plan: 2 of 2 in current phase (all complete)
-Status: All v2.0 phases complete
-Last activity: 2026-03-10 -- Completed plan 15-02 (Browser-Research Workflow)
+Phase: 16 of 16 (Wire Flight Recorder) -- COMPLETE
+Plan: 1 of 1 in current phase (all complete)
+Status: All v2.0 phases complete (including gap closure)
+Last activity: 2026-03-11 -- Completed plan 16-01 (Wire EventRecorder)
 
 Progress: [██████████] 100%
 
@@ -60,6 +60,7 @@ Progress: [██████████] 100%
 | Phase 14 P05 | 4min | 1 task  | 4 files |
 | Phase 15 P01 | 5min | 2 tasks | 6 files |
 | Phase 15 P02 | 4min | 2 tasks | 6 files |
+| Phase 16 P01 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,7 @@ Recent decisions affecting current work:
 - [Phase 15]: Dual credential pass: try both Anthropic and OpenAI keys for browser-use (neither required)
 - [Phase 15]: 256MB ShmSize for research-browser images based on Chromium Docker requirements
 - [Phase 15]: Dummy AgentAdapter for browser-use since BrowserUseSession bypasses CLI adapter path
+- [Phase 16]: EventRecorder instantiated after repo creation but before RunQueue to capture all events
 
 ### Pending Todos
 
@@ -134,6 +136,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T11:33:46.029Z
-Stopped at: Completed 15-02-PLAN.md
+Last session: 2026-03-11T05:04:23.489Z
+Stopped at: Completed 16-01-PLAN.md
 Resume file: None
