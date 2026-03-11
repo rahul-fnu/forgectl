@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-03-11T05:06:42.349Z"
+stopped_at: Phase 17 context gathered
+last_updated: "2026-03-11T05:17:45.416Z"
 last_activity: 2026-03-11 -- Completed plan 16-01 (Wire EventRecorder)
 progress:
   total_phases: 9
@@ -136,6 +136,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T05:04:23.489Z
-Stopped at: Completed 16-01-PLAN.md
-Resume file: None
+Last session: 2026-03-11T05:17:45.409Z
+Stopped at: Phase 17 context gathered
+Resume file: .planning/phases/17-wire-governance-gates/17-CONTEXT.md
