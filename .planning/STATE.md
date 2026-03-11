@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Phase 17 context gathered
-last_updated: "2026-03-11T05:17:45.416Z"
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-03-11T05:33:21.862Z"
 last_activity: 2026-03-11 -- Completed plan 16-01 (Wire EventRecorder)
 progress:
   total_phases: 9
-  completed_phases: 7
-  total_plans: 17
-  completed_plans: 17
+  completed_phases: 8
+  total_plans: 18
+  completed_plans: 18
   percent: 100
 ---
 
@@ -61,6 +61,7 @@ Progress: [██████████] 100%
 | Phase 15 P01 | 5min | 2 tasks | 6 files |
 | Phase 15 P02 | 4min | 2 tasks | 6 files |
 | Phase 16 P01 | 2min | 2 tasks | 2 files |
+| Phase 17 P01 | 4min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,9 @@ Recent decisions affecting current work:
 - [Phase 15]: 256MB ShmSize for research-browser images based on Chromium Docker requirements
 - [Phase 15]: Dummy AgentAdapter for browser-use since BrowserUseSession bypasses CLI adapter path
 - [Phase 16]: EventRecorder instantiated after repo creation but before RunQueue to capture all events
+- [Phase 17]: Orchestrator builds GovernanceOpts internally from its own fields (single source of truth for all dispatch paths)
+- [Phase 17]: GovernanceOpts is undefined when runRepo absent, preserving graceful fallback (17-01)
+- [Phase 17]: WorkflowOverrides separate interface on resolveRunPlan preserves backward compat (17-01)
 
 ### Pending Todos
 
@@ -136,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T05:17:45.409Z
-Stopped at: Phase 17 context gathered
-Resume file: .planning/phases/17-wire-governance-gates/17-CONTEXT.md
+Last session: 2026-03-11T05:33:21.855Z
+Stopped at: Completed 17-01-PLAN.md
+Resume file: None
