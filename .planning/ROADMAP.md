@@ -40,7 +40,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow (completed 2026-03-10)
 - [x] **Phase 16: Wire Flight Recorder** - Instantiate EventRecorder in daemon, fix audit trail pipeline (gap closure) (completed 2026-03-11)
 - [x] **Phase 17: Wire Governance Gates** - Pass GovernanceOpts to dispatcher, fix pre/post gates (gap closure) (completed 2026-03-11)
-- [ ] **Phase 18: Wire GitHub App Utilities** - Register reaction handler, wire check runs and PR descriptions (gap closure)
+- [ ] **Phase 18: Wire GitHub App Utilities** - Wire comments, check runs, PR descriptions into execution lifecycle; document reaction limitation (gap closure)
 
 ## Phase Details
 
@@ -165,16 +165,20 @@ Plans:
 - [ ] 17-01-PLAN.md — Wire GovernanceOpts into scheduler, orchestrator, server.ts, and resolver (GOVN-01, GOVN-02, GOVN-03)
 
 ### Phase 18: Wire GitHub App Utilities
-**Goal**: All GitHub App utility modules (reactions, check runs, PR descriptions) are wired into the execution lifecycle instead of being dead code
+**Goal**: All GitHub App utility modules (comments, check runs, PR descriptions) are wired into the execution lifecycle; reaction webhook limitation documented
 **Depends on**: Phase 14
 **Requirements**: GHAP-03, GHAP-07, GHAP-08, GHAP-09
 **Gap Closure:** Closes gaps from audit
 **Success Criteria** (what must be TRUE):
-  1. handleReactionEvent is registered as a webhook handler in registerWebhookHandlers()
+  1. Comment building consolidated into github/comments.ts with progress comments created at dispatch and updated in-place
   2. Check run lifecycle (create/update/complete) is called during PR execution flow
   3. PR descriptions are auto-generated when forgectl creates or updates a PR
-  4. GitHub comments module is either wired into the execution flow or consolidated with orchestrator comments
-**Plans**: 0 plans (needs `/gsd:plan-phase 18`)
+  4. Reaction webhook limitation documented (GitHub does not deliver reaction webhook events; slash commands provide equivalent functionality)
+**Plans**: 2 plans
+
+Plans:
+- [ ] 18-01-PLAN.md — Comment consolidation, progress lifecycle wiring, reaction limitation documentation (GHAP-03, GHAP-07)
+- [ ] 18-02-PLAN.md — Check run lifecycle and PR description generation wiring (GHAP-08, GHAP-09)
 
 ## Progress
 
@@ -192,4 +196,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 15. Browser-Use Integration | 2/2 | Complete    | 2026-03-10 |
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
-| 18. Wire GitHub App Utilities | 0/0 | Not Started | -- |
+| 18. Wire GitHub App Utilities | 0/2 | Not Started | -- |
