@@ -1,367 +1,315 @@
-# Feature Landscape
+# Feature Research
 
-**Domain:** Durable AI agent runtime with persistent state, GitHub App interaction, audit trail, governance, and browser-use integration
-**Researched:** 2026-03-09
+**Domain:** Multi-agent delegation, conditional/loop pipeline nodes, pipeline self-correction
+**Milestone:** v2.1 Autonomous Factory
+**Researched:** 2026-03-12
+**Confidence:** HIGH (core behaviors); MEDIUM (YAML syntax conventions); HIGH (self-correction loop structure)
 
 ---
 
-## 1. SQLite-Backed Persistent State with Migrations
+## Context: What Is Already Built
 
-### Table Stakes
+Before mapping new features, note what v2.0 already delivers so nothing is re-invented:
+
+- **Static DAG pipeline executor** (`src/pipeline/executor.ts`): topological sort, parallel execution, fan-in merging, checkpoint/resume per node.
+- **PipelineNode type** (`src/pipeline/types.ts`): `id`, `task`, `depends_on`, `workflow`, `agent`, `input`, `pipe`. No `if`, `loop`, or `delegate` fields yet.
+- **Validation self-correction loop** (`src/validation/runner.ts`): run steps → collect failures → invoke agent fix → restart steps from top. Already bounds loops via `maxRetries` from step config.
+- **Orchestrator dispatcher** (`src/orchestrator/dispatcher.ts`): claim → execute worker → retry with backoff. Per-issue, not per-subtask.
+- **Governance/autonomy** (`src/governance/`): pre/post-gate approval state machine. Wired into the worker.
+- **SQLite storage** (`src/storage/schema.ts`): `runs`, `pipeline_runs`, `run_events` tables. No parent/child run relationship yet.
+
+The new milestone adds three feature clusters on top of this foundation.
+
+---
+
+## Feature Cluster 1: Multi-Agent Delegation (Lead → Worker)
+
+### What "delegation" means in this context
+
+A **lead agent** receives a complex issue, decomposes it into N subtasks at runtime, and dispatches each subtask to a **child worker agent** using the existing `executeWorker` machinery. The lead does not execute the subtasks itself — it writes a decomposition plan, then the orchestrator dispatches child workers per subtask. Results flow back to the lead for synthesis or direct write-back.
+
+This is the **orchestrator-worker pattern**, the dominant production multi-agent architecture in 2025-2026 (confirmed: Anthropic engineering blog, Arize AI comparison, AWS guidance).
+
+### Table Stakes (Users Expect These)
 
 | Feature | Why Expected | Complexity | Depends On |
 |---------|--------------|------------|------------|
-| Schema-driven migrations with up/down | Any production system with evolving schema needs reversible migrations | Low | None (foundational) |
-| WAL mode for concurrent reads during writes | Without WAL, the daemon blocks reads during agent state writes; users will see stalls | Low | None |
-| Repository pattern (typed query/mutation functions) | Raw SQL scattered through business logic is unmaintainable; Drizzle's query builder handles this | Med | Schema design |
-| Atomic transactions for state transitions | Orchestrator state machine transitions must be atomic (claim + lock + update) or you get double-dispatch | Low | Schema design |
-| Connection pooling / singleton management | better-sqlite3 is synchronous; one connection per process, but must handle concurrent async callers safely | Low | None |
-| Graceful migration on first run | Users should not run a separate migration command; `forgectl orchestrate` should auto-migrate on startup | Low | Migration infra |
+| Lead agent produces a subtask list | Delegation only works if the lead outputs structured subtask specs (id, task description, workflow, agent type). Without structure, the orchestrator cannot dispatch. | MEDIUM | Prompt engineering: lead prompt must elicit structured JSON output; zod schema to validate it. |
+| Orchestrator dispatches child workers per subtask | The existing `dispatchIssue` / `executeWorker` machinery must be callable with a synthetic issue representing a subtask, not just a real tracker issue. | MEDIUM | `executeWorker` accepts a `TrackerIssue`; needs a `SyntheticIssue` that satisfies the interface. |
+| Child workers run concurrently (up to slot limit) | Parallelization is the primary ROI of multi-agent. If children are sequential, delegation adds overhead with no benefit. Anthropic data shows 90% time reduction with 3-5 parallel subagents. | MEDIUM | Existing `maxParallel` concurrency pattern in pipeline executor can be adapted. |
+| `maxChildren` budget per parent issue | Without a budget cap, one complex issue can spawn hundreds of children, exhausting Docker slots and API rate limits. The limit must be set in WORKFLOW.md. | LOW | Config schema extension. |
+| Depth limit (max depth=2 for v2.1) | Unlimited recursion (lead spawns leads that spawn leads) is the fastest way to infinite loops and cost blowouts. Depth 2 = lead + one level of workers. Enforce via context passed into each worker invocation. | LOW | Pass `parentDepth` into worker; worker refuses to delegate if depth >= 2. |
+| Per-parent `maxChildren` budget tracked in SQLite | If the daemon crashes mid-delegation, we must not re-spawn already-running children. The parent run record needs a `childIds` field. | MEDIUM | Schema migration: add `parentRunId` and `childRunIds` to `runs` table. |
+| Child results collected and summarized for parent | After all children complete, results (branch names, file diffs, validation outcomes) must be aggregated and returned to the parent (or written to the tracker directly). | MEDIUM | New result-aggregation step after child dispatch loop. |
+| Failure retry with updated instructions | If a child fails, the lead can re-issue it with amended task instructions (incorporating the failure reason). Standard in orchestrator-worker literature. | MEDIUM | Child retry loop: on child failure, re-prompt lead for revised subtask spec, re-dispatch. |
 
 ### Differentiators
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Schema versioning with rollback | Lets users downgrade forgectl versions without data loss | Med | Drizzle Kit generates SQL files; rollback requires storing down-migrations |
-| Query-level observability (slow query logging) | Debugging production issues when the daemon feels slow | Low | Log queries > N ms via better-sqlite3 verbose mode |
-| Backup on migration (automatic `.bak` before schema change) | Safety net for users self-hosting; SQLite file copy is trivial | Low | Copy file before `migrate()` |
-| Export/import (JSON dump of full DB state) | Disaster recovery, moving between machines | Med | Useful but not urgent |
+| Lead agent writes subtask specs to tracker (creates sub-issues) | Full traceability: each subtask is a real GitHub issue with its own comment thread, labels, and lifecycle. Users can follow along from their phone. | HIGH | Requires `TrackerAdapter.createIssue()` — not yet in the interface. Adds complexity to the adapter. |
+| Lead synthesizes child results before write-back | Rather than posting N separate comments, lead reads child outputs and writes one coherent summary comment. Requires another agent invocation post-children. | MEDIUM | Adds one more `executeWorker` call in "synthesis" mode after children complete. |
+| Autonomy gates per child | Each child worker can have its own autonomy level (e.g., child implementing a DB migration goes to `supervised`). Inherited from lead's WORKFLOW.md but overridable per subtask spec. | MEDIUM | Pass governance opts per child; already wired in dispatcher. |
 
 ### Anti-Features
 
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| PostgreSQL / MySQL support | Adds operational complexity (connection management, hosting, config). SQLite handles single-machine workloads up to hundreds of thousands of runs. Scale later if needed. | Stick with SQLite via better-sqlite3. Abstract behind repository pattern so swapping drivers is possible but not planned. |
-| ORM auto-sync (push schema without migrations) | Drizzle supports `push` for dev, but it is destructive in production. Generates no migration files, so you cannot audit what changed. | Always use `drizzle-kit generate` to produce migration SQL files. Use `push` only in dev/test. |
-| Embedded migration runner as separate CLI | Adds friction. Users forget to run it. | Auto-migrate on daemon start with version check. |
-| Multi-database sharding | Premature optimization for single-machine | Single SQLite file per installation |
-
-### Complexity Assessment
-
-**Overall: LOW-MEDIUM.** Drizzle ORM + better-sqlite3 is well-documented and widely adopted for exactly this use case. The main complexity is schema design (getting tables right for identity, runs, events, approvals, costs) rather than the infrastructure itself.
-
-### Dependencies on Existing Features
-
-- Replaces file-based `RunLog` JSON writer (`src/logging/run-log.ts`) as the primary persistence layer
-- Replaces in-memory orchestrator state (`src/orchestrator/`) with SQLite-backed state
-- Must preserve backward compatibility: existing `forgectl run` still works, just writes to SQLite instead of JSON files
-- PID file management (`src/daemon/`) stays file-based (appropriate for PID lifecycle)
-
----
-
-## 2. GitHub App Interaction Model
-
-### Table Stakes
-
-Studied: Dependabot, Renovate, GitHub Copilot coding agent, Probot framework.
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Webhook receiver with HMAC-SHA256 verification | Any GitHub App must verify webhook signatures. Without this, anyone can POST fake events. | Low | Fastify route |
-| Bot identity (`forgectl[bot]` comments) | Users expect a recognizable bot persona. Dependabot and Copilot both do this. | Low | GitHub App registration |
-| Label-based triggers (`issues.labeled`) | The simplest trigger model. Dependabot uses config, Copilot uses assignment. Label is most explicit. | Low | Webhook receiver |
-| Structured issue comments (status, result, cost) | Dependabot and Copilot both post structured markdown. This IS the UI for mobile users. | Med | Flight recorder (for data), template engine |
-| Basic slash commands (`/run`, `/rerun`, `/stop`, `/status`) | Copilot uses `@copilot` mentions. Renovate uses checkboxes in its dashboard issue. Slash commands are the standard for bots. | Med | Comment webhook + command parser |
-| Permission checks (only collaborators can issue commands) | Without this, any commenter can trigger expensive runs. Dependabot restricts to maintainers. | Low | GitHub API `get collaborator` |
-| PR creation with structured description | Copilot creates PRs with plans. Dependabot creates PRs with changelogs. The PR body IS the audit trail for reviewers. | Med | Git output mode, template engine |
-| Check runs on created PRs | Standard for any bot that creates PRs. Shows validation status inline in the PR. | Med | GitHub Checks API |
-| Webhook event deduplication | GitHub retries webhooks on timeout. Without dedup, you dispatch the same issue twice. | Low | Run ID + idempotency key |
-| Fallback to polling for self-hosted without webhooks | Not everyone can expose a public endpoint. Existing polling must keep working. | Low | Already built in v1.0 |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Reactions as approvals (thumbs-up = approve) | Phone-friendly. One tap to approve. No bot in the market does this well for autonomous agents. | Med | Reaction webhook + approval system integration |
-| Conversational clarification (mid-run questions) | The agent asks a question in a comment, pauses, resumes when you reply. This is the "from your phone" killer feature. Copilot does a version of this but limited to plan review. | High | Durable execution (pause/resume), context serialization |
-| Dynamic autonomy escalation | Agent running in `full` mode encounters something unexpected, auto-escalates to ask. No existing bot does this. | High | Governance system, agent state machine |
-| `/forgectl decompose` (break issue into sub-issues) | Manager agent creates sub-issues. Unique to multi-agent orchestration. | High | Multi-agent delegation (Phase 9) |
-| Comment templates customizable per workflow | Different workflows need different comment styles. WORKFLOW.md controls the bot's voice. | Med | Template engine in WORKFLOW.md |
-| Auto-close issue on PR merge | Full lifecycle: issue -> agent -> PR -> merge -> auto-close with summary. Dependabot does this for dependency PRs. | Low | PR merge webhook |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Probot as a framework dependency | Probot adds opinions about app lifecycle, logging, and configuration that conflict with forgectl's existing Fastify daemon. It was valuable in 2018-2022 but modern GitHub App development is straightforward with octokit + raw webhooks. | Use `@octokit/app` + `@octokit/webhooks` directly. Handle webhook routing in Fastify. |
-| Dependency Dashboard issue (Renovate-style) | Renovate creates a persistent "Dependency Dashboard" issue that lists all pending updates. This pattern becomes noisy for general-purpose agent work. | Use per-issue comments. Status lives where the work lives. |
-| Excessive slash commands at launch | Every command is a maintenance burden. Renovate has dozens of checkbox options; it overwhelms new users. | Ship 6 commands: `/run`, `/rerun`, `/stop`, `/status`, `/approve`, `/help`. Add more based on real usage. |
-| GitHub Actions as the runtime | Some bots run inside Actions. This limits execution to 6 hours, provides no persistent state, and is expensive at scale. | forgectl IS the runtime. The GitHub App is just the interaction surface. |
-| Bidirectional issue sync | Syncing issue state between GitHub and an internal tracker adds enormous complexity (conflict resolution, ordering). Linear does this and it is their entire product. | One-way: GitHub issues trigger work. forgectl writes results back as comments and PRs. Internal state is in SQLite. |
-
-### Complexity Assessment
-
-**Overall: HIGH.** The GitHub App is the most complex feature in the milestone. Sub-phasing (6a-6e) is essential. The core bot (6a) is medium complexity. Conversational clarification (6c) is the hardest part -- it requires durable execution, context serialization, and reliable webhook-to-run matching.
-
-### Dependencies on Existing Features
-
-- **Fastify daemon** (`src/daemon/`): webhook receiver is a new route group (`/webhooks/github`)
-- **Tracker adapter** (`src/tracker/`): GitHub App replaces polling for repos where it is installed; polling remains as fallback
-- **Orchestrator** (`src/orchestrator/`): webhook events enqueue into the existing RunQueue
-- **Output** (`src/output/`): PR creation extends the existing git output mode
-- **Durable execution**: conversational clarification requires pause/resume (Phase 4)
-- **Governance**: reactions-as-approvals requires the approval system (Phase 5)
-
----
-
-## 3. Event-Sourced Audit Trail / Flight Recorder
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Append-only event log per run | Core of event sourcing. Every state change is an immutable event. This is what makes runs inspectable and replayable. | Med | SQLite storage (Phase 1) |
-| Event types covering the full run lifecycle | `run_started`, `prompt_built`, `agent_invoked`, `tool_called`, `validation_started`, `validation_passed`, `validation_failed`, `retry_scheduled`, `cost_incurred`, `run_completed`, `run_failed` | Med | Schema design |
-| Structured event payloads (not just strings) | Events need typed metadata: timestamps, durations, token counts, file paths, exit codes. Otherwise the audit trail is useless for debugging. | Med | Zod schemas for each event type |
-| Query by run ID, agent, issue, time range | Operators need to filter runs. "Show me all failed runs for agent X in the last 24 hours." | Low | SQLite indexes |
-| CLI inspection (`forgectl run inspect <run-id>`) | Operators should not need to query SQLite directly. | Low | CLI command + query layer |
-| Cost event tracking (tokens, model, provider, cents) | Budget enforcement depends on accurate cost data. Every LLM call records its cost. | Med | Agent adapter hooks |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| State reconstruction from events | Rebuild the current state of any run from its event history (event sourcing, not just event logging). Enables time-travel debugging. | High | Requires event replay logic, projection functions |
-| Rich write-back to GitHub/Notion | The audit trail IS the comment. Structured summaries with files changed, validation results, cost breakdown, PR link. This replaces the need for a dashboard for 80% of use cases. | Med | Template engine, tracker write-back |
-| Conversation events (clarification Q&A in the event stream) | Questions asked and answers received become part of the audit trail. Full context of human-agent interaction is preserved. | Med | Durable execution (Phase 4) |
-| Diff/commit recording | Record what the agent actually changed (git diff summaries, file list). Enables "what did the agent do?" without reading the PR. | Med | Git integration in output module |
-| Event streaming (SSE/WebSocket for live run monitoring) | Watch a run in real-time from the dashboard. Existing `RunEvent` emitter in v1 can feed this. | Med | Already have `RunEvent` emitter; need to bridge to SSE |
-| Retention policies (auto-archive old events) | Without retention, the SQLite DB grows unbounded. Archive events older than N days to compressed files. | Low | Scheduled cleanup task |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Full CQRS (separate read/write databases) | Massively over-engineered for a single-machine daemon. CQRS is for distributed systems with different scaling needs for reads vs writes. | Single SQLite database with append-only events table and materialized views (or denormalized query tables) for fast reads. |
-| Event store as a separate service (EventStoreDB, Kafka) | External dependency for a self-hosted CLI tool is a non-starter. | SQLite events table with auto-incrementing sequence numbers. |
-| Replaying events to rebuild entire system state on startup | Slow startup, complex replay logic. Fine for a bank, overkill for an agent runtime. | Maintain current state in separate tables. Events are the audit trail, not the primary state store. Use events for inspection and debugging, not for running the system. |
-| Recording raw LLM responses | Token-for-token recording of model outputs is expensive (storage), potentially contains sensitive code, and rarely useful. | Record: prompt hash, model, token counts, cost, duration, tool calls. Not the full response body. |
-
-### Complexity Assessment
-
-**Overall: MEDIUM.** The event logging itself is straightforward (append rows to an events table). The complexity is in (a) designing event schemas that cover all cases without being too granular, and (b) rich write-back formatting that is actually useful and not noisy.
-
-### Dependencies on Existing Features
-
-- **Logging** (`src/logging/`): the existing `RunEvent` emitter and `RunLog` JSON writer are the starting point; flight recorder replaces RunLog as the persistence layer
-- **Agent adapters** (`src/agent/`): must emit cost events after each invocation
-- **Validation** (`src/validation/`): must emit validation pass/fail events with error details
-- **Tracker** (`src/tracker/`): write-back uses tracker adapters to post comments
-
----
-
-## 4. Durable Execution with Pause/Resume and Crash Recovery
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Crash recovery (resume interrupted runs on daemon restart) | If the daemon crashes mid-run, it must detect interrupted runs and either resume or mark them failed. Without this, runs silently disappear. | Med | SQLite state (Phase 1), reconciliation logic |
-| Idempotent step boundaries | Resuming a run must not re-execute completed steps. Each step records its completion status. | Med | Checkpoint storage |
-| Execution locks (one agent per issue at a time) | Without locks, two daemon restarts can dispatch two agents to the same issue. SQLite `BEGIN IMMEDIATE` provides atomic locking. | Low | SQLite transactions |
-| Heartbeat with stall detection | v1 has this in-memory. Must survive restarts: last heartbeat timestamp in SQLite, reconciler checks on startup. | Low | Existing stall detection + SQLite |
-| Configurable timeout per workflow | Some tasks take 5 minutes, some take 2 hours. Timeout must be in WORKFLOW.md. | Low | WORKFLOW.md extension |
-| State snapshot at step boundaries | Before each major step (prompt build, agent invoke, validation), snapshot current state so resume knows where to pick up. | Med | Event stream (Phase 3) |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Pause/resume for human clarification | Agent enters `waiting_for_input`, serializes context, releases container resources. Human replies (via GitHub comment), agent resumes with full context restored. This is the "conversation from your phone" feature. | High | Context serialization, container lifecycle, webhook-to-run matching |
-| Container reclamation during pause | While waiting for human input (could be hours), release the Docker container to free resources. Restore workspace from persistent storage when resuming. | High | Workspace persistence, container rebuild |
-| Invocation source tracking | Know whether a run was triggered by `timer`, `webhook`, `slash_command`, `label`, or `manual`. Affects priority and audit trail. | Low | Enum field on run record |
-| Wakeup coalescing | If 3 webhooks fire for the same issue within 5 seconds, dispatch once, not three times. | Med | Dedup with time window |
-| Graceful shutdown (drain active runs) | On `SIGTERM`, finish active runs (or checkpoint them) rather than killing mid-execution. | Med | Signal handling, checkpoint |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Full Temporal-style workflow replay | Temporal replays the entire workflow history on every decision point. This requires deterministic workflow code and a Temporal server. Far too heavy for a single-process daemon. | Simple checkpoint-resume: save state at step boundaries, resume from last checkpoint. No replay, no determinism requirement. |
-| CRIU-based container checkpointing (Trigger.dev-style) | CRIU freezes entire Linux processes. Requires root, kernel support, and is fragile across kernel versions. Trigger.dev runs their own infrastructure to support this. | Checkpoint at the application level: serialize run state to SQLite, not at the process/container level. |
-| Distributed execution across workers | Multiple workers picking up checkpointed runs adds consensus, state transfer, and networking complexity. | Single daemon, single machine. One process owns all runs. |
-| Persistent agent subprocesses across daemon restarts | Keeping a Claude Code subprocess alive across restarts requires PID management, signal forwarding, and is unreliable. | Kill agent subprocess on daemon stop. Resume by re-invoking agent with restored context (prior conversation, completed steps). |
-
-### Complexity Assessment
-
-**Overall: HIGH.** Crash recovery and idempotent steps are medium. Pause/resume for human clarification is the hardest feature in the milestone -- it requires clean context serialization (what does the agent need to know when it resumes?), container lifecycle management (keep warm vs. reclaim?), and reliable webhook-to-suspended-run matching.
-
-**Risk:** The "resume with full context" problem. When an agent pauses and resumes hours later, it gets a fresh invocation with injected context. The quality of that context injection determines whether the agent can actually continue effectively. This needs experimentation, not just engineering.
-
-### Dependencies on Existing Features
-
-- **Orchestrator** (`src/orchestrator/`): state machine gains `paused`, `waiting_for_input` states
-- **Agent** (`src/agent/`): session adapters need `serialize()` / `restore()` for context
-- **Workspace** (`src/workspace/`): workspaces must persist across container reclamation
-- **Container** (`src/container/`): must support "rebuild container for existing workspace"
-- **Flight recorder** (Phase 3): state snapshots are events in the audit trail
-
----
-
-## 5. Governance with Configurable Autonomy and Budget Enforcement
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Autonomy levels per workflow (`full`, `semi`, `interactive`, `supervised`) | Different work needs different oversight. A typo fix should be `full`. A DB migration should be `supervised`. | Med | WORKFLOW.md extension |
-| Budget cap per workflow | "Don't spend more than $5 on this type of task." Without this, a runaway agent can burn $100 on a simple bug fix. | Med | Cost tracking (Phase 3), pre-flight check |
-| Pre-flight cost estimation | Before starting a run, estimate cost based on task complexity signals (issue length, file count, historical data). Block if estimate exceeds budget. | Med | Historical cost data |
-| Approval state machine (`pending -> approved/rejected`) | Approvals must be tracked, not ad-hoc. State machine prevents double-approval or approval after rejection. | Low | SQLite storage |
-| Auto-approve rules (cost < $X, files < N, has specific label) | Most runs should not require manual approval. Auto-approve is what makes `full` autonomy viable. | Med | Rule engine in governance module |
-| Budget exhaustion auto-pause | When a company/agent budget is depleted, pause all runs rather than silently failing or continuing to spend. | Med | Cost aggregation queries |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Dynamic escalation (agent self-escalates when uncertain) | An agent in `full` mode encounters 200 test failures it didn't expect and pauses to ask. No other agent runtime does this automatically. | High | Agent adapter integration, confidence signals |
-| Budget periods with auto-reset (monthly, weekly) | "$500/month for this agent" with automatic reset. Prevents one bad month from permanently blocking the agent. | Med | Scheduled budget reset |
-| Cost attribution per agent and per company | Multi-agent setups need to know which agent is expensive. Company-level budgets scope costs to projects. | Med | Identity model (Phase 2) |
-| Approval via GitHub reaction | Thumbs-up on the bot's "plan review" comment = approve. This is the mobile-first approval UX. | Med | GitHub App (Phase 6), reaction webhooks |
-| Configurable approval types | `expensive_run`, `destructive_change`, `plan_review`, custom types. Each type can have different approvers and rules. | Med | Extensible approval system |
-| Budget alerts (warn at 80%, pause at 100%) | Proactive warnings before budget is exhausted. Post a comment: "This agent has used 80% of its monthly budget." | Low | Threshold checks on cost events |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Role-based access control (RBAC) | Multi-user RBAC is a separate product concern. v2.0 is single-user. | Simple permission checks: is this person a repo collaborator? That is enough. |
-| Complex approval workflows (multi-approver, quorum) | Enterprise approval chains are scope creep. | Single approver per action. The repo maintainer approves. |
-| Real-time cost streaming from LLM providers | Most providers don't stream cost data. You get token counts after the call completes. | Calculate cost post-hoc from token counts and model pricing tables. |
-| Granular per-tool budgets | "Limit search to $0.50, code generation to $2.00" is too fine-grained. Users cannot reason about costs at this level. | Budget per run and per agent/period. Not per tool. |
-
-### Complexity Assessment
-
-**Overall: MEDIUM.** The autonomy levels and approval state machine are straightforward. Budget enforcement is medium (accounting is fiddly but not algorithmically hard). Dynamic escalation is the hard part -- it requires the agent to signal uncertainty, which depends on prompt engineering and agent adapter support.
-
-### Dependencies on Existing Features
-
-- **WORKFLOW.md** (`src/workflow/`): gains `autonomy` and `budget_cap` fields
-- **Config merge** (`src/config/`): governance settings participate in 4-layer merge
-- **Identity** (Phase 2): budget scoping requires agent/company identity
-- **Flight recorder** (Phase 3): cost events are audit trail events
-- **Agent adapters** (`src/agent/`): must report token usage per invocation
-
----
-
-## 6. Browser-Use Integration
-
-### Table Stakes
-
-If you are going to offer web research as a capability, these are expected.
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Browser-use runs inside a Docker container (sandboxed) | Browser automation must be sandboxed. A rogue browser session accessing arbitrary URLs is a security risk. | Med | Docker sandbox (`src/container/`) |
-| LLM-driven web navigation (search, read, extract) | The core value: agent can research topics by browsing the web, not just generating text. | Med | browser-use framework, LLM API key |
-| Structured output extraction (not raw HTML) | The agent should return structured findings (JSON, markdown), not browser screenshots. | Med | browser-use output parsing |
-| Configurable via WORKFLOW.md | A "research" workflow type that enables browser-use as a tool for the agent. | Low | WORKFLOW.md extension |
-| Cost tracking for browser-use sessions | Browser-use calls an LLM for every navigation decision. These costs must be tracked like any other LLM invocation. | Med | Cost tracking (Phase 3/5) |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Browser-use as a tool available to coding agents | Not a separate workflow type -- the coding agent (Claude Code) can invoke browser-use as a tool when it needs to look something up. Research is embedded in the coding flow. | High | Tool registration, subprocess management, cross-language bridge |
-| Pre-built research workflow template | "Here is a research task, go find the answer on the web." A WORKFLOW.md template that sets up browser-use with appropriate prompts. | Low | WORKFLOW.md template |
-| Screenshot capture for audit trail | Record what the browser saw at each step. Useful for debugging and verification. | Med | Playwright screenshot API |
-| URL allowlist/blocklist | Restrict which sites the browser agent can visit. Important for security and cost control. | Low | Browser-use config |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Building a custom browser automation framework | browser-use exists, is well-maintained (50k+ GitHub stars), and handles the hard problems (element detection, navigation, error recovery). | Integrate browser-use as a subprocess. Do not rebuild. |
-| Browser-use in the same process as forgectl | browser-use is Python. forgectl is TypeScript. In-process integration is impossible. | Run browser-use as a Python subprocess inside the Docker container. Communicate via stdout/stdin JSON or a temporary file. |
-| Browser-use Cloud (hosted service) | Adds an external dependency and network latency. forgectl's value proposition is self-hosted. | Run browser-use locally inside the container with a headless Chromium. |
-| Real-time browser streaming to dashboard | Showing a live browser view in the web dashboard is cool but enormously complex (WebRTC, frame encoding). | Capture periodic screenshots and final page content. Display in audit trail. |
-| Replacing Claude Code's built-in web search | Claude Code and Codex may have their own web search tools. browser-use is for cases where you need deeper web interaction (filling forms, navigating multi-page flows, extracting structured data). | Position browser-use as a complementary tool, not a replacement for built-in search. |
-
-### Architecture Notes: Browser-Use Integration Model
-
-Browser-use is a **Python** library (Python 3.11+, Playwright, Chromium). forgectl is TypeScript. The integration model is:
-
-1. **Container image**: A `forgectl/research` Docker image that includes Python 3.11+, browser-use, Playwright, and Chromium alongside the standard forgectl agent tools.
-2. **Invocation**: The agent (Claude Code) calls browser-use as a tool via a shell command inside the container: `python3 /opt/browser-use/research.py --task "find pricing for X" --output /workspace/research.json`
-3. **Communication**: browser-use writes structured JSON output to a file. The agent reads the file and incorporates findings.
-4. **LLM keys**: browser-use uses the same BYOK API keys already configured in forgectl. Passed as environment variables into the container.
-5. **Cost tracking**: browser-use's LLM calls are tracked via a wrapper that logs token usage to a file, which forgectl collects post-run.
-
-**Confidence: MEDIUM.** This integration model is viable but untested. The cross-language bridge (TypeScript -> Python subprocess) adds operational complexity. The main risk is that browser-use's LLM usage is opaque -- tracking costs requires instrumenting browser-use or wrapping the LLM client.
-
-### Complexity Assessment
-
-**Overall: MEDIUM-HIGH.** The browser-use framework itself handles the hard browser automation problems. The complexity is in the integration: building the Docker image with Python + Chromium + browser-use, making it available as a tool to agents, and tracking costs across the TypeScript/Python boundary.
-
-### Dependencies on Existing Features
-
-- **Container** (`src/container/`): needs a new Docker image with Python + browser-use + Chromium
-- **Agent adapters** (`src/agent/`): agents must be able to invoke browser-use as a tool
-- **WORKFLOW.md** (`src/workflow/`): new workflow type or tool configuration
-- **Cost tracking** (Phase 3/5): must capture browser-use LLM costs
-
----
-
-## Feature Dependencies (Cross-Cutting)
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Unlimited delegation depth | Each level multiplies agents, API calls, and cost. A three-level hierarchy is never necessary for single-machine use. | Hard-code depth=2 for v2.1. Revisit when distributed execution is in scope. |
+| Lead agent manages child workspaces directly | Lead reaching into child workspaces violates isolation. Child output is always collected via the existing git/files output modes. | Children write to their own branches/dirs; parent reads via resolver, not direct file access. |
+| Spawning children on a remote queue (BullMQ/Redis) | External queue adds infrastructure. Single-machine SQLite is sufficient. | Track children in SQLite `runs` table with `parentRunId` column. |
+| Lead agent re-implements the orchestrator | The lead should produce a subtask list and stop. The forgectl orchestrator dispatches workers. The lead is not a second orchestrator. | Lead outputs JSON plan; forgectl runtime dispatches, not another agent. |
+
+### Feature Dependencies
 
 ```
-Phase 1: SQLite Storage
+Multi-Agent Delegation
+    requires: executeWorker (already built)
+    requires: SQLite runs table migration (add parentRunId, childRunIds)
+    requires: SyntheticIssue adapter (new — wraps subtask spec as TrackerIssue)
+    requires: child concurrency limiter (adapt PipelineExecutor.maxParallel pattern)
+    requires: depth tracking (new context field in worker invocation)
+    enhances: governance (children inherit autonomy, can override per-subtask)
+    conflicts-with: unlimited depth (must enforce depth <= 2)
+```
+
+---
+
+## Feature Cluster 2: Conditional Pipeline Nodes (if/else, loop-until)
+
+### What "conditional nodes" mean here
+
+The existing pipeline executor treats `PipelineNode.depends_on` as purely structural (edges in the DAG). Conditional nodes extend this so:
+
+- **If nodes**: a node only executes if a boolean expression over upstream node results evaluates to true. Otherwise it is skipped (or the else-branch executes instead).
+- **Loop nodes**: a node (or subgraph) re-executes until a condition on its own output evaluates to true, or a max iteration count is reached.
+
+These are runtime control flow additions to the static DAG — a dynamic overlay on the existing static executor.
+
+### Industry reference
+
+This pattern is confirmed in every major pipeline/workflow framework (Azure Pipelines, GitHub Actions, LangGraph, Haystack, Google ADK, Prefect). The key implementation insight from Haystack: conditions should be expressions evaluated against node output, not boolean constants — otherwise you could have achieved the same result with static DAG structure.
+
+### Table Stakes (Users Expect These)
+
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| `condition` field on PipelineNode | Nodes with `condition: "expr"` are skipped if the expression evaluates falsy. This is the YAML primitive users write. | MEDIUM | Expression evaluator (see below); parser extension. |
+| Expression evaluator over upstream node results | The expression references `nodes.<nodeId>.status`, `nodes.<nodeId>.result.validation.passed`, `nodes.<nodeId>.result.output.branch`. Must be safe (no `eval`). | MEDIUM | Use a sandboxed evaluator (e.g., `expr-eval` npm package or a small hand-rolled subset). |
+| `if_failed` / `if_passed` branch shorthand | `condition: "nodes.test.result.validation.passed == false"` is verbose. Shorthand `if_failed: test` is more readable in YAML. Both resolve to the same runtime check. | LOW | Syntactic sugar in the parser, reduces to a condition expression. |
+| `else_node` field to name the branch to skip to | When a condition is false, skip to `else_node` (or skip the entire subtree if no else). | MEDIUM | Parser must validate that `else_node` exists in the pipeline; executor must route accordingly. |
+| `loop: { until: "expr", max_iterations: N }` on a node | The node re-executes until `until` is true or `max_iterations` is reached. Loop iteration state (count) is tracked in `NodeExecution`. | HIGH | Executor must support re-queuing a node; loop state must be checkpointed. |
+| Hard max_iterations safety cap | If YAML specifies `max_iterations: 100`, forgectl caps it at a global maximum (e.g., 20) to prevent runaway loops. | LOW | Config-level cap constant; warn if YAML exceeds it. |
+| Skip-on-false behavior is visible in dry-run | `forgectl pipeline run --dry-run` shows which nodes would be skipped given hypothetical condition values. | LOW | Dry-run formatter extended to show conditional logic. |
+| Condition evaluation errors are fatal | If an expression references a node that doesn't exist or returns a type error, the pipeline fails immediately rather than silently skipping. | LOW | Defensive expression evaluation with typed error. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| YAML-native condition syntax (no scripting) | Keeps pipeline files readable without requiring users to write JavaScript/Python conditions. Competing tools (Azure Pipelines `${{ if }}`) embed scripting languages, which is powerful but brittle. | MEDIUM | Design a small, safe expression subset: `==`, `!=`, `&&`, `\|\|`, `!`, dot-path access. |
+| Condition based on validation result | `if_failed: test` → "run the fix node only if tests failed." This is the primary use case for self-correction pipelines (Cluster 3). | LOW | Validation result is already in `NodeExecution.result.validation.passed`. |
+| Loop counter available as expression variable | `nodes.fix_node.loop_iteration` is available in condition expressions, enabling patterns like "if this is the 3rd iteration and still failing, use a different strategy." | MEDIUM | Add `loopIteration` to `NodeExecution`; expose in evaluator context. |
+
+### Anti-Features
+
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Turing-complete condition expressions | Arbitrary code in conditions (Python lambdas, JS `eval`) is a security and debuggability problem. | A safe expression subset: comparison operators, boolean logic, dot-path access to node results. |
+| Conditions that branch based on external API calls | External calls in conditions make pipeline execution non-deterministic and hard to checkpoint. | Conditions reference only node results already in memory. External decisions should be a node. |
+| Nested conditional subgraphs (if inside if inside loop) | Infinite recursion in the graph resolver; hard to reason about and visualize. | Depth limit on conditional nesting: max 2 levels. Deeper logic belongs in the agent's task. |
+| Runtime pipeline modification (adding nodes conditionally) | Dynamic graph mutation makes checkpoint/resume fragile. | All nodes are declared statically in YAML; conditions control execution, not graph structure. |
+
+### Feature Dependencies
+
+```
+Conditional Pipeline Nodes
+    requires: PipelineNode type extension (add condition, else_node, loop fields)
+    requires: PipelineExecutor refactor (condition evaluation before executeNode)
+    requires: Expression evaluator (safe, sandboxed, references NodeExecution results)
+    requires: Loop state tracking in NodeExecution (loopIteration counter)
+    requires: Checkpoint extension (checkpoint loop state between iterations)
+    enhances: self-correction (Cluster 3 is built on top of loop nodes)
+    conflicts-with: static topological sort (loops break DAG property — need cycle detection bypass for loop nodes)
+```
+
+---
+
+## Feature Cluster 3: Pipeline Self-Correction (test fail → fix → retest)
+
+### What "self-correction" means here
+
+A pipeline-level feedback loop (distinct from the existing in-container validation loop in `src/validation/runner.ts`) where:
+
+1. A test node runs (e.g., `npm test`, lint, coverage check).
+2. If tests fail, a fix node runs with the failure output as context.
+3. The test node re-runs.
+4. This repeats until tests pass or max iterations is reached.
+
+The **key distinction from existing validation**: the existing `runValidationLoop` runs validation commands inside the same container as the original agent invocation, feeds errors back as a prompt to the same agent, and retries — all within a single `executeWorker` call. Pipeline self-correction is at a higher level: separate nodes, each its own worker invocation, with explicit iteration tracking in the pipeline executor.
+
+### Why both are needed
+
+- The existing validation loop is for synchronous in-container correction (fast, single agent, single container).
+- Pipeline self-correction is for cases where fix and test are separate agents or separate workflows (different containers, different agents, potentially different repos).
+
+### Industry patterns (confirmed)
+
+The standard self-correction pattern (Haystack docs, Google ADK LoopAgent, AWS Evaluator-Reflect-Refine, Medium blog by Soham Ghosh 2026):
+
+1. Generator → Evaluator → ConditionalRouter → (loop back to Generator | exit to output)
+2. Termination via: (a) condition met, or (b) max_iterations reached
+3. Each iteration carries prior failure context into the next generator prompt
+
+Critical warning from industry research: agents given failing tests will often weaken the tests rather than fix the code. Mitigation: the fix node must not have write access to test files, or the validation node must separately verify test file integrity.
+
+### Table Stakes (Users Expect These)
+
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| `loop` node type that wraps a fix node | The YAML primitive: `loop: { until: "nodes.test.result.validation.passed", max_iterations: 5 }` on a fix node causes it to re-run until tests pass. | HIGH | Conditional pipeline nodes (Cluster 2); loop re-execution in executor. |
+| Failure output passed as context to fix node | The fix node gets the test failure output (stdout/stderr from the failed validation) as `context`. Without this, the fix agent cannot know what to fix. | MEDIUM | `NodeExecution.result` already contains validation output; needs to be materialized as a context file for the next node. |
+| Loop iteration count tracked and visible | `forgectl pipeline status` shows "fix-loop: 3/5 iterations, still failing." Without visibility, users cannot tell if the loop is working. | LOW | `loopIteration` in `NodeExecution`; REST API and dashboard exposure. |
+| Max iteration cap with clean failure | When `max_iterations` is reached and tests still fail, the pipeline fails the loop node cleanly and reports "self-correction exhausted after N iterations." | LOW | Existing `getDependencyIssues` pattern extended for loop exhaustion. |
+| Fix node cannot modify test files | Guard: the fix workflow's WORKFLOW.md `exclude` list includes `*.test.ts`, `*.spec.ts`, `test/`, so the agent cannot weaken tests. | LOW | WORKFLOW.md `exclude` config already supported; document this as a required practice. |
+| Coverage drop self-correction | `until: "nodes.coverage.result.output.coveragePercent >= 80"` — but coverage value must be extractable from agent output. | HIGH | Requires structured output parsing from the test node; coverage percent must be in a known location in agent output. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Multi-trigger self-correction (lint + test + coverage in sequence) | A single pipeline loop covers lint fail → reformat, test fail → fix, coverage drop → add tests. Each trigger type has its own fix node. | HIGH | Composing multiple loop nodes in sequence within a pipeline; each loop is independent. |
+| Fix agent different from original agent | The test agent runs with Claude Code; the fix agent runs with Codex. Different strengths for different correction tasks. | LOW | Already supported by `agent` field on PipelineNode. |
+| Self-correction history injected into fix prompts | Each iteration's fix prompt includes the history of all previous attempts: "In iteration 1, you tried X. It failed because Y. In iteration 2, you tried Z. It also failed." Progressive context accumulation. | MEDIUM | Accumulate `NodeExecution` results across iterations; materialize as context file for each iteration. |
+| Governance gate before applying fix | Before the fix node runs, apply pre-execution approval gate if autonomy requires it. "Tests failed — approve this fix attempt?" | MEDIUM | Governance already wired into executeWorker; needs to be honored per loop iteration, not just once at start. |
+
+### Anti-Features
+
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Infinite self-correction with escalating model | Trying increasingly powerful (expensive) models when cheaper ones fail. Sounds smart but hides budget blowout risk. | Fixed max_iterations + clean failure. User re-triages the issue manually if N iterations fail. |
+| Self-correction that can modify the test suite | Agents will take the path of least resistance: weaken tests. This is the most commonly reported failure mode in industry (confirmed: DEV Community "275 Tests" article, 2026). | `exclude` list in fix workflow WORKFLOW.md; test file integrity check as a post-loop validation step. |
+| Parallel self-correction (try multiple fixes simultaneously) | Merging parallel fix attempts that touched the same files creates merge conflicts that are hard to resolve automatically. | Sequential: one fix attempt at a time. Parallelism is for independent subtasks (Cluster 1), not for self-correction. |
+| Self-correction across unrelated failing checks | One fix agent trying to simultaneously fix lint, tests, and coverage. Each concern has different context requirements. | Separate loop nodes per check type. Lint loop, test loop, coverage loop run in sequence. |
+
+### Feature Dependencies
+
+```
+Pipeline Self-Correction
+    requires: Conditional pipeline nodes (Cluster 2) — loop-until is the primitive
+    requires: Context materialization between iterations (failure output as context file)
+    requires: Loop state tracking (iteration counter in NodeExecution)
+    requires: Existing validation runner (already provides structured failure output)
+    enhances: Governance (approval gate per iteration is a differentiator)
+    conflicts-with: fix node modifying test files (must use WORKFLOW.md exclude)
+    depends-on (soft): Self-correction works best when the test node emits structured
+                       failure output (exit code + stderr). Already done in runValidationStep.
+```
+
+---
+
+## Feature Prioritization Matrix
+
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Lead agent produces subtask list | HIGH | MEDIUM | P1 |
+| Child workers dispatched concurrently | HIGH | MEDIUM | P1 |
+| `maxChildren` + depth=2 limit | HIGH | LOW | P1 |
+| SQLite parent/child run relationship | HIGH | LOW | P1 |
+| `condition` field + expression evaluator | HIGH | MEDIUM | P1 |
+| `loop` field + max_iterations cap | HIGH | HIGH | P1 |
+| Failure output as context to fix node | HIGH | MEDIUM | P1 |
+| Fix node `exclude` list guard | HIGH | LOW | P1 |
+| Child failure retry with updated instructions | MEDIUM | MEDIUM | P2 |
+| `if_failed` / `if_passed` shorthand | MEDIUM | LOW | P2 |
+| Loop iteration count in status/API | MEDIUM | LOW | P2 |
+| Lead agent synthesis call (one final summary) | MEDIUM | MEDIUM | P2 |
+| Self-correction history in fix prompts | MEDIUM | MEDIUM | P2 |
+| Governance gate per loop iteration | MEDIUM | MEDIUM | P2 |
+| Lead creates sub-issues in tracker | LOW | HIGH | P3 |
+| Multi-trigger self-correction (lint + test + coverage) | LOW | HIGH | P3 |
+| Parallel alternative fix attempts | LOW — anti-feature | — | DO NOT BUILD |
+
+**Priority key:**
+- P1: Must have for v2.1 to deliver on "Autonomous Factory" promise
+- P2: Should have; add once P1 features are validated
+- P3: Nice to have; future consideration or v2.2
+
+---
+
+## Full Dependency Graph (Cross-Feature)
+
+```
+SQLite schema migration (add parentRunId, childRunIds)
     |
-    +---> Phase 2: Identity (needs storage)
+    +---> Multi-Agent Delegation
+    |         requires: SyntheticIssue adapter (subtask as TrackerIssue)
+    |         requires: child concurrency limiter
+    |         requires: depth tracking (parentDepth context field)
+    |
+PipelineNode type extension (condition, else_node, loop fields)
+    |
+    +---> Expression Evaluator (safe, references NodeExecution results)
     |         |
-    |         +---> Phase 5: Governance (needs identity for budget scoping)
-    |         |         |
-    |         |         +---> Phase 6: GitHub App (needs governance for approvals)
-    |         |
-    |         +---> Phase 3: Flight Recorder (needs identity for attribution)
+    |         +---> Conditional Pipeline Nodes (if/else branches)
     |                   |
-    |                   +---> Phase 4: Durable Execution (needs events for state recovery)
-    |                             |
-    |                             +---> Phase 6: GitHub App (needs pause/resume for conversations)
+    |                   +---> Pipeline Self-Correction (loop-until is the primitive)
+    |                             requires: context materialization between iterations
+    |                             requires: fix node exclude guard (WORKFLOW.md)
     |
-    +---> Browser-Use: Can be built independently (container + workflow config)
-          but cost tracking needs Phase 3/5
+PipelineExecutor refactor
+    requires: condition evaluation before executeNode
+    requires: loop re-queuing (cycle in execution for loop nodes only)
+    requires: loop state in NodeExecution (loopIteration counter)
+    requires: checkpoint extension (persist loop state)
 ```
 
-## MVP Recommendation
+**Build order enforced by dependencies:**
+1. Schema migration (parallel with planning)
+2. PipelineNode type extension + expression evaluator
+3. PipelineExecutor refactor (conditional execution)
+4. Loop node support (builds on conditional)
+5. Multi-agent delegation (independent of pipeline changes, uses executor machinery)
+6. Self-correction pipelines (composes loop nodes + context materialization)
 
-### Build first (foundation, no user-visible change):
-1. **SQLite storage** -- everything else depends on it
-2. **Identity model** -- budget scoping and audit attribution need it
+---
 
-### Build second (core value):
-3. **Flight recorder** -- makes every run inspectable; enables rich write-back
-4. **Durable execution** -- crash recovery, pause/resume
+## MVP Definition
 
-### Build third (the product):
-5. **Governance** -- budget enforcement, autonomy levels (can parallelize with Phase 4)
-6. **GitHub App** (sub-phased 6a-6e) -- the primary interaction surface
+### Launch With (v2.1 core)
 
-### Defer:
-- **Browser-use integration**: Build after the core runtime is solid. It is a capability extension, not a runtime requirement. Could be a v2.1 feature or a late v2.0 addition if time permits.
-- **Multi-agent delegation**: v2.1+
-- **Dashboard v2**: v2.1+, GitHub App is the primary UI
+- [x] Multi-agent delegation: lead → workers, depth=2, maxChildren budget, concurrent dispatch, SQLite child tracking
+- [x] Conditional pipeline nodes: `condition` field, expression evaluator, `else_node`, skip-on-false
+- [x] Loop nodes: `loop.until` + `loop.max_iterations`, hard safety cap
+- [x] Self-correction: failure context to fix node, fix-exclude list, clean exhaustion failure
+
+### Add After Validation (v2.1.x)
+
+- [ ] Child failure retry with updated instructions — trigger: users report child failures not retried
+- [ ] Self-correction history accumulation — trigger: users report fix agent repeating same failed approach
+- [ ] `if_failed` / `if_passed` shorthand — trigger: YAML verbosity complaints
+
+### Future Consideration (v2.2+)
+
+- [ ] Lead creates sub-issues in tracker — requires `TrackerAdapter.createIssue()` addition
+- [ ] Multi-trigger self-correction (lint + test + coverage as one loop) — high complexity, composable from existing P1 features
+- [ ] Governance gate per loop iteration — requires governance/approval flow changes
+
+---
 
 ## Sources
 
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite)
-- [Drizzle ORM Migrations](https://orm.drizzle.team/docs/migrations)
-- [Drizzle vs Prisma comparison (2026)](https://www.bytebase.com/blog/drizzle-vs-prisma/)
-- [Node.js ORM comparison (2025)](https://thedataguy.pro/blog/2025/12/nodejs-orm-comparison-2025/)
-- [Probot framework](https://probot.github.io/docs/best-practices/)
-- [Probot slash commands extension](https://github.com/probot/commands)
-- [Renovate bot comparison](https://docs.renovatebot.com/bot-comparison/)
-- [GitHub Copilot coding agent interaction model](https://dev.to/pwd9000/using-github-copilot-coding-agent-for-devops-automation-3f43)
-- [Event sourcing as audit log (Event-Driven.io)](https://event-driven.io/en/audit_log_event_sourcing/)
-- [Event sourcing with Node.js (RisingStack)](https://blog.risingstack.com/event-sourcing-with-examples-node-js-at-scale/)
-- [Event sourcing explained (2025)](https://www.baytechconsulting.com/blog/event-sourcing-explained-2025)
-- [Temporal durable execution](https://temporal.io/product)
-- [Trigger.dev v3 checkpoint-resume](https://trigger.dev/docs/how-it-works)
-- [TypeScript orchestration comparison (Temporal vs Trigger.dev vs Inngest)](https://medium.com/@matthieumordrel/the-ultimate-guide-to-typescript-orchestration-temporal-vs-trigger-dev-vs-inngest-and-beyond-29e1147c8f2d)
-- [Agentic AI governance (McKinsey)](https://www.mckinsey.com/capabilities/risk-and-resilience/our-insights/trust-in-the-age-of-agents)
-- [AI agent governance principles (2025)](https://www.arionresearch.com/blog/g9jiv24e3058xsivw6dig7h6py7wml)
-- [browser-use GitHub repository](https://github.com/browser-use/browser-use)
-- [browser-use website](https://browser-use.com/)
-- [Agentic browser landscape (2026)](https://www.nohackspod.com/blog/agentic-browser-landscape-2026)
-- [Best cloud browser APIs (2026)](https://scrapfly.io/blog/posts/best-cloud-browser-apis)
+- [Anthropic multi-agent research system engineering blog](https://www.anthropic.com/engineering/multi-agent-research-system) — orchestrator-worker pattern, delegation specs, effort budgeting
+- [Anthropic: When to use multi-agent systems](https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them) — context-centric decomposition, verification subagent pattern
+- [Google ADK loop agents documentation](https://google.github.io/adk-docs/agents/workflow-agents/loop-agents/) — loop-until termination, max_iterations, sub-agent signaling via exit_loop
+- [Haystack pipeline loops documentation](https://docs.haystack.deepset.ai/docs/pipeline-loops) — ConditionalRouter, max_runs_per_component, self-correction pattern with feedback injection
+- [AWS Prescriptive Guidance: Evaluator-reflect-refine loop patterns](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — standard self-correction loop structure
+- [Arize AI: Orchestrator-worker agent comparison](https://arize.com/blog/orchestrator-worker-agents-a-practical-comparison-of-common-agent-frameworks/) — framework comparison (LangGraph, CrewAI, OpenAI Agents SDK)
+- [DEV Community: "I Let an AI Agent Write 275 Tests"](https://dev.to/htekdev/i-let-an-ai-agent-write-275-tests-heres-what-it-was-actually-optimizing-for-32n7) — agents weaken tests rather than fix code (anti-feature validation)
+- [LangGraph conditional edges and loops](https://latenode.com/blog/langgraph-multi-agent-orchestration-complete-framework-guide-architecture-analysis-2025) — graph-based control flow, loop constructs
+- [Kore.ai: Choosing orchestration patterns](https://www.kore.ai/blog/choosing-the-right-orchestration-pattern-for-multi-agent-systems) — supervisor vs orchestrator-worker tradeoffs
+
+---
+
+*Feature research for: forgectl v2.1 Autonomous Factory*
+*Researched: 2026-03-12*

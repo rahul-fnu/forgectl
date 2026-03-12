@@ -1,259 +1,281 @@
 # Pitfalls Research
 
-**Domain:** Adding durable runtime features (SQLite, event sourcing, webhooks, governance, browser-use) to an existing TypeScript orchestrator
-**Researched:** 2026-03-09
-**Confidence:** HIGH (most pitfalls verified via official docs + multiple sources)
+**Domain:** Adding multi-agent delegation, conditional/loop pipeline nodes, and pipeline self-correction to an existing TypeScript orchestrator (forgectl v2.1)
+**Researched:** 2026-03-12
+**Confidence:** HIGH (code-verified against existing src/, supplemented by current ecosystem research)
+
+---
+
+## Context: What Already Exists
+
+forgectl v2.0 ships with:
+- `OrchestratorState` with in-memory `claimed`/`running`/`retryAttempts` maps, `SlotManager` for slot-based concurrency
+- `PipelineExecutor` with static DAG (`validateDAG`, `topologicalSort`), `maxParallel` cap, `inFlight` map, checkpoint hydration
+- `runValidationLoop` in `src/validation/runner.ts` — reruns ALL steps from top on any failure, single container only
+- `executionLocks` table in SQLite (unique per `lockType`+`lockKey`), `runs` and `pipelineRuns` tables
+- `GovernanceOpts` with `autonomy` levels, pre- and post-execution approval gates
+- `dispatchIssue` is fire-and-forget (`void executeWorkerAndHandle(...)`) — no return value, no child tracking
+
+All pitfalls below are grounded in this specific code.
+
+---
 
 ## Critical Pitfalls
 
-### Pitfall 1: SQLite Migration 12-Step Dance
+### Pitfall 1: Slot Budget Exhaustion — Children Eat Parent's Slots
 
 **What goes wrong:**
-SQLite's ALTER TABLE is severely limited compared to PostgreSQL. You cannot DROP COLUMN (in older versions), ADD CONSTRAINT, change column types, or rename constraints. Drizzle Kit generates migrations that assume richer ALTER TABLE support, producing SQL that fails silently or errors at runtime. Teams discover this mid-migration when a schema change that worked in development breaks in production because the migration attempts an unsupported operation.
+A lead agent dispatches 8 child workers for subtasks. Each child claims a slot from the same global `SlotManager`. The orchestrator's `maxConcurrent` is set to 5. The lead itself holds 1 slot. Three more unrelated issues are waiting. The 5 child dispatches saturate all slots. The lead is blocked waiting for children who are themselves waiting because slots are full, creating a deadlock where the system is "full" but doing nothing useful.
+
+The existing `dispatchIssue` is fire-and-forget — it calls `claimIssue(state, issue.id)` and immediately fires `void executeWorkerAndHandle(...)`. There is no concept of a parent slot that children should be charged against.
 
 **Why it happens:**
-Developers coming from PostgreSQL/MySQL expect standard ALTER TABLE operations. SQLite requires a 12-step workaround for most schema changes: create new table, copy data, drop old, rename new. Drizzle Kit's `push:sqlite` hides this in development but `generate` may produce migrations that don't handle the 12-step correctly, especially for constraint changes.
+Developers model the slot as "one worker = one slot" without accounting for the tree structure. The lead's maxChildren budget (e.g., 3) is defined but never translated into a slot reservation at the time the lead is dispatched. Children are dispatched like top-level issues — they contend for the same global pool.
 
 **How to avoid:**
-- Design the initial schema carefully in Phase 1 -- adding columns is cheap, changing them is expensive
-- Use `drizzle-kit generate` and manually inspect every generated migration SQL before committing
-- Write integration tests that run migrations against a populated test database, not just an empty one
-- Never use `drizzle-kit push` in production; always use versioned migration files
-- For constraint changes, write custom migration SQL using the 12-step pattern (BEGIN, CREATE new table, INSERT INTO new FROM old, DROP old, ALTER TABLE RENAME)
-- Set `PRAGMA foreign_keys = OFF` before migration, re-enable after
+- Introduce a two-tier slot system: "lead slots" (for issues directly from the tracker) and "child slots" (for delegated subtasks, reserved at lead dispatch time)
+- When a lead is dispatched with `maxChildren: N`, pre-reserve `N` slots from a child-slot pool before firing any workers
+- Children should only claim from the reserved child pool, not from the global `SlotManager`
+- Implement a `ChildSlotBudget` type on `WorkerInfo` that tracks `maxChildren`, `dispatched`, and `completed` counts
+- Enforce depth limit (max 2) at dispatch time in `dispatchIssue`: if the dispatching agent is itself a child, reject further delegation
 
 **Warning signs:**
-- Migration files with ALTER TABLE DROP COLUMN or ALTER TABLE ALTER COLUMN
-- Drizzle Kit generating empty or suspiciously short migration files for schema changes
-- Tests passing against empty databases but failing with populated data
+- `state.running.size` equals `slotManager.getMax()` but no progress (all slots held by leads waiting for unavailable child slots)
+- Logs showing "child dispatch attempted, no slots available" repeated indefinitely
+- `maxChildren` config property added to schema but `dispatchIssue` reads it without routing children to a separate pool
 
-**Phase to address:** Phase 1 (Persistent Storage Layer)
+**Phase to address:** Phase introducing multi-agent delegation (child dispatch wiring)
 
 ---
 
-### Pitfall 2: better-sqlite3 Synchronous API Confusion with Drizzle
+### Pitfall 2: OrchestratorState Is In-Memory — Child Relationships Vanish on Restart
 
 **What goes wrong:**
-better-sqlite3 is synchronous (blocking the event loop), but Drizzle ORM exposes both async and sync APIs. Developers write `await db.select(...)` thinking it's non-blocking, but the underlying better-sqlite3 call blocks the Node.js event loop. Under load -- especially during agent runs where the daemon must handle webhook deliveries, REST API requests, and database writes simultaneously -- the event loop starves. Webhook signature verification times out, API responses lag, and the system appears hung even though it's just blocked on a synchronous SQLite call.
+A lead agent dispatches 3 child workers. The daemon restarts (or crashes). `OrchestratorState` is rebuilt from scratch — `claimed`, `running`, `retryAttempts` are all empty Maps. The existing v2.0 crash recovery in `src/durability/recovery.ts` resumes individual runs from SQLite, but it has no concept of parent/child relationships. On restart, the lead and its children resume as independent, unrelated runs. The `maxChildren` budget is lost. A new lead picks up the same issue and dispatches 3 more children, doubling the work.
+
+The existing `runs` schema has no `parentRunId` or `childOf` column. `pipelineRuns` has no relation to orchestrator-level delegation.
 
 **Why it happens:**
-Drizzle's API returns Promises for better-sqlite3, but the Promise resolves synchronously on the same tick. This looks async but isn't. The forgectl daemon handles concurrent concerns (Fastify HTTP, webhook receiver, orchestrator polling, agent process management) on a single event loop.
+The v2.0 durability model was designed for single-worker runs (`executeWorker` → one run per issue). Multi-agent delegation introduces a tree of runs that must survive restarts as a unit, not as individual orphaned runs.
 
 **How to avoid:**
-- Enable WAL mode immediately: `PRAGMA journal_mode=WAL` -- this allows concurrent reads while writing
-- Set `PRAGMA busy_timeout=5000` to wait on lock contention instead of throwing immediately
-- Keep transactions short -- never hold a transaction open across async boundaries (agent calls, HTTP requests)
-- For write-heavy paths (event sourcing appends, cost event recording), batch inserts using `db.transaction()` with prepared statements
-- Profile event loop lag with `monitorEventLoopDelay()` from `perf_hooks` during integration tests
-- Consider `worker_threads` for heavy queries if event loop lag exceeds 50ms under load
+- Add `parentRunId` and `depth` columns to the `runs` table schema (Drizzle migration required)
+- Add `maxChildren` and `childrenDispatched` integer columns to `runs` for budget enforcement across restarts
+- The `DelegationRepository` should provide atomic `claimChildSlot(parentRunId): boolean` that checks and decrements in a single `UPDATE` with `WHERE children_dispatched < max_children`
+- Recovery code must query for "runs with a parentRunId that were in-flight" and restore the parent's `WorkerInfo` with the correct child count before resuming children
+- Test the restart scenario explicitly: dispatch lead + 2 children, SIGKILL daemon, restart, verify no duplicate dispatch
 
 **Warning signs:**
-- HTTP API response times increasing under concurrent agent runs
-- Webhook delivery failures due to slow response (GitHub expects response within 10 seconds)
-- Event loop lag spikes correlating with database write bursts
+- `runs` table missing `parentRunId` column after "delegation is implemented"
+- Recovery tests only covering single-run restart, not lead+children restart
+- Log showing parent issue re-dispatched while children are still running after restart
 
-**Phase to address:** Phase 1 (Persistent Storage Layer)
+**Phase to address:** Phase introducing multi-agent delegation (schema + recovery wiring)
 
 ---
 
-### Pitfall 3: Webhook Signature Verification Against Parsed Body
+### Pitfall 3: Shared Workspace Contamination Between Lead and Children
 
 **What goes wrong:**
-The webhook receiver verifies the HMAC-SHA256 signature against a re-serialized JSON body instead of the raw request body. `JSON.stringify(JSON.parse(body))` does not produce the same bytes as the original payload (e.g., `1.0` becomes `1`, whitespace changes, key ordering differs). Signature verification fails intermittently depending on payload content. The team adds a workaround to skip verification "temporarily" and forgets to fix it, leaving the webhook endpoint unauthenticated.
+A lead agent and its child workers all share the same workspace directory (the issue's `workspacePath` from `WorkspaceManager`). Child agent A writes to `src/feature-a.ts`. Child agent B reads the workspace to understand context — but picks up A's incomplete, mid-write files. Child B then generates code that depends on A's API before A has committed. The lead reads the final workspace and sees a broken intermediate state.
+
+The existing `WorkspaceManager.ensureWorkspace(issue.identifier)` returns the same path for all workers on the same issue. There is no per-child isolation.
 
 **Why it happens:**
-Fastify (forgectl's HTTP framework) parses JSON bodies by default before route handlers run. By the time the webhook handler sees the request, `request.body` is a parsed JavaScript object. Developers compute the HMAC against `JSON.stringify(request.body)` instead of the raw bytes. This works for simple payloads but fails when JSON serialization is not round-trip stable.
+The workspace model was designed for one agent per issue. The path is keyed by `issue.identifier`, so all children of the same issue naturally share the same directory. Git branches provide some isolation for output, but the working directory files are shared during execution.
 
 **How to avoid:**
-- Register a `preParsing` hook or use Fastify's `addContentTypeParser` to capture the raw body buffer before JSON parsing
-- Store the raw buffer on the request object (e.g., `request.rawBody = buf`) and verify the signature against that
-- Use `crypto.timingSafeEqual()` for the comparison, never `===` (prevents timing attacks)
-- Use SHA-256 exclusively (`X-Hub-Signature-256` header), not the deprecated SHA-1 (`X-Hub-Signature`)
-- Test with actual GitHub webhook payloads that contain floating point numbers, unicode, and nested objects
+- Each child worker must get its own isolated workspace subdirectory: `{issueWorkspace}/children/{childId}/`
+- Alternatively, use Git worktrees: the existing repo is the parent workspace, each child gets `git worktree add {path} -b {childBranch}` — this is the pattern that Cursor and other parallel agent tools use in 2025
+- The lead reads child outputs only through their completed checkpoints (which the pipeline executor already does for DAG nodes via `resolveNodeInput`) — never from the live working directory
+- Children should not write directly to the parent workspace; they write to their own isolated area, and the lead merges on completion
+- The existing fan-in logic in `PipelineExecutor.prepareFanInBranch` is the right model — adapt it for orchestrator-level delegation
 
 **Warning signs:**
-- Signature verification passes in unit tests with hand-crafted payloads but fails with real GitHub deliveries
-- Intermittent 401/403 responses on the webhook endpoint
-- Comments in code like "// TODO: fix signature verification"
+- `WorkspaceManager.ensureWorkspace` called with same `identifier` for both lead and children
+- No `children/{childId}` or `worktree/` directory structure in workspace paths
+- Child agents writing directly to `{issueWorkspace}/src/` instead of an isolated area
 
-**Phase to address:** Phase 6 (GitHub App)
+**Phase to address:** Phase introducing multi-agent delegation (workspace isolation)
 
 ---
 
-### Pitfall 4: Webhook Event Deduplication Omitted
+### Pitfall 4: Conditional Branch Evaluation Breaks Static DAG Assumptions
 
 **What goes wrong:**
-GitHub delivers webhooks with at-least-once semantics. Network issues, timeouts (your server took >10s to respond), or GitHub retries cause duplicate deliveries. Without deduplication, the same issue gets dispatched to two agents simultaneously, or an approval is processed twice, or a cost event is double-counted.
+The existing `PipelineExecutor` validates the entire DAG at construction time (`validateDAG`, `topologicalSort`, `collectAncestors`). These functions assume the node graph is fixed. When conditional nodes (`if/else`) are added, the actual execution path is only known at runtime — but the executor has already pre-computed topological order over all nodes, including branches that should be skipped.
+
+Concretely: the executor iterates `order` (a pre-computed topological sort of ALL nodes). A conditional `if`-branch node whose condition is false still appears in `order`. The executor checks `selection.executeNodes.has(nodeId)` to skip it, but this set is also pre-computed at construction time, not evaluated dynamically. Runtime condition evaluation can't change which nodes appear in `inFlight` scheduling.
 
 **Why it happens:**
-Developers test against GitHub's webhook delivery UI which sends each event once. The retry behavior only manifests under production conditions (slow responses, network blips). The `X-GitHub-Delivery` header (unique per delivery) is ignored because it's not part of the event payload.
+Kahn's algorithm and DFS topological sort naturally handle static DAGs. Conditional branching requires a fundamentally different execution model: the graph shape is not known until parent nodes complete and their outputs are evaluated. Developers try to bolt conditions onto the existing static executor without changing the core scheduling loop.
 
 **How to avoid:**
-- Store every `X-GitHub-Delivery` ID in SQLite before processing the event
-- Use `INSERT OR IGNORE` with the delivery ID as a unique key -- if the insert fails, skip processing
-- Return HTTP 200 immediately after persisting to a queue, before doing any processing (GitHub retries if your response takes >10s)
-- Set a TTL-based cleanup for delivery IDs (7 days is sufficient, GitHub retries within minutes)
-- Make all webhook handlers idempotent regardless -- deduplication is defense-in-depth, not the only protection
+- The execution loop in `PipelineExecutor.execute()` must move from pre-computed `order` to a ready-queue model: nodes become eligible only when all their dependencies complete AND any conditional guard evaluates true
+- Introduce a `ConditionEvaluator` that accepts node output and returns `{ branch: 'then' | 'else' | 'skip' }` before downstream nodes are scheduled
+- The `NodeExecution.status` already has `"skipped"` — extend the `skipReason` to distinguish "skipped by condition" from "skipped by rerun selection"
+- Checkpoint hydration must skip nodes that were conditionally skipped (not just those that were ancestors of `fromNode`)
+- The `validateDAG` static check must still verify structural validity (no cycles, all deps exist) but should not validate condition reachability — conditions are runtime, not static
 
 **Warning signs:**
-- Duplicate bot comments on the same issue
-- Two agents working on the same issue simultaneously
-- Cost events showing double charges for single runs
+- `topologicalSort` called once at the start of `execute()` and never revisited as conditions evaluate
+- Condition evaluation happens inside `executeNode` after the node has already been scheduled in `inFlight`
+- Tests only cover the "condition is always true" case, not "condition evaluates false at runtime"
 
-**Phase to address:** Phase 6 (GitHub App)
+**Phase to address:** Phase introducing conditional pipeline nodes
 
 ---
 
-### Pitfall 5: Event Sourcing Over-Engineering -- Full CQRS From Day One
+### Pitfall 5: Loop Nodes Create Implied Cycles — DAG Invariant Is Violated
 
 **What goes wrong:**
-The team implements full event sourcing with separate read/write models, projections for every query, event versioning, and saga orchestration from the start. The flight recorder becomes the most complex subsystem in the codebase, taking weeks instead of days. Simple queries like "show me the last 10 runs" require maintaining a separate projection instead of a direct table query. Schema changes require event migration strategies. Development velocity collapses.
+The `validateDAG` function explicitly detects cycles as errors. A `loop-until-condition` node conceptually creates a back-edge (re-run the same node or subgraph until a condition is met). Developers implement this by adding a loop node that lists its own upstream nodes in `depends_on` to re-trigger them — immediately failing the cycle detector. Alternative: the developer adds a synthetic "retry" edge from downstream back to upstream, also a cycle.
+
+Even if the loop is modeled as a counter (run node N up to K times), the current executor has no mechanism to re-schedule a node that has already moved to `"completed"` or `"failed"` status.
 
 **Why it happens:**
-Event sourcing literature emphasizes CQRS, projections, and aggregate patterns. Teams treat these as requirements rather than tools to apply selectively. The flight recorder's purpose (audit trail) gets conflated with the system's state management (orchestrator state machine).
+DAGs by definition are acyclic. Loops require cycles. The tension is architectural: you cannot add true cycles to a DAG executor without breaking its core invariant. Teams either break the DAG invariant (causing infinite loops or crashes in cycle detection), or they try to "unroll" the loop at definition time (losing the ability to decide iteration count at runtime).
 
 **How to avoid:**
-- The flight recorder is an append-only audit log, NOT the system's source of truth for runtime state
-- Keep the orchestrator state machine as the source of truth for current state (runs table, agent status)
-- The event ledger records what happened (append-only `events` table) for audit, replay, and debugging
-- Do NOT derive current state from event replay -- query the `runs` table directly
-- Use typed events with discriminated unions, but keep the event schema simple: `{ type, runId, timestamp, data }`
-- Only add projections when a specific query pattern demands it, not speculatively
-- Events are immutable and append-only, but current state tables are mutable and directly queryable
+- Model loops as a special node type (`LoopNode`) that the executor handles as a meta-node, not as multiple graph nodes. The loop node owns its own internal mini-executor that runs its body subgraph K times (or until condition), then reports a single `"completed"` status to the outer DAG
+- The outer DAG sees: `body-start → loop-node → downstream`, where `loop-node` is opaque to the DAG's topological sort
+- Maximum iteration count (`maxIterations`) must be a hard limit, not a soft suggestion — the executor enforces it before the condition evaluator is even called
+- Each iteration must create a new checkpoint with its iteration index, so crash recovery can resume from the last completed iteration, not from iteration 1
+- Validate that loop body subgraphs have no back-edges to nodes outside the loop — enforce loop scope
 
 **Warning signs:**
-- Every read query goes through event replay or a projection
-- Adding a simple status field requires creating an event type, updating a projection, and adding a reducer
-- The events table has more code than the feature it records
-- Team debates aggregate boundaries before shipping any feature
+- `validateDAG` is disabled or modified to "allow cycles in loop nodes" instead of modeling loops differently
+- Loop iteration count is unbounded or only bounded by a timeout (not a hard iteration cap)
+- Loop body completion uses the existing node `"completed"` status, causing the next-ready-node logic to never re-schedule it
 
-**Phase to address:** Phase 3 (Flight Recorder / Run Ledger)
+**Phase to address:** Phase introducing conditional/loop pipeline nodes
 
 ---
 
-### Pitfall 6: Context Serialization Failure on Pause/Resume
+### Pitfall 6: Self-Correction Loop Has No Convergence Guarantee — "Loop of Death"
 
 **What goes wrong:**
-When an agent enters `waiting_for_input` state, the system serializes the execution context to SQLite for later resume. The context contains objects that don't survive JSON serialization: Docker container references (with socket connections), file handles, Promises, closures, class instances with private fields, circular references, or Buffer objects. On resume, `JSON.parse()` produces a plain object missing methods and prototypes. The resumed agent crashes or behaves incorrectly.
+The self-correction pattern is: run tests → if fail, invoke fix agent → rerun tests → repeat. The existing `runValidationLoop` already implements this for single-container runs (lines 47-100 in `src/validation/runner.ts`). The problem is extending this to pipeline-level self-correction, where the fix agent is a separate pipeline node with its own container lifecycle.
+
+Without a convergence guard, the system enters what practitioners call the "loop of death": the fix agent produces a change, the test node re-runs, the same test fails (or a different test breaks due to the fix), the fix agent runs again, ad infinitum. Each iteration spawns a full container, invokes an LLM, and writes to the workspace — burning cost and time with no progress.
+
+The existing validation loop uses `maxRetries = Math.max(...steps.map(s => s.retries))` — this is per-step, not cumulative. A self-correction pipeline loop with no analogous hard cap will iterate indefinitely.
 
 **Why it happens:**
-TypeScript classes and runtime objects contain far more than their data -- they have prototypes, closures, private symbols, and opaque handles. `JSON.stringify` silently drops functions, undefined values, Symbols, and circular references. Developers test serialization with simple objects and miss the edge cases that appear with real orchestrator state.
+Self-correction is appealing because it mirrors human debugging. Teams model it as "retry until success" without specifying what "success" looks like in finite terms, or what "failure to converge" looks like. The fix agent is trusted to make progress — but LLMs can regress, reintroduce the same bugs, or loop through a cycle of fixes that cancel each other out.
 
 **How to avoid:**
-- Define a strict `SerializableContext` type that only contains JSON-safe primitives, arrays, and plain objects
-- Separate "resumable state" (serializable: task description, conversation history, checkpoint data, workspace path, agent config) from "runtime handles" (not serializable: container reference, process handle, database connection)
-- On resume, reconstruct runtime handles from serializable identifiers (container ID string, workspace path, etc.)
-- Write a `serialize()` / `deserialize()` pair with explicit round-trip tests
-- Test round-trip serialization in CI: `assert.deepEqual(deserialize(serialize(context)), context)`
-- Never store the Docker container object -- store the container ID and re-attach via dockerode on resume
+- Enforce a `maxIterations` hard cap on every self-correction loop — no exceptions. The existing `runValidationLoop` pattern of `while (attempt <= maxRetries)` is correct; replicate it at pipeline level
+- Track the "best score" across iterations (e.g., number of passing tests), not just the most recent result. If the latest iteration is worse than a previous one, surface the best result rather than the most recent
+- Implement a "no-progress" detector: if two consecutive fix attempts produce identical test output (same failing tests, same error messages), abort the loop — the agent is stuck
+- Assign a cumulative token/cost budget to the self-correction loop, not just the individual iterations. If the loop's total spend exceeds the budget, abort and report the last-best result
+- Write the "loop aborted: max iterations reached" event to the flight recorder with full iteration history so the human can understand what was tried
 
 **Warning signs:**
-- `JSON.stringify()` calls on objects without round-trip tests
-- Serialized state missing fields that were present before serialization
-- Resume failures that only happen after the daemon restarts (not just pause/unpause within same process)
+- Self-correction loop node has no `maxIterations` configuration field in its schema
+- Pipeline runs table shows the same pipeline run ID with growing `nodeStates` but no `completedAt` for hours
+- No "best result tracking" — the self-correction loop only stores the final result, not intermediate scores
+- Token cost growing linearly per-iteration with no budget enforcement on the loop as a whole
 
-**Phase to address:** Phase 4 (Durable Execution)
+**Phase to address:** Phase introducing pipeline self-correction
 
 ---
 
-### Pitfall 7: Container Lifecycle Mismatch with Suspended Runs
+### Pitfall 7: Fix Agent Overwrites Test Agent's Output — Shared Git Branch Contamination
 
 **What goes wrong:**
-A run pauses for human clarification (`waiting_for_input`). The container is left running, consuming resources. After 24 hours with no response, there are now 15 idle containers consuming RAM and Docker resources. Alternatively: the container is stopped on pause, but on resume the workspace state is lost because the container was removed by Docker's cleanup or forgectl's own `container/cleanup.ts`.
+The self-correction pattern uses multiple pipeline nodes: a `test-runner` node and a `fix-agent` node. Both are git-mode (`output.mode: "git"`) nodes, each creating their own branch. The fix agent reads the workspace from the test node's branch. After fixing, it commits to its own branch. The `PipelineExecutor.mergeOutputBranchIntoHostRepo` then merges the fix branch back. On the next iteration of the loop, the test node starts fresh from the host repo's main branch — not from the cumulative state of all previous fix iterations.
+
+Worse: if both the fix node and the test node operate on the same workspace bind-mount (the default orchestrator worker path), the fix agent's intermediate uncommitted changes are visible to the test runner before the fix is committed.
 
 **Why it happens:**
-The v1 model assumes runs are short-lived: start container, run agent, collect output, destroy container. Durable execution breaks this assumption. There's no clear policy for container lifecycle during suspension, and the existing cleanup logic treats idle containers as candidates for removal.
+The existing pipeline executor's fan-in model was designed for non-looping DAGs. Each node's output is merged once, linearly. A loop introduces a recursive merge requirement: fix-iteration-2 must see the workspace state after fix-iteration-1's merge, not the initial state. The existing `mergeOutputBranchIntoHostRepo` is called once per node completion — not per loop iteration.
 
 **How to avoid:**
-- On pause: stop the container (not remove) and commit the container state if needed, OR rely on workspace bind-mounts (which persist on the host)
-- On resume: start a new container with the same workspace bind-mount -- the workspace directory is the durable state, not the container
-- Set a maximum suspension duration per workflow (configurable in WORKFLOW.md) after which the run is marked stalled
-- Add container resource limits to the pause policy: if total suspended containers exceed N, oldest are reclaimed first
-- The existing `container/cleanup.ts` must be updated to exclude containers associated with `waiting_for_input` runs
-- Never store ephemeral container state (installed packages, runtime state) that isn't captured in the workspace or checkpoint
+- Each self-correction loop iteration must explicitly build on the previous iteration's committed output — the "carry forward" must be explicit, not assumed
+- Use Git worktrees or isolated per-iteration workspaces so test-runner and fix-agent operate on snapshotted state, not live working directories
+- After each fix iteration, the fix agent's branch must be merged (not just accessible) before the next test-runner iteration begins
+- The loop node's internal executor should maintain its own `currentBase` branch that advances after each successful fix commit, so the test runner always sees the cumulative state
 
 **Warning signs:**
-- Docker `ps` showing many stopped or idle containers
-- Resume failures with "container not found" errors
-- Disk space growing from unreclaimed container layers
+- Loop iteration N+1's test runner is launched without waiting for loop iteration N's fix agent to commit and merge
+- Git log on the repo shows fix branches from multiple iterations but only the final one merged to main
+- Test failures in iteration 3 that were fixed in iteration 1 reappear (indicating the workspace reverted)
 
-**Phase to address:** Phase 4 (Durable Execution)
+**Phase to address:** Phase introducing pipeline self-correction
 
 ---
 
-### Pitfall 8: Approval Gate Deadlocks and Zombie Pending States
+### Pitfall 8: SQLite Write Contention When Many Children Write Simultaneously
 
 **What goes wrong:**
-An approval is required but no human is available. The run sits in `pending_approval` indefinitely. Other runs that depend on the same workspace or issue are blocked. The approval queue grows silently. Alternatively: a race condition where two concurrent processes both check "is approval pending?" and both proceed, bypassing the gate.
+A lead spawns 5 child workers. Each child runs concurrently (`void executeWorkerAndHandle(...)`). Each child writes to SQLite at the end: `runs` table update, `run_events` appends, `run_snapshots` insert, `execution_locks` release. With WAL mode, concurrent reads are fine, but concurrent writes are serialized by SQLite's writer lock. If all 5 children complete within a narrow window and each holds a `BEGIN IMMEDIATE` transaction for their batch of writes, they queue behind each other. Any writer held for >5 seconds hits the `busy_timeout` and throws "database is locked".
+
+The existing `better-sqlite3` setup has `busy_timeout` configured (from v2.0), but child workers completing simultaneously create burst write patterns that didn't exist with single-worker runs.
 
 **Why it happens:**
-Human-in-the-loop systems must handle the reality that humans are slow, unavailable, or forget. The state machine has clean transitions on paper (`pending -> approved -> executing`) but doesn't account for timeouts, escalation, or the approval never arriving. Budget checks without atomic compare-and-swap allow two runs to each check "budget remaining: $5" and both proceed with $4 costs, exceeding the budget.
+Single-worker orchestration never produced simultaneous writers — runs are dispatched one-by-one against `SlotManager`, and each run's database writes happen at completion, spaced by execution time. Multi-agent delegation creates synchronized completion windows: all 5 children launched by a lead for the same subtask batch may complete within seconds of each other.
 
 **How to avoid:**
-- Every `pending_approval` state MUST have a configurable timeout (default: 24h) with an explicit timeout transition (-> `timed_out` or -> `auto_rejected`)
-- Use `BEGIN IMMEDIATE` transactions in SQLite for budget checks: read balance, check threshold, deduct, commit -- all in one atomic transaction
-- The approval state machine must handle: approve, reject, timeout, cancel, and escalate transitions
-- Implement escalation: if no response in X hours, notify a secondary approver or auto-reject
-- Use the dehydration pattern: serialize the run state, remove from memory, rehydrate when approval arrives via webhook/polling
-- Never block an event loop waiting for approval -- approvals are events that trigger state transitions
+- Keep SQLite write transactions as short as possible — batch all end-of-run writes into a single synchronous `db.transaction()` call rather than multiple separate inserts
+- Add jitter to child completion reporting: introduce a random 0-500ms delay before the final SQLite writes in `executeWorkerAndHandle` to desynchronize burst completions
+- Monitor `SQLITE_BUSY` errors per-run in the flight recorder — if they appear, the busy_timeout is too low or transactions are too long
+- The `execution_locks` table already uses `unique` constraint for `lockType + lockKey` — ensure lock release is in a short transaction, not holding other locks simultaneously
 
 **Warning signs:**
-- Runs stuck in `pending_approval` for days with no timeout
-- Budget overruns despite budget enforcement being "enabled"
-- The approval queue has entries but no mechanism to discover or act on them except the CLI
+- "database is locked" errors appearing only when child count exceeds 3
+- `execution_locks` lock release happening inside the same transaction as event appends and snapshot saves
+- No jitter in child completion timing — all children spawned at the same time will complete at approximately the same time
 
-**Phase to address:** Phase 5 (Governance, Approvals & Budget Enforcement)
+**Phase to address:** Phase introducing multi-agent delegation (child dispatch wiring)
 
 ---
 
-### Pitfall 9: Budget Race Conditions Under Concurrent Dispatch
+### Pitfall 9: Governance Gate Applied Inconsistently to Children
 
 **What goes wrong:**
-Two runs start simultaneously. Both check the agent's remaining budget ($10 remaining). Both estimate $6 cost. Both pass the pre-flight budget check. Both run. Total spend: $12, exceeding the $10 budget by 20%. With 5 concurrent slots, the overrun could be 5x.
+The existing `GovernanceOpts` with `autonomy` levels (`full`/`semi`/`interactive`/`supervised`) applies a pre-approval gate and post-approval gate in `dispatchIssue` and `executeWorker`. When delegation is added, each child worker goes through `dispatchIssue` with the same governance opts as the lead. Under `supervised` autonomy, each child generates an approval request. A lead with 5 children and `supervised` autonomy generates 5 separate approval requests — one per child — before any work is done. The human receives 5 approval comment threads for what appears to be one task.
+
+Alternatively: governance is wired to the lead only, and children inherit `full` autonomy regardless of the lead's setting, allowing children to bypass oversight gates that the lead was subject to.
 
 **Why it happens:**
-The v1 orchestrator uses in-memory state and fire-and-forget dispatch. Budget checks that read the balance and deduct in separate operations are not atomic. Even with SQLite, a `SELECT balance` followed by a separate `UPDATE balance` in different transactions allows the race.
+`GovernanceOpts` was designed for top-level issue dispatch. Child workers are dispatched via the same `dispatchIssue` pathway, inheriting the same governance opts. The design didn't account for whether governance should apply per-child or once per-delegation-tree.
 
 **How to avoid:**
-- Use SQLite `BEGIN IMMEDIATE` for budget operations (prevents concurrent writers)
-- Atomic budget reservation: `UPDATE budgets SET remaining = remaining - ? WHERE agent_id = ? AND remaining >= ?` -- if zero rows affected, budget insufficient
-- Pre-flight budget reservation (not just check): deduct estimated cost before starting, refund the difference on completion
-- Track both `reserved` and `spent` amounts: `remaining = total - reserved - spent`
-- On run failure or cancellation, release the reservation
-- Add a budget margin/buffer (e.g., 10%) to prevent exact-boundary races
+- Define a clear governance inheritance policy: the lead's pre-approval gate fires once for the entire delegation tree. Children inherit `autonomy: "full"` by default (they're executing on behalf of an already-approved lead)
+- The post-approval gate (output review) fires once on the lead's aggregate output, not on each child's output separately
+- Optionally: allow per-child governance override via a `childAutonomy` field in the delegation plan, but default to no per-child gates
+- Implement the inheritance by passing a `parentApprovalId` on the `GovernanceOpts` for children, which the approval state machine uses to skip pre-approval when a parent approval already exists
 
 **Warning signs:**
-- Budget overruns that only happen when multiple runs execute concurrently
-- Budget checks that use `SELECT` followed by separate `UPDATE`
-- No concept of "reserved" vs "spent" in the cost tracking schema
+- 5 separate approval comment threads created for one delegated task
+- Children dispatched with governance opts directly copied from the lead without a "child mode" flag
+- Post-approval gate fires on each child's output separately, requiring N human approvals for N children
 
-**Phase to address:** Phase 5 (Governance, Approvals & Budget Enforcement)
+**Phase to address:** Phase introducing multi-agent delegation (governance integration)
 
 ---
 
-### Pitfall 10: Browser-Use Python Subprocess Zombies and Resource Leaks
+### Pitfall 10: Conditional Node Schema Added but Executor Ignores Unknown Node Types
 
 **What goes wrong:**
-The TypeScript daemon spawns a Python subprocess for browser-use. The subprocess launches Chromium via Playwright. If the TypeScript process crashes, the Python process and Chromium browser are orphaned -- still running, consuming RAM, and holding ports. If the Python process crashes, Chromium is orphaned. Three layers of process management (Node -> Python -> Chromium) means three layers of cleanup that can each fail independently.
+A `condition` field is added to `PipelineNode` in `src/pipeline/types.ts`. The YAML parser accepts it. But `PipelineExecutor.executeNode` calls `resolveRunPlan` and `executeRun` — neither of which knows about conditions. The conditional node executes as a normal agent node, ignoring the condition field entirely. No error is thrown. Users write pipelines with `if/else` branches expecting conditional behavior, but all branches always execute. The bug is invisible unless tests explicitly verify that the false-branch is skipped.
 
 **Why it happens:**
-`child_process.spawn()` creates a subprocess but Node.js doesn't automatically kill children on exit. Python's browser-use internally manages Playwright browser instances that also spawn their own processes. Each layer has its own lifecycle management that doesn't know about the others.
+TypeScript's type system won't catch this at runtime. The `PipelineNode` interface has `condition?: string` — the field exists in the type but `executeNode` doesn't check it because the node execution path (`resolveRunPlan → executeRun`) was written before conditionals existed and only knows about agent tasks.
 
 **How to avoid:**
-- Run browser-use inside a Docker container (forgectl already has container infrastructure), not as a bare subprocess on the host
-- If subprocess is necessary: use `spawn()` with `{ detached: false }` and register cleanup handlers on `process.on('exit')`, `SIGTERM`, `SIGINT`, and `uncaughtException`
-- Implement a health check: the Python process exposes an HTTP endpoint, and the TypeScript side polls it; if unresponsive for 30s, kill and restart
-- Use a thin HTTP/JSON API between TypeScript and Python (FastAPI or Flask), not stdio pipes -- stdio is fragile for structured data and hard to debug
-- Set resource limits on the subprocess (memory, CPU time) via Docker or `ulimit`
-- Track all spawned PIDs and kill the entire process group (`process.kill(-pid)`) on cleanup
-- Browser-use requires Python >=3.11 and Chromium -- validate these exist before spawning, not after
+- Add a node `type` discriminant to `PipelineNode`: `type: "task" | "condition" | "loop"` — this makes the type system enforce handling of each variant
+- The executor's node dispatch must switch on `node.type` before calling `resolveRunPlan`. A `"condition"` node evaluates its expression without spawning an agent
+- Write a test that asserts: given a pipeline with `condition: "false"`, the false-branch node status is `"skipped"`, not `"completed"`
+- The YAML parser must validate that `type: "condition"` nodes have a `condition` field and no `task` field (Zod schema validation)
 
 **Warning signs:**
-- Orphaned Python or Chromium processes visible in `ps aux` after daemon restart
-- Memory usage growing over time without corresponding active runs
-- "Address already in use" errors when restarting the browser-use service
+- `PipelineNode` has optional `condition` field but no `type` discriminant
+- `executeNode` has no `switch` or `if` on node type — treats all nodes as agent tasks
+- All pipeline tests have `condition: "true"` or omit the condition field entirely
 
-**Phase to address:** Phase 6+ (Browser-Use Integration, if included)
+**Phase to address:** Phase introducing conditional pipeline nodes
 
 ---
 
@@ -263,30 +285,34 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Skip migration tests, use `push:sqlite` in prod | Faster iteration | Silent data loss on schema changes, impossible rollbacks | Never in production |
-| Store raw JSON blobs instead of normalized tables | Faster initial schema design | Can't query, index, or validate blob contents; schema drift | Only for truly unstructured metadata |
-| Single events table without partitioning | Simple schema | Table grows unbounded, queries slow down after 100K+ events | OK for first 6 months, plan partitioning by Phase 3 |
-| Process webhook events synchronously in handler | Simpler code | Blocks webhook response, GitHub retries, duplicate events | Never -- always queue first, respond 200, process async |
-| Skip deduplication, rely on idempotent handlers | Less infrastructure | Idempotency is hard to guarantee across all handlers; subtle bugs | Only if every handler is provably idempotent |
-| Use stdio pipes for Python subprocess communication | No HTTP server needed | Fragile framing, hard to debug, blocks on buffer fills, no concurrent requests | Only for single-request-response patterns |
-| Auto-approve everything during development | Faster testing | Governance code never tested; production enables governance and it's broken | OK in dev, must have governance integration tests |
+| Re-use `dispatchIssue` for child workers with same GovernanceOpts | No new dispatch logic | Per-child approval gates, slot exhaustion, no budget inheritance | Never — children need a distinct dispatch path |
+| Model loop-until as repeated manual pipeline runs | No executor changes needed | No crash recovery for mid-loop state, no iteration history, manual re-trigger required | Only for prototyping, never production |
+| Track parent/child relationships in memory only (OrchestratorState) | No schema change | Relationship lost on restart, children re-dispatched, budget overrun | Never — must be persisted to SQLite |
+| Skip workspace isolation, let all children share the lead's workspace | No WorkspaceManager changes | File contamination, non-deterministic agent behavior, race conditions on shared files | Never for parallel children |
+| Implement self-correction as "try again forever" with only timeout as stop condition | Simpler initial implementation | Silent cost overrun, loop of death, no progress detection | Never — always add maxIterations hard cap |
+| Skip conditional node type discriminant, use optional `condition` field | Backward compatible schema | Executor silently ignores conditions, tests pass incorrectly | Never — type discriminant required from the start |
+| Evaluate loop condition inside the fix agent's prompt instead of code | No ConditionEvaluator needed | Agent can hallucinate convergence, condition not machine-verifiable | Never for correctness-critical loops |
+
+---
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external services.
+Common mistakes when connecting the new features to existing v2.0 subsystems.
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| GitHub Webhooks | Parsing body before signature verification | Capture raw body in `preParsing` hook, verify against raw bytes |
-| GitHub Webhooks | Using `===` for signature comparison | Use `crypto.timingSafeEqual()` to prevent timing attacks |
-| GitHub Webhooks | Processing in the HTTP handler | Return 200 immediately, enqueue event, process asynchronously |
-| GitHub App Auth | Using personal access tokens instead of app installation tokens | Generate short-lived installation tokens via JWT + app ID |
-| GitHub App Auth | Caching installation tokens without checking expiry | Tokens expire after 1 hour; cache with TTL, refresh proactively |
-| Drizzle + SQLite | Using async patterns expecting non-blocking I/O | better-sqlite3 is synchronous; Drizzle's async wrapper still blocks the event loop |
-| Drizzle Migrations | Trusting auto-generated migration SQL without inspection | Manually review every migration, especially for constraint changes |
-| SQLite Transactions | Holding transactions open across async operations | Keep transactions synchronous and short; do all I/O outside the transaction |
-| browser-use (Python) | Spawning without cleanup handlers | Register process group kill on all exit signals; use Docker when possible |
-| browser-use (Python) | Sending complex data via stdio | Use HTTP API (FastAPI) for structured communication |
+| Delegation + SlotManager | Children contend for global slots, deadlocking the lead | Two-tier slot pool: global for leads, reserved child pool per lead |
+| Delegation + executionLocks | Lead holds lock on issue workspace while children need it | Children get their own lock keys (`issue/{id}/child/{childId}`) |
+| Delegation + RunRepository | No `parentRunId` column, runs are unrelated after restart | Schema migration: add `parentRunId`, `depth`, `maxChildren`, `childrenDispatched` |
+| Delegation + GovernanceOpts | Children inherit supervised autonomy, generate N approval requests | Children default to `full` autonomy; gate fires once at lead dispatch |
+| Conditional nodes + topologicalSort | Pre-computed order schedules all nodes including false branches | Move to ready-queue model; schedule nodes when dependencies complete AND condition true |
+| Loop nodes + validateDAG | Back-edges cause cycle detection failure | Model loops as opaque meta-nodes; outer DAG sees single loop node |
+| Self-correction + PipelineCheckpoint | No per-iteration checkpoints, restart resumes from iteration 1 | Save checkpoint with `iterationIndex` after each fix commit |
+| Self-correction + mergeOutputBranch | Fix iterations don't carry forward — each iteration starts from initial state | Maintain `currentBase` branch that advances after each fix commit |
+| Child workspaces + WorkspaceManager | `ensureWorkspace(issue.identifier)` returns same path for all children | Add `ensureChildWorkspace(issueId, childId)` returning isolated subdirectory |
+| SQLite + concurrent child completions | Burst writes cause `SQLITE_BUSY` even with WAL mode | Jitter child completion writes; batch all end-of-run writes in single transaction |
+
+---
 
 ## Performance Traps
 
@@ -294,12 +320,13 @@ Patterns that work at small scale but fail as usage grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Unbounded events table | Queries slow, disk grows, WAL file bloats | Partition by month or archive old events; add indexes on (run_id, timestamp) | >100K events (~2-3 months of heavy use) |
-| Full event replay to rebuild state | Run inspection takes seconds instead of milliseconds | Use snapshots at step boundaries; query current state from runs table, not events | >500 events per run |
-| Checkpoint starvation in WAL mode | WAL file grows without bound, disk fills up | Periodically run `PRAGMA wal_checkpoint(RESTART)` when WAL exceeds threshold | Sustained concurrent reads during heavy writes |
-| Synchronous SQLite blocking event loop | API latency spikes, webhook timeouts, UI freezes | Batch writes, keep transactions <10ms, monitor event loop delay | >10 concurrent operations |
-| Loading full conversation history into agent context | Token costs explode, agent performance degrades | Summarize older conversation turns, only send last N exchanges in full | >10 clarification rounds per issue |
-| Polling + webhooks without deduplication | Same event processed twice, duplicate work | Store delivery IDs, make handlers idempotent | First week of webhook deployment |
+| Topological sort over full DAG including conditional branches | All branches evaluated even when most are skipped; CPU spike at pipeline start | Ready-queue model evaluates only ready nodes | >20 nodes with heavy branching |
+| Lead waits synchronously for all children to complete before proceeding | Lead's slot is held idle while children run; reduces effective concurrency | Lead's slot should be released after delegation, reclaimed when children report back | Leads with >3 children and long-running children |
+| No-progress detection absent in self-correction loop | Same fix attempted 20 times at $0.50/iteration = $10 wasted per stuck issue | Compare test output hash between iterations; abort if identical | First time a fix agent gets stuck on the same error |
+| Checkpoint saved after every loop iteration including failed ones | SQLite grows rapidly with partial iteration state | Checkpoint only after successful fix commits, not after failed iterations | >10 iterations per loop, >5 concurrent pipelines |
+| Fan-in merge on shared host repo within self-correction loop | Git lock contention between loop iterations running on same repo | Per-iteration worktrees; merge only at loop completion | >2 concurrent self-correction pipelines on same repo |
+
+---
 
 ## Security Mistakes
 
@@ -307,12 +334,13 @@ Domain-specific security issues beyond general web security.
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Skipping webhook signature verification | Attacker can trigger arbitrary agent runs by posting fake events | Verify HMAC-SHA256 on every request; reject unsigned requests with 401 |
-| Storing GitHub App private key in config file | Key leak exposes all installations | Use keytar (already in stack) or environment variable; never commit to repo |
-| Budget bypass via direct API calls | User circumvents governance by calling daemon API directly | All execution paths (webhook, CLI, API, polling) must go through the same budget check |
-| Overly broad GitHub App permissions | Compromised app can modify any repo content | Request minimum permissions; use `contents: write` only on repos that need it |
-| Python subprocess running as root | browser-use + Chromium with root access is a sandbox escape vector | Run browser-use subprocess as unprivileged user; use Docker with `--user` flag |
-| Approval bypass via race condition | Two concurrent requests both read "pending", both approve | Use SQLite `BEGIN IMMEDIATE` for all approval state transitions |
+| Child agents inherit parent's BYOK credentials without scope reduction | Compromised child (via prompt injection in its task) has full API access | Children receive scoped credentials; lead specifies which tools/APIs each child may use |
+| No maxChildren budget enforcement — lead can spawn unlimited agents | Runaway delegation tree exhausts Docker resources, API rate limits, and token budget | Enforce `maxChildren` at `dispatchIssue` time with atomic SQLite decrement |
+| Depth limit enforced only in lead prompt, not in code | Agent ignores the instruction and spawns depth-3 children anyway | Enforce depth check in `dispatchIssue` code path: `if (parentDepth >= 2) throw` |
+| Self-correction loop exposed to prompt injection via test output | Failing test output is fed back to the fix agent; attacker crafts output that redirects the agent | Sanitize test output before injecting into fix agent prompt; enforce container isolation |
+| Conditional evaluation using `eval()` or agent-generated code strings | Arbitrary code execution in the orchestrator process | Conditions must be a restricted expression language (JSON Path, simple comparisons) or enum predicates only |
+
+---
 
 ## UX Pitfalls
 
@@ -320,28 +348,31 @@ Common user experience mistakes in this domain.
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Noisy bot comments on every state change | Users mute the bot, miss important messages | Comment only on: run start, clarification needed, run complete/failed, approval needed |
-| Unstructured bot comment formatting | Users can't quickly scan results | Use consistent markdown template: summary, files changed, validation results, cost, next steps |
-| No acknowledgment after slash command | User unsure if command was received | Always react with eyes emoji immediately, then follow up with status comment |
-| Approval request without context | Human doesn't know what they're approving | Include: what will be done, estimated cost, files that will be modified, why approval is needed |
-| Timeout without notification | Run silently stalls, user doesn't know | Comment when approaching timeout: "Still waiting for your response. Will auto-reject in 4 hours." |
-| Cost summary only at end | Budget surprise after expensive run | Include running cost in progress updates; warn when approaching budget cap |
+| One GitHub comment per child worker | 8 children = 8 comments per issue; notification flood | Aggregate child results into a single summary comment on the parent issue |
+| Self-correction loop silent until complete | User has no idea how many iterations are running or their cost | Update progress comment after each iteration: "Fix attempt 2/5 — 3 tests still failing" |
+| Loop aborted with no explanation | User sees "pipeline failed" with no indication of what was tried | Write an iteration summary to the comment: "Aborted after 5 attempts. Best result: 7/10 tests passing. Final error: [...]" |
+| Conditional skip not surfaced in pipeline status | User expects a node to run; it was silently skipped by condition | Mark conditionally-skipped nodes explicitly in the pipeline run view with the condition that evaluated false |
+| Delegation tree invisible to user | Lead dispatches 5 children; user sees only the parent issue progress | Show child task list in parent issue comment: "Delegating to 3 subtasks: [list with status badges]" |
+
+---
 
 ## "Looks Done But Isn't" Checklist
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **SQLite storage:** Often missing WAL mode, busy_timeout, and foreign key enforcement (`PRAGMA foreign_keys = ON`) -- verify all three PRAGMAs are set on every connection
-- [ ] **Migrations:** Often missing rollback/down migrations -- verify every migration has both up and down, tested with data
-- [ ] **Webhook handler:** Often missing deduplication, raw body capture, and async processing -- verify all three
-- [ ] **Event ledger:** Often missing indexes on (run_id), (agent_id, timestamp), and (type) -- verify query plans for common access patterns
-- [ ] **Approval flow:** Often missing timeout transition and escalation path -- verify what happens when no one responds for 48 hours
-- [ ] **Budget enforcement:** Often missing reservation (only check, not deduct) -- verify concurrent budget checks with a race condition test
-- [ ] **Pause/resume:** Often missing round-trip serialization tests -- verify context survives `JSON.parse(JSON.stringify(context))` and daemon restart
-- [ ] **Container lifecycle:** Often missing cleanup exclusion for suspended runs -- verify `container/cleanup.ts` respects `waiting_for_input` state
-- [ ] **GitHub App auth:** Often missing token refresh -- verify installation token is refreshed before expiry, not after 401
-- [ ] **Slash commands:** Often missing permission checks -- verify non-collaborators cannot trigger runs or approve actions
-- [ ] **Browser-use integration:** Often missing process cleanup on crash -- verify no orphaned Python/Chromium processes after forced daemon kill
+- [ ] **Child slot management:** `dispatchIssue` for children uses a separate slot pool, not the global `SlotManager` — verify `state.running.size` never blocks due to children holding parent slots
+- [ ] **Parent/child persistence:** `runs` table has `parentRunId`, `depth`, `maxChildren`, `childrenDispatched` — verify restart + recovery still knows which runs are children of which lead
+- [ ] **Workspace isolation:** Children write to `{issueWorkspace}/children/{childId}/` or a Git worktree, never directly to `{issueWorkspace}/` — verify with a two-child test writing to the same file path
+- [ ] **Depth enforcement:** `dispatchIssue` has a code-level depth check — verify a depth-3 dispatch attempt throws without reaching the agent
+- [ ] **Conditional execution:** Pipeline executor moves to ready-queue model — verify a pipeline with `condition: false` shows that branch node as `skipped` in `nodeStates`
+- [ ] **Loop hard cap:** Every loop node has a required `maxIterations` field that the executor enforces before evaluating the condition — verify the loop halts at `maxIterations` even when the condition would continue
+- [ ] **Convergence detection:** Self-correction loop compares test output between iterations — verify loop aborts when two consecutive iterations produce identical test failure output
+- [ ] **Per-iteration checkpoints:** Loop nodes save a checkpoint with `iterationIndex` after each successful fix commit — verify crash recovery resumes from the last completed iteration, not from iteration 1
+- [ ] **Fix branch carry-forward:** Self-correction loop's test runner in iteration N+1 sees the committed state from iteration N's fix — verify with a test where fix agent's change is visible to the next test run
+- [ ] **Governance inheritance:** Child workers are dispatched with `autonomy: "full"` regardless of lead's governance setting — verify no per-child approval comments are created
+- [ ] **Aggregate comment:** All child results are aggregated into a single parent issue comment — verify no N separate result comments for N children
+
+---
 
 ## Recovery Strategies
 
@@ -349,16 +380,16 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Broken migration applied to production | HIGH | Restore from backup; write compensating migration; test migration sequence from scratch on copy of production data |
-| Event loop blocked by SQLite | LOW | Add `PRAGMA journal_mode=WAL` and `busy_timeout`; no data loss, just latency during the block |
-| Webhook signature verification broken | MEDIUM | Audit webhook delivery log in GitHub App settings for failed deliveries; replay missed events manually; fix verification code |
-| Duplicate events processed | MEDIUM | Deduplicate affected records; add delivery ID tracking; replay affected time window with deduplication enabled |
-| Over-engineered event sourcing | HIGH | Refactor to simpler append-only log; keep events table but add direct query tables for current state; significant code rewrite |
-| Context serialization failure on resume | MEDIUM | Mark affected runs as failed; add round-trip serialization tests; re-dispatch from issue (don't try to recover corrupted state) |
-| Container zombies from suspended runs | LOW | Run cleanup script to remove orphaned containers; add cleanup policy; no data loss if workspaces use bind-mounts |
-| Approval deadlock (stuck pending) | LOW | Add timeout sweep job; mark stale approvals as timed_out; notify users of the timeout |
-| Budget overrun from race condition | MEDIUM | Reconcile actual spend vs budget; pause agent until budget reset; add atomic reservation pattern |
-| Orphaned Python/Chromium processes | LOW | Kill process groups; add PID tracking and cleanup-on-startup routine; no data loss |
+| Slot deadlock (children blocking leads) | MEDIUM | Kill stalled child workers; add two-tier slot pool; re-dispatch leads |
+| Parent/child relationships lost on restart | HIGH | Query SQLite for orphaned runs with matching workspace paths; manually re-associate; add `parentRunId` migration |
+| Workspace contamination between children | MEDIUM | Identify conflicting files from git log; revert to last clean commit; re-run with isolated workspaces |
+| Loop of death (no convergence cap) | LOW | Kill the pipeline run; set `maxIterations` in config; re-dispatch |
+| Conditional branch always executing | MEDIUM | Audit pipeline run `nodeStates` for unexpected `completed` statuses; add type discriminant; re-run with fixed executor |
+| SQLite BUSY under concurrent child writes | LOW | Increase `busy_timeout`; add jitter to child completion writes; re-run (writes are idempotent) |
+| Governance gate fires N times for N children | LOW | Approve once and close the other N-1 approval comments; fix governance inheritance; re-dispatch |
+| Fix branch not carried forward, iterations repeat same fix | MEDIUM | Manually merge fix branches in order; add `currentBase` tracking to loop node; re-run from last good iteration |
+
+---
 
 ## Pitfall-to-Phase Mapping
 
@@ -366,34 +397,34 @@ How roadmap phases should address these pitfalls.
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| SQLite migration 12-step dance | Phase 1 | Integration test: run all migrations against populated test database; verify constraint changes work |
-| better-sqlite3 sync blocking | Phase 1 | Load test: 10 concurrent API requests + database writes; measure event loop lag stays <50ms |
-| Event sourcing over-engineering | Phase 3 | Architecture review: current state is queryable without event replay; events are for audit only |
-| Context serialization failure | Phase 4 | Unit test: round-trip serialize/deserialize for every context type; test survives daemon restart |
-| Container lifecycle on suspend | Phase 4 | Integration test: pause run, kill daemon, restart daemon, resume run; workspace state preserved |
-| Approval deadlocks | Phase 5 | State machine test: every state has a timeout transition; no terminal `pending` states |
-| Budget race conditions | Phase 5 | Concurrency test: 5 simultaneous runs against budget that can only afford 3; verify exactly 3 run |
-| Webhook signature verification | Phase 6 | Integration test: verify with real GitHub webhook payload; verify raw body preservation through Fastify |
-| Webhook deduplication | Phase 6 | Test: send same delivery ID twice; verify only one run is dispatched |
-| Slash command permissions | Phase 6 | Test: simulate non-collaborator issuing commands; verify rejection |
-| Browser-use process cleanup | Phase 6+ | Test: force-kill daemon; verify no orphaned Python/Chromium processes after 30 seconds |
+| Slot budget exhaustion (children eat parent slots) | Multi-agent delegation: slot design | Test: lead with maxChildren=5 and global slots=5 does not deadlock |
+| Parent/child relationships lost on restart | Multi-agent delegation: schema + recovery | Test: SIGKILL daemon after child dispatch, restart, verify no duplicate dispatch |
+| Workspace contamination between children | Multi-agent delegation: workspace isolation | Test: two children write to same relative path; verify no cross-contamination |
+| Governance gate applied N times to N children | Multi-agent delegation: governance wiring | Test: supervised lead with 3 children generates exactly 1 approval request |
+| Conditional branches break static DAG assumptions | Conditional pipeline nodes: executor refactor | Test: condition=false pipeline shows branch as skipped, not completed |
+| Loop nodes violate DAG acyclicity invariant | Conditional/loop nodes: loop node model | Test: loop node does not trigger validateDAG cycle error; runs exactly maxIterations times |
+| Self-correction loop of death | Self-correction: convergence guard | Test: fix agent that never fixes causes loop to abort at maxIterations |
+| Fix branch not carried forward between iterations | Self-correction: carry-forward model | Test: fix in iteration 1 is visible to test runner in iteration 2 |
+| Concurrent child SQLite write contention | Multi-agent delegation: SQLite wiring | Load test: 5 children complete simultaneously; no SQLITE_BUSY errors |
+| Conditional node field ignored by executor | Conditional nodes: type discriminant | Test: pipeline with conditional node, condition=false, false-branch status is "skipped" |
+
+---
 
 ## Sources
 
-- [better-sqlite3 performance docs](https://github.com/WiseLibs/better-sqlite3/blob/master/docs/performance.md) -- checkpoint starvation, WAL mode, busy timeout (HIGH confidence)
-- [SQLite ALTER TABLE official docs](https://www.sqlite.org/lang_altertable.html) -- 12-step migration pattern, limitations (HIGH confidence)
-- [GitHub webhook validation docs](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) -- HMAC-SHA256, raw body requirement (HIGH confidence)
-- [GitHub webhook troubleshooting](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks) -- common verification mistakes (HIGH confidence)
-- [GitHub community discussion on webhook retries](https://github.com/orgs/community/discussions/151676) -- at-least-once delivery, X-GitHub-Delivery deduplication (HIGH confidence)
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite) -- sync/async API, transaction handling (HIGH confidence)
-- [Event Sourcing pitfalls - Baytechconsulting](https://www.baytechconsulting.com/blog/event-sourcing-explained-2025) -- over-engineering traps, when not to use (MEDIUM confidence)
-- [3 Killer Event Sourcing Mistakes](https://junkangworld.com/blog/3-killer-event-sourcing-mistakes-you-must-avoid-in-2025) -- generic events, aggregate bloat, public vs internal events (MEDIUM confidence)
-- [Temporal durable execution docs](https://temporal.io/blog/building-reliable-distributed-systems-in-node-js-part-2) -- determinism, serialization, replay (HIGH confidence)
-- [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html) -- checkpoint/replay, serialization patterns (HIGH confidence)
-- [Cloudflare human-in-the-loop patterns](https://developers.cloudflare.com/agents/guides/human-in-the-loop/) -- dehydration pattern, timeout handling (MEDIUM confidence)
-- [browser-use on PyPI](https://pypi.org/project/browser-use/) -- Python >=3.11, Chromium dependency, API shape (HIGH confidence)
-- [SQLite event sourcing patterns](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- snapshotting, table growth management (MEDIUM confidence)
+- `/home/claude/forgectl-dev/src/pipeline/executor.ts` — Static topological sort, inFlight scheduling, fan-in merge, checkpoint hydration (code analysis, HIGH confidence)
+- `/home/claude/forgectl-dev/src/orchestrator/dispatcher.ts` — `dispatchIssue` fire-and-forget pattern, no child tracking, GovernanceOpts inheritance (code analysis, HIGH confidence)
+- `/home/claude/forgectl-dev/src/orchestrator/state.ts` — In-memory OrchestratorState, SlotManager slot pool (code analysis, HIGH confidence)
+- `/home/claude/forgectl-dev/src/validation/runner.ts` — Existing validation loop with `maxRetries`, restart-all-steps behavior (code analysis, HIGH confidence)
+- `/home/claude/forgectl-dev/src/storage/schema.ts` — `runs` table schema missing `parentRunId`/`depth` columns (code analysis, HIGH confidence)
+- [Multi-agent coordination strategies — Galileo AI](https://galileo.ai/blog/multi-agent-coordination-strategies) — parent-child topology, slot exhaustion patterns (MEDIUM confidence)
+- [The "Loop of Death" — Sattyam Jain, Jan 2026](https://medium.com/@sattyamjain96/the-loop-of-death-why-90-of-autonomous-agents-fail-in-production-and-how-we-solved-it-at-e98451becf5f) — step budgets, convergence failure, retry abuse (MEDIUM confidence)
+- [Self-Correcting Multi-Agent AI Systems — Soham Ghosh, Feb 2026](https://medium.com/@sohamghosh_23912/self-correcting-multi-agent-ai-systems-building-pipelines-that-fix-themselves-010786bae2db) — best-score tracking, iteration history (MEDIUM confidence)
+- [Git Worktrees for Parallel Agents — DEV Community](https://dev.to/arifszn/git-worktrees-the-power-behind-cursors-parallel-agents-19j1) — workspace isolation pattern, per-agent branches (MEDIUM confidence)
+- [I Tried Agent Self-Correction — Nexumo, Feb 2026](https://medium.com/@Nexumo_/i-tried-agent-self-correction-tool-errors-made-it-worse-d6ea76a17c1c) — self-correction backfire, tool error amplification (MEDIUM confidence)
+- [Multi-Agent System Reliability — Maxim AI](https://www.getmaxim.ai/articles/multi-agent-system-reliability-failure-patterns-root-causes-and-production-validation-strategies/) — coordination failures, retry ambiguity, duplicate actions (MEDIUM confidence)
+- [SQLite concurrent writes — Ten Thousand Meters](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) — SQLITE_BUSY under concurrent writers, BEGIN IMMEDIATE pattern (HIGH confidence)
 
 ---
-*Pitfalls research for: forgectl v2.0 Durable Runtime*
-*Researched: 2026-03-09*
+*Pitfalls research for: forgectl v2.1 Autonomous Factory (multi-agent delegation, conditional/loop pipelines, self-correction)*
+*Researched: 2026-03-12*

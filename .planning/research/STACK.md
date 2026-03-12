@@ -1,218 +1,211 @@
-# Technology Stack: v2.0 Additions
+# Technology Stack: v2.1 Additions
 
-**Project:** forgectl v2.0 Durable Runtime
-**Researched:** 2026-03-09
-**Scope:** NEW dependencies only. Existing stack (TypeScript, Node 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, etc.) is validated and excluded.
+**Project:** forgectl v2.1 Autonomous Factory
+**Researched:** 2026-03-12
+**Scope:** NEW dependencies only for three features: (1) multi-agent delegation, (2) conditional/loop pipeline nodes, (3) pipeline self-correction. Existing stack (TypeScript, Node 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, Octokit, chalk, picomatch, keytar) is validated and excluded.
+**Confidence:** HIGH for expression evaluator recommendation; HIGH for no-new-deps conclusions on delegation/self-correction.
+
+---
 
 ## Recommended Stack Additions
 
-### Database Layer
+### One New Dependency: Expression Evaluator
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `better-sqlite3` | ^12.6.2 | SQLite driver | Fastest synchronous SQLite driver for Node.js. Native bindings, zero-config embedded database. Synchronous API is an advantage for forgectl's single-process daemon -- no connection pool needed, no async overhead for simple queries. WAL mode gives concurrent read/write without blocking. |
-| `drizzle-orm` | ^0.45.1 | ORM / query builder | TypeScript-first, SQL-like syntax, zero runtime overhead. Schema defined in TypeScript (co-located with Zod validation already in the project). Supports prepared statements for performance. Thin abstraction -- you can drop to raw SQL when needed. |
-| `drizzle-kit` | ^0.31.9 | Schema migrations (dev dep) | Generates and runs SQL migrations from schema diffs. `drizzle-kit generate` creates migration files, `drizzle-kit migrate` applies them. Keeps schema changes version-controlled and reviewable. |
-| `@types/better-sqlite3` | ^7.6.13 | Type definitions (dev dep) | TypeScript types for better-sqlite3 API. |
+| `filtrex` | ^3.1.0 | Evaluate boolean condition expressions in YAML-defined pipeline nodes | Needed for `if/else` branch conditions and `loop-until` termination conditions in pipeline YAML. The conditions reference node output variables (exit codes, file counts, coverage percentages) — values that are not known until runtime. A safe, sandboxed DSL is required because these expressions come from user-authored YAML files and may run in a long-lived daemon. |
 
-**Confidence:** HIGH -- drizzle-orm + better-sqlite3 is the standard TypeScript/SQLite combination. Verified via npm and official docs.
+**Why filtrex and not the alternatives:**
 
-**Key configuration:**
-- Enable WAL mode on database open: `db.pragma('journal_mode = WAL')` -- required for concurrent read/write during daemon operation.
-- Use `BEGIN IMMEDIATE` transactions for execution locks (prevents SQLITE_BUSY on write contention).
-- Store database at `~/.forgectl/forgectl.db` (alongside existing `daemon.pid`).
-- Drizzle config file (`drizzle.config.ts`) points to schema directory and migrations output.
+`filtrex` 3.1.0 (published October 2024) is the correct choice for forgectl's conditional node DSL because:
 
-### GitHub App
+1. **Truly sandboxed.** Expressions cannot access the process environment, Node.js APIs, or the global object. The library explicitly guarantees no sandbox breakout, unlike `node:vm`-based approaches (`safe-eval`, `safer-eval`) where breakouts have been demonstrated.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `@octokit/app` | ^16.1.2 | GitHub App toolkit | Handles JWT authentication, installation tokens, webhook verification, and event routing. Lower-level than Probot, which is the right choice because forgectl already has Fastify and its own daemon architecture. Probot brings its own Express server -- unnecessary overhead and architectural conflict. |
-| `@octokit/webhooks` | ^14.2.0 | Webhook event handling | Type-safe webhook event definitions and payload parsing. `webhooks.on("issues.labeled", handler)` pattern. Included transitively by `@octokit/app` but useful to reference directly for types. |
-| `@octokit/rest` | ^22.0.1 | GitHub REST API client | Typed methods for all GitHub API endpoints. `octokit.rest.issues.createComment()`, `octokit.rest.checks.create()`, etc. Used via installation-scoped Octokit instances from `@octokit/app`. |
-| `@octokit/types` | ^16.0.0 | Shared TypeScript types (dev dep) | Webhook payload types, API response types. Useful for typing handler functions. |
+2. **Never throws on execution.** `filtrex` will not throw during expression execution — it returns an error value instead. This is exactly the right behavior for a daemon where a user-authored condition expression must not crash the orchestrator process.
 
-**Confidence:** HIGH -- Octokit is GitHub's official SDK. Versions verified via npm.
+3. **Boolean-first design.** forgectl's conditions are boolean predicates: `exit_code == 0`, `coverage >= 80`, `failed_tests == 0`. `filtrex` treats boolean logic as first-class (supports `and`, `or`, `not`, `==`, `!=`, `<`, `<=`, `>`, `>=`). `expr-eval` is math-first and requires more gymnastics for pure boolean use.
 
-**Why NOT Probot:**
-Probot (v14.2.4) is a framework that bundles its own Express server, logging, and app lifecycle. forgectl already has all of this via Fastify + structured logger + daemon lifecycle. Using Probot would mean either (a) running two HTTP servers, (b) fighting Probot's Express internals to integrate with Fastify via `@fastify/middie`, or (c) replacing Fastify with Express. None of these are acceptable.
+4. **Zero dependencies.** No transitive risk. `jexl` depends on `@babel/runtime` and was last published in 2020. `expr-eval` was last published in a similar timeframe and has no maintained types.
 
-Instead, use `@octokit/app` directly, which is what Probot uses internally. This gives you:
-- `app.webhooks.on()` for event routing (same DX as Probot)
-- `app.getInstallationOctokit()` for per-installation API calls
-- `app.webhooks.verify()` for HMAC-SHA256 signature verification
-- Full control over HTTP layer (Fastify routes, not Express middleware)
+5. **ESM support.** Ships `dist/esm/filtrex.mjs` with TypeScript declarations at `dist/esm/filtrex.d.ts`. Compatible with the project's `"type": "module"` configuration.
 
-**Fastify integration pattern:**
+6. **Custom function injection.** The `filtrex` evaluator accepts a `functions` map at evaluation time, allowing forgectl to inject helpers like `contains(output, "PASS")` or `matches(branch, "feat/*")` that operate on node output strings — without any regex or VM risk.
+
+**What NOT to use for expressions:**
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| `node:vm` with raw user expressions | Not a security boundary. Sandbox breakouts are documented. The daemon is long-lived — a crash or breakout is unacceptable. | `filtrex` |
+| `eval()` | Obviously not. | `filtrex` |
+| `jexl` ^2.3.0 | Last published 2020. Depends on `@babel/runtime`. Async-first design adds unnecessary complexity for synchronous pipeline conditions. | `filtrex` |
+| `expr-eval` ^2.0.2 | Math-only DSL, no native boolean expressions, last published 2021+, no maintained TypeScript types. | `filtrex` |
+| `jsonata` ^2.1.0 | JSON transformation language — correct tool for JSON querying, wrong tool for boolean predicate conditions. Overkill, different mental model. | `filtrex` |
+
+---
+
+## No New Dependencies: Multi-Agent Delegation
+
+Multi-agent delegation (lead agent decomposes issue → spawns worker agents → waits for results → synthesizes) requires zero new npm dependencies. Everything needed already exists:
+
+**What already exists that covers delegation:**
+- `executeWorker()` in `src/orchestrator/worker.ts` — the atomic unit of agent execution. A delegation service calls this for each child task.
+- `SlotManager` — controls concurrency. Child workers compete for the same slot pool, preventing runaway spawning.
+- `DrizzleORM` + `better-sqlite3` — storage for parent/child run relationships (schema addition, not a new library).
+- `Zod` — validation for delegation config (max children budget, depth limit) parsed from WORKFLOW.md front matter.
+- Existing governance/approval system — child runs inherit autonomy level from parent run context.
+
+**Schema additions needed (no new library):**
+
+The `runs` table in `src/storage/schema.ts` needs two new columns:
+- `parentRunId text` — foreign key to `runs.id` (self-referential). `null` for top-level runs.
+- `delegationDepth integer` — 0 for top-level, 1 for children, capped at 2 by application logic.
+
+Drizzle ORM supports self-referential foreign keys via `foreignKey` from `drizzle-orm/sqlite-core`. A new `delegations` table tracks per-issue child budgets:
+- `issueId text`, `parentRunId text`, `childCount integer`, `maxChildren integer`.
+
+The `DelegationService` class lives in `src/orchestrator/delegation.ts` and orchestrates the lead/worker pattern entirely using existing primitives.
+
+**Pattern rationale (supervisor/hierarchical):**
+The lead agent gets the issue, produces a decomposition (a list of subtasks as text). The `DelegationService` parses this output, creates child `TrackerIssue`-like objects, calls `executeWorker()` for each (up to `maxChildren` budget, `depth <= 2`), waits for all child results, and synthesizes a final result comment. This is the standard hierarchical/supervisor pattern for multi-agent AI systems and maps cleanly onto the existing worker/dispatcher/slot-manager architecture.
+
+---
+
+## No New Dependencies: Conditional and Loop Pipeline Nodes
+
+Conditional pipeline nodes (`type: "condition"` with `if/else` branches, `type: "loop"` with `until` condition) integrate into the existing `PipelineExecutor` in `src/pipeline/executor.ts`. The only new dependency is `filtrex` (documented above) for evaluating the condition expressions.
+
+**What already exists:**
+- `PipelineNode` type in `src/pipeline/types.ts` — extend with `type?: "task" | "condition" | "loop"`, `condition?: string`, `if_branch?: string[]`, `else_branch?: string[]`, `until?: string`, `max_iterations?: number`.
+- `topologicalSort` / `validateDAG` in `src/pipeline/dag.ts` — condition and loop nodes participate in the DAG. Loop nodes self-reference (they re-queue themselves on the executor's run list when the condition is not yet met), but the static DAG is acyclic (the loop is a runtime construct, not a graph edge).
+- `NodeExecution` status enum — add `"loop-iterating"` status to express that a loop node is mid-iteration.
+- `CheckpointRef` — loop iteration checkpoints save iteration count alongside normal checkpoint data.
+
+**Expression evaluation context for `filtrex`:**
+
+The context object passed to each condition evaluation contains the upstream node's execution result:
 ```typescript
-// Register webhook route in existing Fastify daemon
-fastify.post('/webhooks/github', {
-  config: { rawBody: true } // needed for HMAC verification
-}, async (request, reply) => {
-  await app.webhooks.verifyAndReceive({
-    id: request.headers['x-github-delivery'],
-    name: request.headers['x-github-event'],
-    signature: request.headers['x-hub-signature-256'],
-    payload: request.rawBody,
-  });
-  reply.send({ ok: true });
-});
+{
+  exit_code: number,      // last validation step exit code
+  output: string,         // agent stdout (trimmed)
+  passed: boolean,        // validation passed/failed
+  iteration: number,      // current loop iteration count
+  files_changed: number,  // git output files changed
+  coverage: number,       // parsed from stdout if available
+}
+```
+Custom functions injected: `contains(str, substr)`, `startsWith(str, prefix)`, `matches(str, pattern)` using `picomatch` (already in project).
+
+**Loop termination safety:** Every loop node requires `max_iterations` (required field, no default). The executor enforces this cap regardless of the `until` condition result. On cap hit, the node transitions to `failed` with a clear error message.
+
+---
+
+## No New Dependencies: Pipeline Self-Correction
+
+Self-correction (test fail → fix agent → retest) is implemented as a specialised pipeline node type and/or a pre-built pipeline pattern using conditional/loop nodes. No new npm dependency is needed.
+
+**What already exists:**
+- `runValidationLoop()` in `src/validation/runner.ts` — already implements "run test, feed failures back to agent, retry". This is self-correction within a single node.
+- The new `type: "loop"` node (above) implements self-correction at the pipeline level: a loop node runs an agent task, a condition checks the result, and the loop body is re-entered if self-correction is needed.
+- `executeWorker()` accepts `validationConfig` with `on_failure: "abandon" | "output-wip" | "pause"` — self-correction loops use `on_failure: "output-wip"` (don't abandon on first failure, let the loop node decide).
+
+**Self-correction pipeline pattern (no new code beyond conditional/loop nodes):**
+
+```yaml
+nodes:
+  - id: implement
+    type: task
+    task: "Implement the feature"
+
+  - id: self-correct
+    type: loop
+    depends_on: [implement]
+    task: "Fix the failing tests. Previous test output: {{output}}"
+    until: "passed == true"
+    max_iterations: 3
+    condition_source: implement   # read condition from this node's last result
 ```
 
-No middleware adapter needed. Direct Fastify route handler calling Octokit's verify/receive directly.
+The `DelegationService` and the loop executor share the same `executeWorker()` invocation path, so governance gates, flight recorder events, and SQLite checkpoints all apply without additional wiring.
 
-### Supporting Libraries
+---
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| `@fastify/raw-body` | ^3.1.0 | Raw body access in Fastify | Required for GitHub webhook HMAC-SHA256 verification. Fastify parses JSON by default -- you need the raw bytes to verify the signature. |
+## Installation
 
-**Confidence:** MEDIUM -- need to verify exact package name and version. Fastify 5 may have built-in `rawBody` support via route config. Check Fastify 5 docs before adding this dependency.
+```bash
+# One new production dependency
+npm install filtrex
 
-### Event Sourcing / Flight Recorder
+# No new dev dependencies
+```
 
-**No new dependencies needed.** The event sourcing pattern for the flight recorder is implemented with:
-- `drizzle-orm` + `better-sqlite3` (already added above) for the append-only event store
-- `zod` (already in project) for event payload validation
-- Standard SQLite features: auto-increment IDs for ordering, timestamps, JSON columns for event payloads
+**Total new production dependencies for v2.1: 1**
+**Total new dev dependencies for v2.1: 0**
 
-**Architecture notes:**
-- Events table: `id`, `run_id`, `event_type`, `payload` (JSON), `created_at`, `sequence_number`
-- Append-only: never UPDATE or DELETE event rows. Use a DB trigger or application-level enforcement.
-- State snapshots: periodic materialized state stored in a separate `state_snapshots` table for fast reconstruction without replaying full history.
-- SQLite JSON functions (`json_extract`, `json_each`) handle querying into event payloads when needed.
-
-### Governance / Approval State Machine
-
-**No new dependencies needed.** The approval state machine and budget enforcement use:
-- `zod` (existing) for approval/budget config validation
-- `drizzle-orm` + `better-sqlite3` (added above) for approval records, budget tracking
-- Existing orchestrator state machine patterns from v1.0 extend naturally
-
-**Architecture notes:**
-- Approvals table: `id`, `type`, `status` (pending/approved/rejected), `requested_by`, `decided_by`, `reason`, `created_at`, `decided_at`
-- Budget tracking: `cost_events` table with running aggregation queries
-- State transitions enforced in application code (TypeScript discriminated unions + Zod), not DB triggers
-- `BEGIN IMMEDIATE` transactions for atomic budget checks (check-then-deduct pattern)
-
-### Durable Execution
-
-**No new dependencies needed.** Session persistence and crash recovery use:
-- `drizzle-orm` + `better-sqlite3` (added above) for session state, checkpoints
-- Existing workspace manager and agent session interfaces from v1.0
-
-**Architecture notes:**
-- `sessions` table: `id`, `agent_id`, `issue_id`, `status`, `checkpoint_data` (JSON), `last_heartbeat`, `created_at`
-- On daemon restart: query `sessions WHERE status IN ('running', 'paused')`, reconcile against actual container state
-- Checkpoint data serialized as JSON blob -- contains enough context to rebuild agent prompt with prior work
-- Execution locks via SQLite `BEGIN IMMEDIATE` + unique constraint on `(issue_id, status='running')`
-
-### Browser-Use Integration (Deferred Assessment)
-
-| Technology | Version | Purpose | Notes |
-|------------|---------|---------|-------|
-| `browser-use` (Python) | 0.12.1 | Browser automation agent | Python package, NOT a Node.js dependency. Would run as a separate Docker container with a thin HTTP API wrapper. |
-
-**Confidence:** LOW -- browser-use does NOT have a built-in REST API server (there is an open feature request, GitHub issue #166). Integration requires building a custom Python FastAPI/Flask wrapper around the browser-use Agent class and running it as a sidecar service.
-
-**Recommendation:** Defer browser-use integration to v2.1+. The integration effort is non-trivial (custom Python service, Docker orchestration, API contract design) and is not listed in the v2.0 roadmap phases. If needed earlier, the simplest approach is a Docker container running a FastAPI app that exposes `/run` endpoint wrapping `browser_use.Agent`.
+---
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| SQLite driver | `better-sqlite3` | `libsql` / `@libsql/client` | libsql is Turso's fork -- adds features forgectl doesn't need (embedded replicas, HTTP protocol). better-sqlite3 is simpler, faster for local-only use, and the standard choice for embedded SQLite in Node.js. |
-| ORM | `drizzle-orm` | `prisma` | Prisma generates a query engine binary, adds significant bundle size, and has its own migration system that conflicts with the lightweight approach. Drizzle is SQL-like (less magic), TypeScript-native, and 10x smaller. |
-| ORM | `drizzle-orm` | `kysely` | Kysely is query-builder only (no migrations, no schema introspection). Drizzle provides the full package: schema definition, migrations, query builder, and prepared statements. |
-| ORM | `drizzle-orm` | Raw SQL via `better-sqlite3` | Possible but loses type safety on queries, requires manual migration management, and increases maintenance burden as schema grows to 10+ tables. |
-| GitHub App framework | `@octokit/app` | `probot` | Probot bundles Express, its own logging, and app lifecycle. forgectl already has Fastify + structured logger + daemon. Using Probot creates architectural conflicts. `@octokit/app` provides the same webhook/auth primitives without the framework baggage. |
-| GitHub App framework | `@octokit/app` | Raw `@octokit/rest` + manual JWT | Too much boilerplate. `@octokit/app` handles JWT generation, installation token refresh, and webhook verification -- all things you'd have to reimplement. |
-| Event store | SQLite (Drizzle) | EventStoreDB | Overkill for single-machine. EventStoreDB is a separate server process, adds operational complexity, and forgectl's event volume (thousands, not millions) is well within SQLite's capabilities. |
-| Event store | SQLite (Drizzle) | Kafka / NATS | Distributed streaming is out of scope. forgectl is single-process. SQLite append-only table is the event log. |
-| State machine | Application code | `xstate` | xstate adds complexity for state machines that are simple enough to express as TypeScript discriminated unions + transition functions (pattern already used in v1.0 orchestrator). The governance state machine has ~4 states and ~6 transitions -- xstate is overkill. |
-| Durable execution | Custom (SQLite checkpoints) | `temporal` SDK | Temporal requires a separate server cluster. forgectl needs durable execution semantics, not the full Temporal infrastructure. Borrow the patterns (checkpointing, idempotent steps, replay), implement with SQLite. |
-| Durable execution | Custom (SQLite checkpoints) | `trigger.dev` | Trigger.dev is a hosted service / self-hosted server. Same problem as Temporal -- adds infrastructure forgectl doesn't need. |
+| Expression evaluator | `filtrex` ^3.1.0 | `jexl` ^2.3.0 | Last published 2020. Async-first (unnecessary). Depends on `@babel/runtime`. Stale. |
+| Expression evaluator | `filtrex` ^3.1.0 | `expr-eval` ^2.0.2 | Math DSL, no native booleans, no maintained types, last published 2021+. |
+| Expression evaluator | `filtrex` ^3.1.0 | `node:vm` + raw JS | Not a security boundary. Breakouts documented. Daemon cannot afford crashes from user-authored YAML. |
+| Expression evaluator | `filtrex` ^3.1.0 | Custom recursive descent parser | Correct approach if we need full control, but `filtrex` 3.1.0 covers the entire required operator set. Build vs. buy: `filtrex` has zero deps, ships types, and costs 0 maintenance burden. |
+| Delegation storage | SQLite schema extension | New `delegations` table only | Prefer adding `parentRunId`/`delegationDepth` to `runs` table (co-located, simpler joins) plus a lightweight `delegation_budgets` table for the per-issue child count. |
+| Self-correction | Loop pipeline node | Dedicated `SelfCorrectionRunner` class | The loop node pattern is more general, reusable, and composable. A dedicated class would duplicate the loop executor's core logic. |
+| Multi-agent framework | Custom delegation service | `agent-squad` / OpenAI Agents SDK | These frameworks assume you control the LLM API call. forgectl's agents are external CLI processes (`claude -p`, `codex exec`). Frameworks that expect function-calling APIs don't compose with forgectl's agent adapter model. |
+
+---
 
 ## What NOT to Add
 
 | Dependency | Why Skip |
 |------------|----------|
-| `probot` | Bundles Express server. Architectural conflict with existing Fastify daemon. Use `@octokit/app` instead. |
-| `xstate` | Overkill for the state machines in this project. Existing pattern (discriminated unions + transition functions) works. |
-| `prisma` | Heavy ORM with binary engine. Drizzle is lighter, faster, more SQL-like. |
-| `temporal` / `@temporalio/worker` | Requires separate server infrastructure. Borrow patterns, don't import the framework. |
-| `eventemitter3` or `mitt` | Node.js built-in `EventEmitter` is sufficient. Already used in v1.0. |
-| `bull` / `bullmq` | Requires Redis. forgectl's RunQueue is in-memory with SQLite persistence -- no need for a separate job queue. |
-| `pg` / `postgres` | Out of scope. Single-machine deployment uses SQLite. Postgres migration is a v3+ concern if ever. |
-| `express` | Already using Fastify. Don't introduce a second HTTP framework via Probot or otherwise. |
-| `smee-client` | Probot's webhook proxy for development. Use `ngrok` or Cloudflare Tunnel instead if needed for local webhook testing -- don't add a dependency for it. |
-| `jsonwebtoken` | `@octokit/app` handles JWT internally. Don't add a separate JWT library. |
-| `cron` / `node-cron` | Existing setTimeout chain pattern from v1.0 scheduler works. Don't add a cron library. |
-| `uuid` | Node.js 20+ has `crypto.randomUUID()` built-in. |
-| `date-fns` / `dayjs` | Not needed. Use `Date` and ISO strings. Budget periods use simple epoch math. |
-| `browser-use` (npm) | Doesn't exist as an npm package. The Python package requires a custom sidecar service -- defer. |
+| `xstate` | Delegation state machine has 5 states (pending/dispatching/waiting/synthesizing/done). TypeScript discriminated union handles this cleanly. xstate is overkill. |
+| `p-limit` | Delegation concurrency is controlled by the existing `SlotManager`. Don't add a second concurrency primitive. |
+| `zod-to-json-schema` | Not needed for any v2.1 feature. Agent tool schemas are hand-authored. |
+| `vm2` | Abandoned in 2023 after critical security vulnerabilities. Do not use. |
+| `safer-eval` | Uses `node:vm` internally, which is not a true security boundary. `filtrex` is safer. |
+| Any workflow engine (Temporal, Conductor, Airflow) | All require separate server infrastructure. forgectl's loop/condition nodes are implemented in-process using SQLite state. The scope is depth-2 delegation with simple boolean conditions — not enterprise workflow orchestration. |
+| Any LLM SDK (LangChain, LlamaIndex, Vercel AI SDK) | forgectl's agents are subprocess-invoked CLI tools, not API clients. LLM SDKs assume you own the model call. This project does not. |
 
-## Installation
+---
 
-```bash
-# Core new dependencies
-npm install drizzle-orm better-sqlite3 @octokit/app @octokit/webhooks @octokit/rest
+## Version Compatibility
 
-# Dev dependencies
-npm install -D drizzle-kit @types/better-sqlite3 @octokit/types
-```
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| `filtrex` ^3.1.0 | Node.js 20+, ESM | Ships `.mjs` entry, TypeScript declarations. No known conflicts with existing stack. Zero deps. |
 
-**Total new production dependencies:** 5
-**Total new dev dependencies:** 3
+---
 
-This is a minimal surface area for the scope of v2.0. Every dependency earns its place.
+## Integration Points
 
-## Integration Points with Existing Stack
+| Existing Subsystem | How v2.1 Touches It |
+|-------------------|---------------------|
+| `src/pipeline/types.ts` | Add `type`, `condition`, `if_branch`, `else_branch`, `until`, `max_iterations`, `condition_source` fields to `PipelineNode`. Add `"loop-iterating"` to `NodeExecution.status`. |
+| `src/pipeline/executor.ts` | Add `executeConditionNode()` and `executeLoopNode()` methods. Import `filtrex` for condition evaluation. |
+| `src/pipeline/dag.ts` | `validateDAG` must accept loop nodes without treating them as cycles. Condition nodes with `if_branch`/`else_branch` reference other node IDs — validate those references exist. |
+| `src/storage/schema.ts` | Add `parentRunId`, `delegationDepth` columns to `runs` table. Add `delegationBudgets` table. |
+| `src/orchestrator/worker.ts` | `executeWorker` is called by delegation service unchanged. No modification to the function signature — delegation is a caller-level concern. |
+| `src/orchestrator/dispatcher.ts` | Extend to handle delegated child runs: check depth, check budget, call `DelegationService`. |
+| `src/validation/runner.ts` | No changes. `runValidationLoop` is the within-node correction primitive. The loop pipeline node calls `executeWorker` (which calls `runValidationLoop`) on each iteration. |
+| `src/governance/autonomy.ts` | Child runs inherit autonomy from parent context. `GovernanceOpts` passed through to child `executeWorker` calls. |
 
-| Existing | New | Integration |
-|----------|-----|-------------|
-| Fastify daemon (`src/daemon/`) | `@octokit/app` webhooks | New route group `/webhooks/github` in Fastify. Octokit's verify/receive called from Fastify handler. No middleware adapter needed. |
-| Fastify daemon (`src/daemon/`) | `better-sqlite3` | Database opened on daemon start, closed on shutdown. Connection passed to repository layer. |
-| Zod (`src/config/`) | `drizzle-orm` schema | Zod validates runtime config/input. Drizzle defines DB schema. They complement, don't overlap. |
-| Orchestrator state machine (`src/orchestration/`) | SQLite sessions/checkpoints | State machine transitions write to SQLite. On restart, state is recovered from DB instead of lost. |
-| Tracker adapters (`src/tracker/`) | GitHub App webhooks | GitHub tracker adapter gains a second input path: webhooks in addition to polling. Polling remains fallback for users who can't receive webhooks. |
-| RunLog JSON writer (`src/logging/`) | Flight recorder (SQLite events) | RunLog writes become event inserts. Existing RunLog format can be a compatibility layer that reads from the event store. |
-| Commander CLI (`src/cli/`) | SQLite queries | New CLI commands (`forgectl approval list`, `forgectl costs summary`, `forgectl run inspect`) query SQLite directly. |
-| Agent sessions (`src/agent/`) | Durable execution | Session state serialized to SQLite. On resume, session context rebuilt from checkpoint + event replay. |
-
-## Database Schema Preview
-
-Tables needed across all v2.0 phases:
-
-| Table | Phase | Purpose |
-|-------|-------|---------|
-| `companies` | 2 | Tenant identity, config |
-| `agents` | 2 | Agent identity, role, status, budget scope |
-| `runs` | 1 | Run metadata (replaces file-based run logs) |
-| `events` | 3 | Append-only event ledger (flight recorder) |
-| `state_snapshots` | 3-4 | Materialized state at step boundaries |
-| `sessions` | 4 | Durable execution sessions |
-| `checkpoints` | 4 | Step-boundary state for crash recovery |
-| `approvals` | 5 | Approval requests and decisions |
-| `cost_events` | 5 | Token/cost tracking per run/agent |
-| `budgets` | 5 | Agent/company budget limits and usage |
-| `conversations` | 6 | GitHub comment threads for clarification |
-| `webhook_deliveries` | 6 | Idempotency tracking for webhook deduplication |
-
-All tables defined in `src/storage/schema.ts` using Drizzle's TypeScript schema DSL. Migrations generated by `drizzle-kit generate` and applied via `drizzle-kit migrate` (or programmatically on daemon start).
+---
 
 ## Sources
 
-- [drizzle-orm on npm](https://www.npmjs.com/package/drizzle-orm) -- v0.45.1
-- [drizzle-kit on npm](https://www.npmjs.com/package/drizzle-kit) -- v0.31.9
-- [better-sqlite3 on npm](https://www.npmjs.com/package/better-sqlite3) -- v12.6.2
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite)
-- [@octokit/app on npm](https://www.npmjs.com/package/@octokit/app) -- v16.1.2
-- [@octokit/app GitHub](https://github.com/octokit/app.js/) -- GitHub App toolkit
-- [@octokit/webhooks on npm](https://www.npmjs.com/package/@octokit/webhooks) -- v14.2.0
-- [@octokit/rest on npm](https://www.npmjs.com/package/@octokit/rest) -- v22.0.1
-- [Probot on npm](https://www.npmjs.com/package/probot) -- v14.2.4 (evaluated, not recommended)
-- [SQLite WAL mode](https://sqlite.org/wal.html) -- concurrent read/write
-- [Event sourcing with SQLite](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- append-only patterns
-- [browser-use on PyPI](https://pypi.org/project/browser-use/) -- v0.12.1 (Python, no REST API)
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- open, not implemented
+- [filtrex on npm](https://www.npmjs.com/package/filtrex) — v3.1.0, published 2024-10-14, zero deps, ESM + TypeScript
+- [filtrex GitHub](https://github.com/joewalnes/filtrex) — boolean expression DSL, safety guarantees, custom function injection
+- [jexl on npm](https://www.npmjs.com/package/jexl) — v2.3.0, last published 2020-09-15 (stale, not recommended)
+- [expr-eval on npm](https://www.npmjs.com/package/expr-eval) — v2.0.2, math DSL (wrong fit for boolean conditions)
+- [Drizzle ORM self-referential FK](https://gebna.gg/blog/self-referencing-foreign-key-typescript-drizzle-orm) — verified pattern for `runs.parentRunId`
+- [Drizzle ORM relations v2](https://orm.drizzle.team/docs/relations-v2) — current docs for relational queries
+- [Azure AI Agent Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns) — supervisor/hierarchical pattern rationale
+- [AWS prescriptive guidance: evaluator reflect-refine loop](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — self-correction loop patterns
+- npm registry (`npm info`) — version and publish date verification for all packages listed above
+
+---
+*Stack research for: forgectl v2.1 — multi-agent delegation, conditional/loop pipeline nodes, pipeline self-correction*
+*Researched: 2026-03-12*
