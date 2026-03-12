@@ -191,7 +191,10 @@ Plans:
   1. After agent execution in `worker.ts`, `needsPostApproval` is checked against the run's governance config
   2. When post-approval is required, `enterPendingOutputApproval` transitions the run to `pending_output_approval` state
   3. Interactive and supervised autonomy levels behave identically whether triggered via CLI (`forgectl run`) or orchestrator dispatch (webhook)
-**Plans**: 0 plans (pending `/gsd:plan-phase 19`)
+**Plans**: 1 plan
+
+Plans:
+- [ ] 19-01-PLAN.md — Wire post-gate into executeWorker, run record insertion in dispatcher, tests (GOVN-01, GOVN-02)
 
 ## Progress
 
@@ -210,4 +213,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
 | 18. Wire GitHub App Utilities | 3/3 | Complete    | 2026-03-12 |
-| 19. Wire Post-Gate in Worker | 0/0 | Not Started | — |
+| 19. Wire Post-Gate in Worker | 0/1 | Not Started | — |
