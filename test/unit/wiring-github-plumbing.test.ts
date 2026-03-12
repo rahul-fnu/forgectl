@@ -162,9 +162,9 @@ describe("GitHub context plumbing", () => {
         expect(mockExecuteWorker).toHaveBeenCalled();
       }, { timeout: 2000 });
 
-      // executeWorker should be called with githubDeps as the last argument
+      // executeWorker should be called with githubDeps at index 8
       const callArgs = mockExecuteWorker.mock.calls[0];
-      const githubDeps = callArgs[callArgs.length - 1];
+      const githubDeps = callArgs[8];
       expect(githubDeps).toBeDefined();
       expect(githubDeps.octokit).toBe(mockOctokit);
       expect(githubDeps.issueContext).toEqual({
@@ -263,7 +263,7 @@ describe("GitHub context plumbing", () => {
       }, { timeout: 2000 });
 
       const callArgs = mockExecuteWorker.mock.calls[0];
-      const githubDeps = callArgs[callArgs.length - 1];
+      const githubDeps = callArgs[8];
       expect(githubDeps.issueContext.owner).toBe("testowner");
       expect(githubDeps.issueContext.repo).toBe("testrepo");
       expect(githubDeps.issueContext.issueNumber).toBe(123);
@@ -291,7 +291,7 @@ describe("GitHub context plumbing", () => {
 
       // Last argument should be undefined (no githubDeps)
       const callArgs = mockExecuteWorker.mock.calls[0];
-      const githubDeps = callArgs[callArgs.length - 1];
+      const githubDeps = callArgs[8];
       expect(githubDeps).toBeUndefined();
     });
   });
@@ -323,7 +323,7 @@ describe("GitHub context plumbing", () => {
       expect(mockExecuteWorker).toHaveBeenCalledTimes(1);
       // But githubDeps should have commentId of 0 (fallback)
       const callArgs = mockExecuteWorker.mock.calls[0];
-      const githubDeps = callArgs[callArgs.length - 1];
+      const githubDeps = callArgs[8];
       expect(githubDeps).toBeDefined();
       expect(githubDeps.commentId).toBe(0);
     });
