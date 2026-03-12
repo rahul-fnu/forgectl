@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 16 of 16 (Wire Flight Recorder) -- COMPLETE
+Phase: 18 of 18 (Wire GitHub App Utilities)
 Plan: 1 of 1 in current phase (all complete)
-Status: All v2.0 phases complete (including gap closure)
-Last activity: 2026-03-11 -- Completed plan 16-01 (Wire EventRecorder)
+Status: Plan 18-01 complete (Wire GitHub Comments + Document Reactions)
+Last activity: 2026-03-12 -- Completed plan 18-01 (Wire GitHub Comments)
 
 Progress: [██████████] 100%
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 15 P02 | 4min | 2 tasks | 6 files |
 | Phase 16 P01 | 2min | 2 tasks | 2 files |
 | Phase 17 P01 | 4min | 2 tasks | 5 files |
+| Phase 18 P01 | 8min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,10 @@ Recent decisions affecting current work:
 - [Phase 17]: Orchestrator builds GovernanceOpts internally from its own fields (single source of truth for all dispatch paths)
 - [Phase 17]: GovernanceOpts is undefined when runRepo absent, preserving graceful fallback (17-01)
 - [Phase 17]: WorkflowOverrides separate interface on resolveRunPlan preserves backward compat (17-01)
+- [Phase 18]: toRunResult maps AgentResult to RunResult with $3/MTok input + $15/MTok output pricing (18-01)
+- [Phase 18]: GitHubDeps optional parameter on executeWorker preserves backward compat (18-01)
+- [Phase 18]: orchestrator/comment.ts deprecated but not deleted for backward compatibility (18-01)
+- [Phase 18]: GHAP-07 documented as handler-ready but webhook-trigger-unavailable (18-01)
 
 ### Pending Todos
 
@@ -140,6 +145,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-11T06:03:59.261Z
-Stopped at: Phase 18 context gathered
-Resume file: .planning/phases/18-wire-github-app-utilities/18-CONTEXT.md
+Last session: 2026-03-12T01:40:56Z
+Stopped at: Completed 18-01-PLAN.md
+Resume file: .planning/phases/18-wire-github-app-utilities/18-01-SUMMARY.md

@@ -196,4 +196,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 15. Browser-Use Integration | 2/2 | Complete    | 2026-03-10 |
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
-| 18. Wire GitHub App Utilities | 0/2 | Not Started | -- |
+| 18. Wire GitHub App Utilities | 1/2 | In Progress|  |
