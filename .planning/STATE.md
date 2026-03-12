@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Durable Runtime
-status: shipped
-stopped_at: Milestone v2.0 archived
-last_updated: "2026-03-12T04:55:00.000Z"
-last_activity: 2026-03-12 -- Milestone v2.0 Durable Runtime shipped
+milestone: v2.1
+milestone_name: Autonomous Factory
+status: defining-requirements
+stopped_at: null
+last_updated: "2026-03-12T05:00:00.000Z"
+last_activity: 2026-03-12 -- Milestone v2.1 started
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 22
-  completed_plans: 22
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,12 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Planning next milestone
+**Current focus:** Defining requirements for v2.1 Autonomous Factory
 
 ## Current Position
 
-Milestone v2.0 Durable Runtime shipped.
-Next: `/gsd:new-milestone` to define v2.1 or v3.0.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-12 — Milestone v2.1 started
 
 ## Accumulated Context
 
@@ -45,5 +47,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-12
-Stopped at: Milestone v2.0 archived
+Stopped at: Milestone v2.1 initialization
 Resume file: None

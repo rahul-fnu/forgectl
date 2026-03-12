@@ -43,7 +43,14 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ### Active
 
-(No active requirements — define next milestone with `/gsd:new-milestone`)
+## Current Milestone: v2.1 Autonomous Factory
+
+**Goal:** Enable forgectl to autonomously decompose complex issues into subtasks, delegate to child agents, and self-correct through conditional/loop pipeline nodes.
+
+**Target features:**
+- Multi-agent delegation (lead → worker, depth 2, per-issue maxChildren budget, failure retry with updated instructions)
+- Conditional pipeline nodes (if/else branches, loop-until-condition, integrated with DAG executor)
+- Pipeline self-correction (test fail → fix agent → retest, coverage drop → more tests, lint fail → reformat)
 
 ### Out of Scope
 
@@ -51,11 +58,11 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Distributed multi-worker execution — single machine first, scale later
 - Multi-tenant RBAC — single-user for now
 - Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
-- Conditional/loop pipeline nodes — after core orchestrator is solid
+- ~~Conditional/loop pipeline nodes~~ — promoted to v2.1
 - Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
 - Notion App integration (database triggers, rich write-back) — deferred to v2.1
 - Mirrored task model / tracker normalization — deferred to v2.1
-- Multi-agent delegation with org hierarchy — deferred to v2.1+
+- ~~Multi-agent delegation with org hierarchy~~ — promoted to v2.1 (depth-2, no org hierarchy)
 - Dashboard v2 (power-user aggregate views) — deferred to v2.1+
 - Slack/Discord bot — get GitHub + Notion right first
 - Your own mobile app — GitHub and Notion apps are the UI
@@ -103,4 +110,4 @@ v2.0 added 6 major subsystems: persistent storage, flight recorder, durable exec
 - **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
 
 ---
-*Last updated: 2026-03-12 after v2.0 milestone*
+*Last updated: 2026-03-12 after v2.1 milestone started*
