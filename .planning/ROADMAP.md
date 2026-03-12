@@ -65,7 +65,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   3. `PipelineNode` interface and Zod schema accept `node_type`, `condition`, and `loop` fields without breaking any existing pipeline YAML
   4. `filtrex` ^3.1.0 is installed, importable from TypeScript with full type declarations, and lint/typecheck pass cleanly
   5. All 1,021 existing tests still pass after the schema and type changes
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
 - [ ] 20-01: Schema migration, PipelineNode type extensions, and filtrex installation
