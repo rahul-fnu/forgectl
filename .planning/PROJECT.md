@@ -2,23 +2,11 @@
 
 ## What This Is
 
-forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. Supports single-agent runs, multi-agent review mode, DAG pipelines, and autonomous orchestration from GitHub Issues and Notion.
+forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, browser-use) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. Now a durable runtime with crash recovery, governance gates, and a GitHub App for phone-first control via slash commands, reactions, and conversational clarification.
 
 ## Core Value
 
 Continuously pull work from issue trackers, dispatch AI agents to execute it in sandboxed environments, validate results, and report back — with zero human intervention after setup.
-
-## Current Milestone: v2.0 Durable Runtime
-
-**Goal:** Evolve forgectl from a task orchestrator into a trusted, durable runtime for coding agents — controllable from your phone through a GitHub App with slash commands, reactions, and conversational clarification.
-
-**Target features:**
-- SQLite persistent storage layer (Drizzle ORM) replacing file-based state
-- Company & agent identity model for multi-tenancy, budget scoping, and audit attribution
-- Flight recorder / run ledger with append-only event sourcing and rich write-back
-- Durable execution with session persistence, pause/resume, and crash recovery
-- Governance, approvals, and budget enforcement with configurable autonomy per workflow
-- GitHub App as primary interaction surface (slash commands, reactions, conversations, check runs)
 
 ## Requirements
 
@@ -38,15 +26,24 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Real-time dashboard with orchestrator monitoring — v1.0
 - End-to-end demo: GitHub issue → dispatch → validate → comment → auto-close — v1.0
 - Backward compatibility (forgectl run, forgectl pipeline still work) — v1.0
+- ✓ SQLite persistent storage with Drizzle ORM, auto-migrations, typed repositories — v2.0
+- ✓ Append-only flight recorder with event sourcing audit trail and state snapshots — v2.0
+- ✓ CLI `forgectl run inspect <id>` for full audit trail — v2.0
+- ✓ Rich write-back: structured GitHub comments with changes, validation, cost — v2.0
+- ✓ Crash recovery: interrupted runs resume or fail cleanly on daemon restart — v2.0
+- ✓ Checkpoint/resume at step boundaries with idempotent replay — v2.0
+- ✓ Pause for human input with persistent context and resume on reply — v2.0
+- ✓ Atomic execution locks per issue/workspace via SQLite — v2.0
+- ✓ Configurable autonomy levels (full/semi/interactive/supervised) per workflow — v2.0
+- ✓ Approval state machine with auto-approve rules — v2.0
+- ✓ GitHub App: webhook receiver, HMAC verification, slash commands, permission checks — v2.0
+- ✓ Conversational clarification: agent asks question, pauses, resumes on reply — v2.0
+- ✓ Check runs on PRs and auto-generated PR descriptions — v2.0
+- ✓ Browser-use agent adapter with Python sidecar for web research workflows — v2.0
 
 ### Active
 
-- [ ] SQLite storage layer with Drizzle ORM, migrations, and repository pattern
-- [ ] Company & agent identity model with roles, lifecycle, permissions, and budget scoping
-- [ ] Append-only flight recorder with event sourcing and rich write-back to GitHub/Notion
-- [ ] Durable execution with checkpointing, session resume, pause/resume for clarification
-- [ ] Governance system with configurable autonomy levels, approval gates, and budget enforcement
-- [ ] GitHub App with webhook receiver, slash commands, reactions, conversational clarification, and check runs
+(No active requirements — define next milestone with `/gsd:new-milestone`)
 
 ### Out of Scope
 
@@ -62,43 +59,48 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Dashboard v2 (power-user aggregate views) — deferred to v2.1+
 - Slack/Discord bot — get GitHub + Notion right first
 - Your own mobile app — GitHub and Notion apps are the UI
+- Full CQRS / event replay for state — events are audit trail, not source of truth
+- PostgreSQL support — SQLite sufficient for single-machine
+- Per-tool budget granularity — budget per run and per agent/period is enough
+- Temporal/BullMQ external dependencies — app-level checkpointing on SQLite
 
 ## Context
 
-Shipped v1.0 with 11,413 LOC TypeScript (src) + 12,848 LOC tests. 667 tests passing across 56 test files. 9 phases, 24 plans executed in 8 days.
+Shipped v2.0 with 14,700 LOC TypeScript (src) + 19,082 LOC tests. 1,021 tests passing across 91 test files. 19 phases, 46 plans executed across 2 milestones over 12 days.
 
-Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup.
+Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest.
 
-Key subsystems: CLI, config, container, agent (Claude Code + Codex), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI.
+Key subsystems: CLI, config, container, agent (Claude Code + Codex + browser-use), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI, storage (SQLite), flight recorder, governance, github-app.
 
-The v1 foundation covers the full orchestration loop. Areas for future work: real-world stress testing, additional tracker adapters, persistent state storage, and production hardening.
+v2.0 added 6 major subsystems: persistent storage, flight recorder, durable execution, governance/approvals, GitHub App, and browser-use integration. Four gap-closure phases (16-19) wired all subsystems into the execution lifecycle.
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| GitHub Issues as first tracker | Most accessible, everyone has GitHub | Good |
-| Hybrid agent sessions (CLI + persistent) | Simple tasks use CLI, complex use persistent | Good |
-| Symphony patterns adapted, not copied | Symphony is Codex-specific; forgectl is agent-agnostic | Good |
-| Single machine first | Reduce complexity, prove the model before scaling | Good |
-| In-repo WORKFLOW.md contract | Teams version-control their agent policy alongside code | Good |
-| File-based state (no DB yet) | Matches Symphony's in-memory design, add persistence later | ⚠️ Revisit — v2.0 replaces with SQLite |
-| Notion as second adapter | Validates adapter interface is truly pluggable | Good |
-| Factory registry for stateful adapters | Adapters hold private state (ETag, cache, rate limits) | Good |
-| TrackerIssue.id = API-addressable identifier | Issue number for GitHub, page UUID for Notion | Good (Phase 9 fix) |
-| Polling-first (no webhooks yet) | Simpler, works everywhere, webhooks as future enhancement | ⚠️ Revisit — v2.0 adds GitHub App webhooks |
-| SQLite over Postgres | Zero-config, embeddable, sufficient for single-machine v2.0 | — Pending |
-| GitHub App as primary UI | Slash commands, reactions, conversations replace dashboard for most workflows | — Pending |
-| Event-sourced audit trail | Flight recorder is append-only, immutable; conversations part of event stream | — Pending |
-| Autonomy per workflow, not global | Different work needs different oversight; configured in WORKFLOW.md | — Pending |
+| GitHub Issues as first tracker | Most accessible, everyone has GitHub | ✓ Good |
+| Hybrid agent sessions (CLI + persistent) | Simple tasks use CLI, complex use persistent | ✓ Good |
+| Symphony patterns adapted, not copied | Symphony is Codex-specific; forgectl is agent-agnostic | ✓ Good |
+| Single machine first | Reduce complexity, prove the model before scaling | ✓ Good |
+| In-repo WORKFLOW.md contract | Teams version-control their agent policy alongside code | ✓ Good |
+| Notion as second adapter | Validates adapter interface is truly pluggable | ✓ Good |
+| Factory registry for stateful adapters | Adapters hold private state (ETag, cache, rate limits) | ✓ Good |
+| TrackerIssue.id = API-addressable identifier | Issue number for GitHub, page UUID for Notion | ✓ Good (Phase 9 fix) |
+| SQLite over Postgres | Zero-config, embeddable, sufficient for single-machine | ✓ Good — WAL mode handles concurrent reads/writes |
+| @octokit/app over Probot | Avoids Express conflict with Fastify | ✓ Good — clean plugin integration |
+| Event-sourced audit trail (not CQRS) | Append-only for audit, RunQueue still source of truth | ✓ Good — simpler, EventRecorder swallows errors |
+| Autonomy per workflow, not global | Different work needs different oversight; in WORKFLOW.md | ✓ Good — auto-approve rules add flexibility |
+| GitHub App as primary UI | Slash commands, reactions, conversations from phone | ✓ Good — full lifecycle control from GitHub |
+| HTTP sidecar for browser-use | Bridge TypeScript adapter to Python library | ✓ Good — clean process isolation |
+| Gap closure phases (16-19) | Audit found wiring gaps between subsystems | ✓ Good — all 32 integration points verified |
 
 ## Constraints
 
 - **Tech stack**: TypeScript, Node.js 20+, existing dependencies (commander, fastify, dockerode, zod)
-- **Agent model**: Must support both one-shot CLI calls and persistent subprocess sessions
+- **Agent model**: Must support one-shot CLI calls, persistent subprocess sessions, and HTTP sidecar
 - **Tracker agnostic**: Generic adapter interface — no hardcoded assumptions in core
 - **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
-- **Single process**: No distributed queue yet — single daemon process with in-memory state
+- **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
 
 ---
-*Last updated: 2026-03-09 after v2.0 milestone started*
+*Last updated: 2026-03-12 after v2.0 milestone*
