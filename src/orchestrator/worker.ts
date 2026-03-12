@@ -16,7 +16,9 @@ import { collectGitOutput } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
 import type { IssueContext } from "../github/types.js";
+import type { RepoContext } from "../github/types.js";
 import { updateProgressComment } from "../github/comments.js";
+import { createCheckRun, updateCheckRun, completeCheckRun, buildCheckSummary } from "../github/checks.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
@@ -31,10 +33,26 @@ export interface WorkerResult {
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
 export interface GitHubDeps {
-  octokit: { rest: { issues: { updateComment(params: { owner: string; repo: string; comment_id: number; body: string }): Promise<unknown> } } };
+  octokit: {
+    rest: {
+      issues: { updateComment(params: { owner: string; repo: string; comment_id: number; body: string }): Promise<unknown> };
+      checks: {
+        create(params: { owner: string; repo: string; head_sha: string; name: string; status: string; external_id?: string }): Promise<{ data: { id: number } }>;
+        update(params: { owner: string; repo: string; check_run_id: number; status: string; conclusion?: string; output?: { title: string; summary: string } }): Promise<unknown>;
+      };
+      pulls: {
+        list(params: { owner: string; repo: string; head: string; state: string }): Promise<{ data: Array<{ number: number; body: string | null }> }>;
+        update(params: { owner: string; repo: string; pull_number: number; body: string }): Promise<unknown>;
+      };
+    };
+  };
   issueContext: IssueContext;
   commentId: number;
   runId: string;
+  /** Head SHA for check run creation (available on PR events, not issue-only). */
+  headSha?: string;
+  /** Repository context for check run and PR description API calls. */
+  repoContext?: RepoContext;
 }
 
 /**
@@ -226,6 +244,23 @@ export async function executeWorker(
   let agentResult: AgentResult;
   let validationResult: ValidationResult | undefined;
   let branch: string | undefined;
+  let checkRunId: number | undefined;
+
+  // Create check run at start (if headSha available)
+  if (githubDeps?.headSha && githubDeps?.repoContext) {
+    try {
+      checkRunId = await createCheckRun(
+        githubDeps.octokit as any,
+        githubDeps.repoContext.owner,
+        githubDeps.repoContext.repo,
+        githubDeps.headSha,
+        plan.runId,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("worker", `Failed to create check run: ${msg}`);
+    }
+  }
 
   try {
     // 5. Prepare execution (container, credentials, network)
@@ -271,6 +306,23 @@ export async function executeWorker(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to update progress comment (validation stage): ${msg}`);
+      }
+    }
+
+    // Update check run after validation
+    if (checkRunId && githubDeps?.repoContext) {
+      try {
+        await updateCheckRun(
+          githubDeps.octokit as any,
+          githubDeps.repoContext.owner,
+          githubDeps.repoContext.repo,
+          checkRunId,
+          "in_progress",
+          { title: "Validation complete", summary: "Validation finished, collecting output..." },
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to update check run: ${msg}`);
       }
     }
 
@@ -324,6 +376,26 @@ export async function executeWorker(
     "orchestrated",
   );
   const comment = buildGHResultComment(runResult);
+
+  // Complete check run at worker end
+  if (checkRunId && githubDeps?.repoContext) {
+    try {
+      const success = agentResult.status === "completed" &&
+        (!validationResult || validationResult.passed);
+      const checkSummary = buildCheckSummary(runResult);
+      await completeCheckRun(
+        githubDeps.octokit as any,
+        githubDeps.repoContext.owner,
+        githubDeps.repoContext.repo,
+        checkRunId,
+        success,
+        checkSummary,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("worker", `Failed to complete check run: ${msg}`);
+    }
+  }
 
   // Update progress comment in-place with final result
   if (githubDeps) {
