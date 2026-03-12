@@ -81,13 +81,38 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmapper) | | |
+| DELEG-01 | Phase 23 | Pending |
+| DELEG-02 | Phase 23 | Pending |
+| DELEG-03 | Phase 23 | Pending |
+| DELEG-04 | Phase 23 | Pending |
+| DELEG-05 | Phase 23 | Pending |
+| DELEG-06 | Phase 23 | Pending |
+| DELEG-07 | Phase 23 | Pending |
+| DELEG-08 | Phase 23 | Pending |
+| DELEG-09 | Phase 23 | Pending |
+| COND-01 | Phase 21 | Pending |
+| COND-02 | Phase 21 | Pending |
+| COND-03 | Phase 21 | Pending |
+| COND-04 | Phase 21 | Pending |
+| COND-05 | Phase 21 | Pending |
+| COND-06 | Phase 21 | Pending |
+| COND-07 | Phase 21 | Pending |
+| LOOP-01 | Phase 22 | Pending |
+| LOOP-02 | Phase 22 | Pending |
+| LOOP-03 | Phase 22 | Pending |
+| LOOP-04 | Phase 22 | Pending |
+| LOOP-05 | Phase 22 | Pending |
+| CORR-01 | Phase 24 | Pending |
+| CORR-02 | Phase 24 | Pending |
+| CORR-03 | Phase 24 | Pending |
+| CORR-04 | Phase 24 | Pending |
+| CORR-05 | Phase 24 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 26 total
-- Mapped to phases: 0
-- Unmapped: 26 ⚠️
+- Mapped to phases: 26
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-12*
-*Last updated: 2026-03-12 after initial definition*
+*Last updated: 2026-03-12 after roadmap creation — all 26 requirements mapped*

@@ -4,6 +4,7 @@
 
 - ✅ **v1.0 Core Orchestrator** — Phases 1-9 (shipped 2026-03-09)
 - ✅ **v2.0 Durable Runtime** — Phases 10-19 (shipped 2026-03-12)
+- 🚧 **v2.1 Autonomous Factory** — Phases 20-24 (in progress)
 
 ## Phases
 
@@ -42,7 +43,100 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
+### 🚧 v2.1 Autonomous Factory (In Progress)
+
+**Milestone Goal:** Enable forgectl to autonomously decompose complex issues into subtasks, delegate to child agents, and self-correct through conditional/loop pipeline nodes.
+
+- [ ] **Phase 20: Schema Foundation** — SQLite migration and PipelineNode type extensions that all v2.1 features depend on
+- [ ] **Phase 21: Conditional Pipeline Nodes** — if/else branch routing with safe expression evaluation and executor ready-queue refactor
+- [ ] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery
+- [ ] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation
+- [ ] **Phase 24: Self-Correction Integration** — test-fail/fix/retest pattern composing loop nodes with progressive context and no-progress detection
+
+## Phase Details
+
+### Phase 20: Schema Foundation
+**Goal**: All v2.1 features have the schema and types they depend on — no behavioral change visible to users, pure foundation
+**Depends on**: Nothing (v2.0 shipped)
+**Requirements**: None (foundation phase — enables all v2.1 requirements but delivers no user-observable behavior itself)
+**Success Criteria** (what must be TRUE):
+  1. Drizzle migration runs cleanly on a v2.0 database and adds `parentRunId`, `role`, `depth`, `maxChildren`, `childrenDispatched` columns to the `runs` table
+  2. A new `delegations` table exists in the schema with a typed Drizzle repository and working CRUD operations
+  3. `PipelineNode` interface and Zod schema accept `node_type`, `condition`, and `loop` fields without breaking any existing pipeline YAML
+  4. `filtrex` ^3.1.0 is installed, importable from TypeScript with full type declarations, and lint/typecheck pass cleanly
+  5. All 1,021 existing tests still pass after the schema and type changes
+**Plans**: TBD
+
+Plans:
+- [ ] 20-01: Schema migration, PipelineNode type extensions, and filtrex installation
+
+### Phase 21: Conditional Pipeline Nodes
+**Goal**: Pipeline YAML supports if/else branch routing — the executor evaluates conditions at runtime, skips false-branch nodes, surfaces skip status in the API, and treats condition errors as fatal
+**Depends on**: Phase 20
+**Requirements**: COND-01, COND-02, COND-03, COND-04, COND-05, COND-06, COND-07
+**Success Criteria** (what must be TRUE):
+  1. A pipeline with a `condition` field on a node executes that node only when the expression evaluates true, and routes to `else_node` when the expression is false
+  2. A node configured with `if_failed` or `if_passed` shorthand behaves identically to its equivalent `condition` expression — the shorthand is sugar, not a separate code path
+  3. Skipped nodes appear with `"status": "skipped"` in `GET /api/v1/pipeline/:id/status` and in the dashboard, distinct from nodes that were not-yet-run
+  4. A malformed or unresolvable condition expression causes the pipeline run to fail immediately with a clear error message — the node is never silently skipped
+  5. `forgectl pipeline run --dry-run` prints which nodes would be skipped given the current pipeline node states, without executing any nodes
+**Plans**: TBD
+
+Plans:
+- [ ] 21-01: `src/pipeline/condition.ts` expression evaluator and PipelineNode type dispatch in executor
+- [ ] 21-02: Executor ready-queue refactor replacing static topological sort
+
+### Phase 22: Loop Pipeline Nodes
+**Goal**: Pipeline YAML supports loop-until iteration — loops execute up to a hard safety cap, each iteration is checkpointed for crash recovery, and loop progress is visible in the API
+**Depends on**: Phase 21
+**Requirements**: LOOP-01, LOOP-02, LOOP-03, LOOP-04, LOOP-05
+**Success Criteria** (what must be TRUE):
+  1. A pipeline with a `loop` node iterates until its `until` expression evaluates true or `max_iterations` is reached — whichever comes first — without requiring any manual intervention
+  2. The global `max_iterations` safety cap is enforced in code before evaluating the `until` expression — no YAML value can bypass it
+  3. After a daemon crash and restart mid-loop, pipeline execution resumes from the last completed iteration rather than restarting the entire loop from iteration 0
+  4. `GET /api/v1/pipeline/:id/status` reports the current iteration count and `loop-iterating` status for any active loop node
+  5. When a loop exhausts `max_iterations` without the `until` expression ever becoming true, the run fails with a message that names the loop node and reports the iteration count
+**Plans**: TBD
+
+Plans:
+- [ ] 22-01: `executeLoopNode()` implementation with opaque meta-node model, iteration checkpointing, and safety cap
+
+### Phase 23: Multi-Agent Delegation
+**Goal**: A lead agent can decompose a complex issue into subtasks, dispatch child workers concurrently within configured slot budgets, retry failed children with updated context, and synthesize a final summary for write-back
+**Depends on**: Phase 20
+**Requirements**: DELEG-01, DELEG-02, DELEG-03, DELEG-04, DELEG-05, DELEG-06, DELEG-07, DELEG-08, DELEG-09
+**Success Criteria** (what must be TRUE):
+  1. A lead agent whose stdout contains a sentinel-delimited delegation manifest (`---DELEGATE--- ... ---END-DELEGATE---`) causes the orchestrator to dispatch child workers concurrently without any manual trigger
+  2. Child workers never exceed the `maxChildren` budget from WORKFLOW.md, and child slot consumption never starves top-level work (two-tier slot pool enforced)
+  3. Delegation depth is hard-capped at 2 in code — a child worker that outputs a delegation manifest has it ignored, not dispatched
+  4. After a daemon restart mid-delegation, parent/child run relationships are recovered from SQLite and in-flight children resume or are re-dispatched correctly
+  5. When a child worker fails, the lead agent is re-invoked with instructions that incorporate the child's failure output — and the re-issued child gets the updated task
+  6. After all children complete, a single aggregate summary comment is written to the parent issue in the tracker (not one comment per child)
+**Plans**: TBD
+
+Plans:
+- [ ] 23-01: Two-tier slot pool, child workspace isolation strategy, and DelegationManager scaffolding
+- [ ] 23-02: Manifest parsing, child dispatch wiring, `waitForChildren()`, and child failure retry
+- [ ] 23-03: Lead synthesis call, aggregate write-back, and governance inheritance for child runs
+
+### Phase 24: Self-Correction Integration
+**Goal**: Pipelines can autonomously run tests, detect failures, invoke a fix agent with full iteration history, retest, and exhaust cleanly — proving the loop node + context piping composition works end-to-end
+**Depends on**: Phase 22
+**Requirements**: CORR-01, CORR-02, CORR-03, CORR-04, CORR-05
+**Success Criteria** (what must be TRUE):
+  1. A pipeline using the test-fail/fix/retest pattern runs a test node, pipes its failure output as context to a fix node, and retests automatically — all within a single loop node with no manual intervention
+  2. The fix agent cannot modify test files — the `exclude` list in WORKFLOW.md is enforced by the executor, and an attempt to write an excluded file causes the step to fail
+  3. Each fix iteration's prompt includes the output from all previous fix attempts in that loop, not just the most recent failure
+  4. A coverage self-correction pipeline runs until actual coverage meets or exceeds the configured threshold, or exhausts `max_iterations` with a message stating "coverage target not met after N iterations"
+  5. When two consecutive loop iterations produce identical test output (no-progress), the loop aborts immediately with a "no progress detected" failure rather than running the remaining iterations
+**Plans**: TBD
+
+Plans:
+- [ ] 24-01: Self-correction pipeline integration tests, no-progress detector, and WORKFLOW.md self-correction pattern documentation
+
 ## Progress
+
+**Execution Order:** 20 → 21 → 22 → 23 (depends only on 20, can follow 22 or run after 20 once 22 is also done) → 24
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -65,3 +159,8 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
+| 20. Schema Foundation | v2.1 | 0/1 | Not started | - |
+| 21. Conditional Pipeline Nodes | v2.1 | 0/2 | Not started | - |
+| 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
+| 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
+| 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
