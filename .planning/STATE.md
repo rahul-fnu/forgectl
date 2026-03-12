@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Durable Runtime
 status: completed
-stopped_at: Completed 18-03-PLAN.md
-last_updated: "2026-03-12T02:22:42.562Z"
-last_activity: 2026-03-12 -- Completed plan 18-02 (Wire Check Runs + PR Descriptions)
+stopped_at: Completed 19-01-PLAN.md
+last_updated: "2026-03-12T04:38:37Z"
+last_activity: 2026-03-12 -- Completed plan 19-01 (Wire Post-Gate Worker)
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 21
-  completed_plans: 21
+  total_phases: 10
+  completed_phases: 10
+  total_plans: 22
+  completed_plans: 22
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** v2.0 Durable Runtime milestone complete
+**Current focus:** v2.0 gap closure -- post-gate worker wiring complete
 
 ## Current Position
 
-Phase: 18 of 18 (Wire GitHub App Utilities)
-Plan: 2 of 2 in current phase (all complete)
-Status: Plan 18-02 complete (Wire Check Runs + PR Description Generation)
-Last activity: 2026-03-12 -- Completed plan 18-02 (Wire Check Runs + PR Descriptions)
+Phase: 19 of 19 (Wire Post-Gate Worker)
+Plan: 1 of 1 in current phase (all complete)
+Status: Plan 19-01 complete (Wire Post-Gate into Orchestrator Worker)
+Last activity: 2026-03-12 -- Completed plan 19-01 (Wire Post-Gate Worker)
 
 Progress: [██████████] 100%
 
@@ -65,6 +65,7 @@ Progress: [██████████] 100%
 | Phase 18 P01 | 8min | 2 tasks | 6 files |
 | Phase 18 P02 | 5min | 2 tasks | 4 files |
 | Phase 18 P03 | 4min | 2 tasks | 4 files |
+| Phase 19 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,9 @@ Recent decisions affecting current work:
 - [Phase 18]: Check run/PR description errors caught as warnings, never crash worker (18-02)
 - [Phase 18]: GitHubContext plumbing uses local interface definition to avoid circular imports (18-03)
 - [Phase 18]: commentId defaults to 0 on createProgressComment failure for graceful degradation (18-03)
+- [Phase 19]: Post-gate reads governance.autonomy from GovernanceOpts, NOT plan.workflow.autonomy (hardcoded to full) (19-01)
+- [Phase 19]: pendingApproval returned as true|undefined to keep WorkerResult clean for non-governance callers (19-01)
+- [Phase 19]: Run record inserted in dispatcher before executeWorker so approval state machine can find it (19-01)
 
 ### Pending Todos
 
@@ -152,6 +156,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-12T02:19:41.874Z
-Stopped at: Completed 18-03-PLAN.md
+Last session: 2026-03-12T04:38:37Z
+Stopped at: Completed 19-01-PLAN.md
 Resume file: None

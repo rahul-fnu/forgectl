@@ -120,8 +120,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DURA-02 | Phase 12 | Complete |
 | DURA-03 | Phase 12 | Complete |
 | DURA-04 | Phase 12 | Complete |
-| GOVN-01 | Phase 19 | Pending |
-| GOVN-02 | Phase 19 | Pending |
+| GOVN-01 | Phase 19 | Complete |
+| GOVN-02 | Phase 19 | Complete |
 | GOVN-03 | Phase 17 | Complete |
 | GHAP-01 | Phase 14 | Complete |
 | GHAP-02 | Phase 14 | Complete |

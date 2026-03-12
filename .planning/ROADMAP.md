@@ -41,7 +41,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 16: Wire Flight Recorder** - Instantiate EventRecorder in daemon, fix audit trail pipeline (gap closure) (completed 2026-03-11)
 - [x] **Phase 17: Wire Governance Gates** - Pass GovernanceOpts to dispatcher, fix pre/post gates (gap closure) (completed 2026-03-11)
 - [x] **Phase 18: Wire GitHub App Utilities** - Wire comments, check runs, PR descriptions into execution lifecycle; document reaction limitation (gap closure) (completed 2026-03-12)
-- [ ] **Phase 19: Wire Post-Gate in Orchestrator Worker** - Wire post-execution approval gate into worker.ts for webhook-triggered runs (gap closure)
+- [x] **Phase 19: Wire Post-Gate in Orchestrator Worker** - Wire post-execution approval gate into worker.ts for webhook-triggered runs (gap closure) (completed 2026-03-12)
 
 ## Phase Details
 
@@ -213,4 +213,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
 | 18. Wire GitHub App Utilities | 3/3 | Complete    | 2026-03-12 |
-| 19. Wire Post-Gate in Worker | 0/1 | Not Started | — |
+| 19. Wire Post-Gate in Worker | 1/1 | Complete   | 2026-03-12 |
