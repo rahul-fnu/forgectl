@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
-status: ready-to-plan
-stopped_at: null
-last_updated: "2026-03-12T05:00:00.000Z"
-last_activity: 2026-03-12 -- Roadmap created for v2.1 Autonomous Factory
+status: planning
+stopped_at: Phase 20 context gathered
+last_updated: "2026-03-12T06:12:08.380Z"
+last_activity: 2026-03-12 — Roadmap created, 26 requirements mapped to 5 phases (20-24)
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 8
+  total_plans: 0
   completed_plans: 0
   percent: 0
 ---
@@ -69,6 +69,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12
-Stopped at: Roadmap created — ready to plan Phase 20
-Resume file: None
+Last session: 2026-03-12T06:12:08.375Z
+Stopped at: Phase 20 context gathered
+Resume file: .planning/phases/20-schema-foundation/20-CONTEXT.md
