@@ -24,6 +24,10 @@ import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
+import type { GovernanceOpts } from "./dispatcher.js";
+import { needsPostApproval } from "../governance/autonomy.js";
+import { enterPendingOutputApproval } from "../governance/approval.js";
+import { evaluateAutoApprove } from "../governance/rules.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -31,6 +35,7 @@ export interface WorkerResult {
   executionResult?: ExecutionResult;
   validationResult?: ValidationResult;
   branch?: string;
+  pendingApproval?: boolean;
 }
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
@@ -211,6 +216,7 @@ export async function executeWorker(
   onActivity?: () => void,
   validationConfig?: { steps: ValidationStep[]; on_failure: string },
   githubDeps?: GitHubDeps,
+  governance?: GovernanceOpts,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   const wsInfo = await workspaceManager.ensureWorkspace(issue.identifier);
@@ -247,6 +253,7 @@ export async function executeWorker(
   let validationResult: ValidationResult | undefined;
   let branch: string | undefined;
   let checkRunId: number | undefined;
+  let pendingApproval = false;
 
   // Create check run at start (if headSha available)
   if (githubDeps?.headSha && githubDeps?.repoContext) {
@@ -348,6 +355,25 @@ export async function executeWorker(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to update progress comment (output stage): ${msg}`);
+      }
+    }
+
+    // --- Post-execution approval gate ---
+    if (governance?.autonomy && needsPostApproval(governance.autonomy) && governance.runRepo && governance.runId) {
+      const actualCost = agentResult.tokenUsage
+        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
+        : undefined;
+      const autoApproveCtx = {
+        labels: issue.labels,
+        workflowName: plan.workflow.name,
+        actualCost,
+      };
+      if (governance.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
+        logger.info("governance", `Auto-approved post-gate for run ${governance.runId}`);
+      } else {
+        enterPendingOutputApproval(governance.runRepo, governance.runId);
+        logger.info("governance", `Run ${governance.runId} requires output approval (autonomy=${governance.autonomy})`);
+        pendingApproval = true;
       }
     }
 
@@ -459,5 +485,5 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment, validationResult, branch };
+  return { agentResult, comment, validationResult, branch, pendingApproval: pendingApproval || undefined };
 }

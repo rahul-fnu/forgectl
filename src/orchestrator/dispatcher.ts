@@ -283,6 +283,25 @@ async function executeWorkerAndHandle(
     };
   }
 
+  // --- Insert run record for governance state machine ---
+  let governanceWithRunId = governance;
+  if (governance?.runRepo) {
+    const runId = issue.identifier;
+    try {
+      governance.runRepo.insert({
+        id: runId,
+        task: promptTemplate,
+        workflow: "orchestrated",
+        status: "running",
+        submittedAt: new Date().toISOString(),
+      });
+      governanceWithRunId = { ...governance, runId };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to insert run record for ${issue.identifier}: ${msg}`);
+    }
+  }
+
   try {
     const result = await executeWorker(
       issue,
@@ -294,6 +313,7 @@ async function executeWorkerAndHandle(
       onActivity,
       undefined,
       githubDeps,
+      governanceWithRunId,
     );
 
     // Remove from running

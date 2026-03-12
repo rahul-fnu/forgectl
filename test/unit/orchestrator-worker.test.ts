@@ -126,12 +126,27 @@ vi.mock("../../src/output/git.js", () => ({
   collectGitOutput: vi.fn(),
 }));
 
+vi.mock("../../src/governance/autonomy.js", () => ({
+  needsPostApproval: vi.fn(),
+}));
+
+vi.mock("../../src/governance/approval.js", () => ({
+  enterPendingOutputApproval: vi.fn(),
+}));
+
+vi.mock("../../src/governance/rules.js", () => ({
+  evaluateAutoApprove: vi.fn(),
+}));
+
 const { buildOrchestratedRunPlan, executeWorker } = await import("../../src/orchestrator/worker.js");
 const { prepareExecution } = await import("../../src/orchestration/single.js");
 const { createAgentSession } = await import("../../src/agent/session.js");
 const { cleanupRun } = await import("../../src/container/cleanup.js");
 const { runValidationLoop } = await import("../../src/validation/runner.js");
 const { collectGitOutput } = await import("../../src/output/git.js");
+const { needsPostApproval } = await import("../../src/governance/autonomy.js");
+const { enterPendingOutputApproval } = await import("../../src/governance/approval.js");
+const { evaluateAutoApprove } = await import("../../src/governance/rules.js");
 
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
@@ -458,5 +473,199 @@ describe("executeWorker", () => {
     expect(callOrder.indexOf("runValidationLoop")).toBeLessThan(callOrder.indexOf("session.close"));
     expect(callOrder.indexOf("collectGitOutput")).toBeLessThan(callOrder.indexOf("session.close"));
     expect(callOrder.indexOf("session.close")).toBeLessThan(callOrder.indexOf("cleanupRun"));
+  });
+});
+
+describe("executeWorker post-gate", () => {
+  const issue = makeIssue();
+  const config = makeConfig();
+  const promptTemplate = "Fix this: {{issue.title}}";
+
+  const mockWorkspaceManager = {
+    ensureWorkspace: vi.fn(),
+    runBeforeHook: vi.fn(),
+    runAfterHook: vi.fn(),
+    removeWorkspace: vi.fn(),
+    cleanupTerminalWorkspaces: vi.fn(),
+    getWorkspacePath: vi.fn(),
+  };
+
+  const mockLogger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  const mockAgentResult: AgentResult = {
+    stdout: "Done",
+    stderr: "",
+    status: "completed",
+    tokenUsage: { input: 1000, output: 500, total: 1500 },
+    durationMs: 30_000,
+    turnCount: 5,
+  };
+
+  const mockSession = {
+    invoke: vi.fn().mockResolvedValue(mockAgentResult),
+    isAlive: vi.fn().mockReturnValue(true),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+
+  const mockContainer = { id: "mock-container-id" };
+
+  const mockRunRepo = {
+    insert: vi.fn(),
+    findById: vi.fn().mockReturnValue({ id: "test-run-id", status: "running" }),
+    updateStatus: vi.fn(),
+    setGithubCommentId: vi.fn(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWorkspaceManager.ensureWorkspace.mockResolvedValue({
+      path: "/tmp/workspaces/issue-42",
+      identifier: "issue-42",
+      created: false,
+    } as WorkspaceInfo);
+    mockWorkspaceManager.runBeforeHook.mockResolvedValue(undefined);
+    mockWorkspaceManager.runAfterHook.mockResolvedValue(undefined);
+
+    vi.mocked(prepareExecution).mockResolvedValue({
+      container: mockContainer as any,
+      adapter: {} as any,
+      agentOptions: {} as any,
+      agentEnv: [],
+      resolvedImage: "node:20",
+    });
+
+    vi.mocked(createAgentSession).mockReturnValue(mockSession as any);
+    vi.mocked(cleanupRun).mockResolvedValue(undefined);
+    vi.mocked(collectGitOutput).mockResolvedValue({
+      mode: "git" as const,
+      branch: "forge/issue-42/abc",
+      sha: "abc123",
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
+
+    // Default: needsPostApproval returns false
+    vi.mocked(needsPostApproval).mockReturnValue(false);
+    vi.mocked(enterPendingOutputApproval).mockReturnValue(undefined);
+    vi.mocked(evaluateAutoApprove).mockReturnValue(false);
+  });
+
+  it("calls enterPendingOutputApproval when autonomy is interactive", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(true);
+    const governance = { autonomy: "interactive" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(needsPostApproval).toHaveBeenCalledWith("interactive");
+    expect(enterPendingOutputApproval).toHaveBeenCalledWith(mockRunRepo, "test-run-id");
+  });
+
+  it("calls enterPendingOutputApproval when autonomy is supervised", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(true);
+    const governance = { autonomy: "supervised" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(needsPostApproval).toHaveBeenCalledWith("supervised");
+    expect(enterPendingOutputApproval).toHaveBeenCalledWith(mockRunRepo, "test-run-id");
+  });
+
+  it("does NOT call enterPendingOutputApproval when autonomy is full", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(false);
+    const governance = { autonomy: "full" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(needsPostApproval).toHaveBeenCalledWith("full");
+    expect(enterPendingOutputApproval).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call enterPendingOutputApproval when autonomy is semi", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(false);
+    const governance = { autonomy: "semi" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(needsPostApproval).toHaveBeenCalledWith("semi");
+    expect(enterPendingOutputApproval).not.toHaveBeenCalled();
+  });
+
+  it("auto-approves when evaluateAutoApprove returns true", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(true);
+    vi.mocked(evaluateAutoApprove).mockReturnValue(true);
+    const governance = {
+      autonomy: "interactive" as const,
+      autoApprove: { label: "safe" },
+      runRepo: mockRunRepo,
+      runId: "test-run-id",
+    };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(evaluateAutoApprove).toHaveBeenCalled();
+    expect(enterPendingOutputApproval).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      "governance",
+      expect.stringContaining("Auto-approved"),
+    );
+  });
+
+  it("still calls session.close and cleanupRun when entering pending_output_approval", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(true);
+    const governance = { autonomy: "interactive" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(enterPendingOutputApproval).toHaveBeenCalled();
+    expect(mockSession.close).toHaveBeenCalled();
+    expect(cleanupRun).toHaveBeenCalled();
+  });
+
+  it("sets pendingApproval=true on WorkerResult when post-gate fires", async () => {
+    vi.mocked(needsPostApproval).mockReturnValue(true);
+    const governance = { autonomy: "interactive" as const, runRepo: mockRunRepo, runId: "test-run-id" };
+
+    const result = await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any, undefined, undefined, undefined, governance,
+    );
+
+    expect(result.pendingApproval).toBe(true);
+  });
+
+  it("skips post-gate gracefully when governance is undefined", async () => {
+    const result = await executeWorker(
+      issue, config, mockWorkspaceManager as any, promptTemplate, 1,
+      mockLogger as any,
+    );
+
+    expect(needsPostApproval).not.toHaveBeenCalled();
+    expect(enterPendingOutputApproval).not.toHaveBeenCalled();
+    expect(result.pendingApproval).toBeUndefined();
   });
 });
