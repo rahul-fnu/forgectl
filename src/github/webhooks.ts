@@ -185,4 +185,8 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
     };
     await deps.onCommand(cmd, octokit as unknown as Octokit, context, sender, comment.id);
   });
+
+  // TODO: Wire handleReactionEvent when GitHub adds reaction webhook events.
+  // As of 2026-03, GitHub does not deliver webhooks for reactions (community/discussions#20824).
+  // Approve/reject/trigger functionality is available via slash commands.
 }

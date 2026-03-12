@@ -1,3 +1,20 @@
+/**
+ * Reaction-based approval/rejection/trigger handler for forgectl runs.
+ *
+ * **Important limitation:** `handleReactionEvent()` is fully implemented and tested,
+ * but GitHub does NOT deliver webhook events for reactions. This has been verified against
+ * `@octokit/webhooks` types and the GitHub API documentation (community/discussions#20824).
+ *
+ * As a result, this handler cannot be registered as a webhook event handler in
+ * `registerWebhookHandlers()`. The same approve/reject/trigger functionality is available
+ * via `/forgectl approve`, `/forgectl reject`, and `/forgectl run` slash commands.
+ *
+ * If GitHub adds reaction webhook events in the future, register `handleReactionEvent`
+ * in `registerWebhookHandlers()` in `src/github/webhooks.ts`.
+ *
+ * @module
+ */
+
 import type { RepoContext, IssueContext } from "./types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { TrackerIssue } from "../tracker/types.js";
