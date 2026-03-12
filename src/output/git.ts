@@ -11,10 +11,24 @@ import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { GitResult } from "./types.js";
 
+/**
+ * Record the HEAD SHA before agent runs — used to detect agent changes.
+ */
+export async function recordPreAgentSha(
+  container: Docker.Container,
+): Promise<string> {
+  const result = await execInContainer(container, [
+    "git", "rev-parse", "HEAD",
+  ], { workingDir: "/workspace" });
+  return result.stdout.trim();
+}
+
 export async function collectGitOutput(
   container: Docker.Container,
   plan: RunPlan,
-  logger: Logger
+  logger: Logger,
+  preAgentSha?: string,
+  pushToken?: string,
 ): Promise<GitResult> {
   const slug = slugify(plan.task);
   const ts = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 15);
@@ -37,13 +51,19 @@ export async function collectGitOutput(
     "git", "config", "user.email", plan.commit.author.email,
   ], { workingDir: "/workspace" });
 
-  // Get the initial commit SHA (the root commit, representing the state before the agent ran)
-  const initialResult = await execInContainer(container, [
-    "git", "rev-list", "--max-parents=0", "HEAD",
-  ], { workingDir: "/workspace" });
-  const initialSha = initialResult.stdout.trim().split("\n")[0];
+  // Determine the SHA representing the state before the agent ran
+  let initialSha: string;
+  if (preAgentSha) {
+    initialSha = preAgentSha;
+  } else {
+    // Fallback: use root commit (works when workspace was init'd fresh for this run)
+    const initialResult = await execInContainer(container, [
+      "git", "rev-list", "--max-parents=0", "HEAD",
+    ], { workingDir: "/workspace" });
+    initialSha = initialResult.stdout.trim().split("\n")[0];
+  }
 
-  // Check whether the agent made any commits on top of the initial state
+  // Check whether the agent made any commits on top of the pre-agent state
   const logResult = await execInContainer(container, [
     "git", "log", "--oneline", `${initialSha}..HEAD`,
   ], { workingDir: "/workspace" });
@@ -117,6 +137,26 @@ export async function collectGitOutput(
     });
 
     logger.info("output", `Branch ${branch} fetched to host repo at ${hostRepo}`);
+
+    // Push the branch to the remote
+    try {
+      const pushEnv = { ...process.env };
+      if (pushToken) {
+        // Set up credential helper that provides the token
+        execSync(`git config credential.helper '!f() { echo "password=${pushToken}"; }; f'`, {
+          cwd: hostRepo, stdio: "pipe",
+        });
+      }
+      execSync(`git push origin "${branch}"`, {
+        cwd: hostRepo,
+        stdio: "pipe",
+        env: pushEnv,
+      });
+      logger.info("output", `Branch ${branch} pushed to remote`);
+    } catch (pushErr) {
+      const msg = pushErr instanceof Error ? (pushErr as any).stderr?.toString() || pushErr.message : String(pushErr);
+      logger.warn("output", `Failed to push branch (continuing): ${msg}`);
+    }
   } finally {
     rmSync(tmpGit, { recursive: true, force: true });
   }

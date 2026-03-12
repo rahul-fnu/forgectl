@@ -12,14 +12,14 @@ import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { runValidationLoop } from "../validation/runner.js";
-import { collectGitOutput } from "../output/git.js";
+import { collectGitOutput, recordPreAgentSha } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
 import type { IssueContext } from "../github/types.js";
 import type { RepoContext } from "../github/types.js";
 import { updateProgressComment } from "../github/comments.js";
 import { createCheckRun, updateCheckRun, completeCheckRun, buildCheckSummary } from "../github/checks.js";
-import { updatePRDescriptionForBranch } from "../github/pr-description.js";
+import { updatePRDescriptionForBranch, createPRForBranch } from "../github/pr-description.js";
 import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
@@ -49,6 +49,7 @@ export interface GitHubDeps {
       };
       pulls: {
         list(params: { owner: string; repo: string; head: string; state: string }): Promise<{ data: Array<{ number: number; body: string | null }> }>;
+        create(params: { owner: string; repo: string; title: string; body: string; head: string; base: string }): Promise<{ data: { number: number; html_url: string } }>;
         update(params: { owner: string; repo: string; pull_number: number; body: string }): Promise<unknown>;
       };
     };
@@ -280,6 +281,14 @@ export async function executeWorker(
       onActivity,
     });
 
+    // 6.5. Record pre-agent HEAD so we can detect agent changes later
+    let preAgentSha: string | undefined;
+    try {
+      preAgentSha = await recordPreAgentSha(container);
+    } catch {
+      // Non-critical — fallback to root commit detection
+    }
+
     // 7. Invoke agent
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(plan.task);
@@ -337,7 +346,8 @@ export async function executeWorker(
 
     // 9. Collect git output (non-critical -- catch and log errors)
     try {
-      const gitResult = await collectGitOutput(container, plan, logger);
+      const pushToken = config.tracker?.token;
+      const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
       branch = gitResult.branch;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -381,6 +391,9 @@ export async function executeWorker(
     await session.close();
 
     logger.info("worker", `Agent finished: status=${agentResult.status}, duration=${agentResult.durationMs}ms`);
+    if (agentResult.status === "failed" && agentResult.stderr) {
+      logger.warn("worker", `Agent stderr: ${agentResult.stderr.slice(0, 1000)}`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("worker", `Agent execution failed for ${issue.identifier}: ${message}`);
@@ -425,7 +438,7 @@ export async function executeWorker(
     }
   }
 
-  // Generate PR description when branch and GitHub context available
+  // Create PR and set description when branch and GitHub context available
   if (githubDeps?.repoContext && branch) {
     try {
       const prData: PRDescriptionData = {
@@ -442,11 +455,13 @@ export async function executeWorker(
         workflow: runResult.workflow ?? "orchestrated",
         agent: runResult.agent ?? "unknown",
       };
-      await updatePRDescriptionForBranch(
+      // Create PR if it doesn't exist, then update description
+      await createPRForBranch(
         githubDeps.octokit as any,
         githubDeps.repoContext.owner,
         githubDeps.repoContext.repo,
         branch,
+        issue.title,
         prData,
       );
     } catch (err) {

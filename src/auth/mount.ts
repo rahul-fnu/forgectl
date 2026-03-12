@@ -24,6 +24,7 @@ export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerM
     env.ANTHROPIC_API_KEY_FILE = "/run/secrets/anthropic_api_key";
   } else if (auth.type === "oauth_session" && auth.sessionDir) {
     binds.push(`${auth.sessionDir}:/home/node/.claude:ro`);
+    env.HOME = "/home/node";
   }
 
   return {

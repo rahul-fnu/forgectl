@@ -133,7 +133,7 @@ describe("tick", () => {
 
     await tick(deps);
 
-    expect(filterCandidates).toHaveBeenCalledWith(issues, deps.state, expect.any(Set));
+    expect(filterCandidates).toHaveBeenCalledWith(issues, deps.state, expect.any(Set), undefined);
     expect(sortCandidates).toHaveBeenCalledWith(issues);
   });
 

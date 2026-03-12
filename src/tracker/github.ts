@@ -335,6 +335,20 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         await githubFetch(url, { method: "DELETE" });
       }
     },
+
+    async createPullRequest(
+      branch: string,
+      title: string,
+      body: string,
+    ): Promise<string | undefined> {
+      const url = `${API_BASE}/repos/${owner}/${repo}/pulls`;
+      const response = await githubFetch(url, {
+        method: "POST",
+        body: JSON.stringify({ title, body, head: branch, base: "main" }),
+      });
+      const data = await response.json() as { html_url?: string };
+      return data.html_url;
+    },
   };
 
   return adapter;

@@ -95,6 +95,9 @@ export async function prepareExecution(
     if (auth.type === "api_key" && auth.apiKey) {
       agentEnv.push(`ANTHROPIC_API_KEY=${auth.apiKey}`);
     }
+    for (const [k, v] of Object.entries(mounts.env)) {
+      agentEnv.push(`${k}=${v}`);
+    }
     agentEnv.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
   } else if (plan.agent.type === "browser-use") {
     // Browser-use needs LLM credentials -- try Claude first (forgectl is Claude-first), fall back to OpenAI

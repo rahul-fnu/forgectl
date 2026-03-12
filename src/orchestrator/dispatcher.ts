@@ -84,6 +84,7 @@ export function filterCandidates(
   candidates: TrackerIssue[],
   state: OrchestratorState,
   terminalIssueIds: Set<string>,
+  doneLabel?: string,
 ): TrackerIssue[] {
   return candidates.filter((issue) => {
     // Exclude already claimed
@@ -91,6 +92,9 @@ export function filterCandidates(
 
     // Exclude already running
     if (state.running.has(issue.id)) return false;
+
+    // Exclude issues already marked as done
+    if (doneLabel && issue.labels.includes(doneLabel)) return false;
 
     // Exclude if any blocker is not terminal
     if (issue.blocked_by.length > 0) {
@@ -325,6 +329,20 @@ async function executeWorkerAndHandle(
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("dispatcher", `Failed to post comment for ${issue.identifier}: ${msg}`);
     });
+
+    // Create PR if branch exists and tracker supports it
+    if (result.branch && tracker.createPullRequest) {
+      tracker.createPullRequest(
+        result.branch,
+        `[forgectl] ${issue.title}`,
+        `Closes #${issue.id}\n\nAutomated changes by forgectl for ${issue.identifier}.`,
+      ).then((prUrl) => {
+        if (prUrl) logger.info("dispatcher", `PR created for ${issue.identifier}: ${prUrl}`);
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to create PR for ${issue.identifier}: ${msg}`);
+      });
+    }
 
     // Classify failure and handle retry
     const failureType = classifyFailure(result.agentResult.status);

@@ -62,7 +62,8 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 4: Filter candidates (terminalIds from config)
   const terminalIds = new Set<string>(); // Built from recent reconciliation data
-  const eligible = filterCandidates(candidates, state, terminalIds);
+  const doneLabel = config.tracker?.done_label;
+  const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
 
   // Step 5: Sort candidates
   const sorted = sortCandidates(eligible);
