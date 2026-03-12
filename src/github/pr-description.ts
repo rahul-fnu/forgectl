@@ -1,3 +1,6 @@
+/** Marker comment embedded in forgectl-generated PR descriptions. */
+const FORGECTL_MARKER = "<!-- forgectl-generated -->";
+
 /** Data needed to build a PR description. */
 export interface PRDescriptionData {
   issueNumber: number;
@@ -12,10 +15,16 @@ export interface PRDescriptionData {
   agent: string;
 }
 
-/** Octokit-like interface for PR update API calls. */
+/** Octokit-like interface for PR update and list API calls. */
 interface OctokitPulls {
   rest: {
     pulls: {
+      list(params: {
+        owner: string;
+        repo: string;
+        head: string;
+        state: string;
+      }): Promise<{ data: Array<{ number: number; body: string | null }> }>;
       update(params: {
         owner: string;
         repo: string;
@@ -29,9 +38,14 @@ interface OctokitPulls {
 /**
  * Build a PR description from run data.
  * Includes linked issue, changes, validation, cost, and forgectl footer.
+ * Embeds a forgectl-generated marker for safe overwrite detection.
  */
 export function buildPRDescription(data: PRDescriptionData): string {
   const lines: string[] = [];
+
+  // Marker for detecting forgectl-generated descriptions
+  lines.push(FORGECTL_MARKER);
+  lines.push("");
 
   // Linked issue
   lines.push(`Closes #${data.issueNumber}`);
@@ -75,7 +89,7 @@ export function buildPRDescription(data: PRDescriptionData): string {
 }
 
 /**
- * Update a PR's description with auto-generated content.
+ * Update a PR's description with auto-generated content (by PR number).
  */
 export async function updatePRDescription(
   octokit: OctokitPulls,
@@ -89,6 +103,48 @@ export async function updatePRDescription(
     owner,
     repo,
     pull_number: prNumber,
+    body,
+  });
+}
+
+/**
+ * Find a PR matching the given branch and update its description.
+ * Skips update if:
+ * - No open PR exists for the branch
+ * - The existing PR body was written by a human (no forgectl-generated marker and non-null body)
+ *
+ * Safe to call as best-effort; caller should wrap in try/catch.
+ */
+export async function updatePRDescriptionForBranch(
+  octokit: OctokitPulls,
+  owner: string,
+  repo: string,
+  branch: string,
+  data: PRDescriptionData,
+): Promise<void> {
+  const response = await octokit.rest.pulls.list({
+    owner,
+    repo,
+    head: `${owner}:${branch}`,
+    state: "open",
+  });
+
+  if (response.data.length === 0) {
+    return; // No PR for this branch
+  }
+
+  const pr = response.data[0];
+
+  // Preserve human-written descriptions: skip if body exists and has no forgectl marker
+  if (pr.body !== null && pr.body !== "" && !pr.body.includes(FORGECTL_MARKER)) {
+    return;
+  }
+
+  const body = buildPRDescription(data);
+  await octokit.rest.pulls.update({
+    owner,
+    repo,
+    pull_number: pr.number,
     body,
   });
 }

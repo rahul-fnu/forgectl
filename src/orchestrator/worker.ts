@@ -19,6 +19,8 @@ import type { IssueContext } from "../github/types.js";
 import type { RepoContext } from "../github/types.js";
 import { updateProgressComment } from "../github/comments.js";
 import { createCheckRun, updateCheckRun, completeCheckRun, buildCheckSummary } from "../github/checks.js";
+import { updatePRDescriptionForBranch } from "../github/pr-description.js";
+import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
@@ -394,6 +396,36 @@ export async function executeWorker(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Failed to complete check run: ${msg}`);
+    }
+  }
+
+  // Generate PR description when branch and GitHub context available
+  if (githubDeps?.repoContext && branch) {
+    try {
+      const prData: PRDescriptionData = {
+        issueNumber: githubDeps.issueContext.issueNumber,
+        changes: runResult.changes ?? [],
+        validationResults: runResult.validationResults?.map((v) => ({ step: v.step, passed: v.passed })) ?? [],
+        cost: runResult.cost
+          ? {
+              estimated_usd: runResult.cost.estimated_usd ?? "$0",
+              input_tokens: runResult.cost.input_tokens ?? 0,
+              output_tokens: runResult.cost.output_tokens ?? 0,
+            }
+          : { estimated_usd: "$0", input_tokens: 0, output_tokens: 0 },
+        workflow: runResult.workflow ?? "orchestrated",
+        agent: runResult.agent ?? "unknown",
+      };
+      await updatePRDescriptionForBranch(
+        githubDeps.octokit as any,
+        githubDeps.repoContext.owner,
+        githubDeps.repoContext.repo,
+        branch,
+        prData,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("worker", `Failed to update PR description: ${msg}`);
     }
   }
 
