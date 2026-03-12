@@ -40,7 +40,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 15: Browser-Use Integration** - Browser-use agent adapter with Python sidecar and research workflow (completed 2026-03-10)
 - [x] **Phase 16: Wire Flight Recorder** - Instantiate EventRecorder in daemon, fix audit trail pipeline (gap closure) (completed 2026-03-11)
 - [x] **Phase 17: Wire Governance Gates** - Pass GovernanceOpts to dispatcher, fix pre/post gates (gap closure) (completed 2026-03-11)
-- [x] **Phase 18: Wire GitHub App Utilities** - Wire comments, check runs, PR descriptions into execution lifecycle; document reaction limitation (gap closure) (completed 2026-03-12)
+- [ ] **Phase 18: Wire GitHub App Utilities** - Wire comments, check runs, PR descriptions into execution lifecycle; document reaction limitation (gap closure)
 
 ## Phase Details
 
@@ -174,11 +174,12 @@ Plans:
   2. Check run lifecycle (create/update/complete) is called during PR execution flow
   3. PR descriptions are auto-generated when forgectl creates or updates a PR
   4. Reaction webhook limitation documented (GitHub does not deliver reaction webhook events; slash commands provide equivalent functionality)
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] 18-01-PLAN.md — Comment consolidation, progress lifecycle wiring, reaction limitation documentation (GHAP-03, GHAP-07)
-- [ ] 18-02-PLAN.md — Check run lifecycle and PR description generation wiring (GHAP-08, GHAP-09)
+- [x] 18-01-PLAN.md — Comment consolidation, progress lifecycle wiring, reaction limitation documentation (GHAP-03, GHAP-07)
+- [x] 18-02-PLAN.md — Check run lifecycle and PR description generation wiring (GHAP-08, GHAP-09)
+- [ ] 18-03-PLAN.md — Gap closure: wire GitHub context plumbing from server.ts through dispatcher to worker (GHAP-03, GHAP-08, GHAP-09)
 
 ## Progress
 
@@ -196,4 +197,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 15. Browser-Use Integration | 2/2 | Complete    | 2026-03-10 |
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
-| 18. Wire GitHub App Utilities | 2/2 | Complete   | 2026-03-12 |
+| 18. Wire GitHub App Utilities | 2/3 | Gap Closure |            |
