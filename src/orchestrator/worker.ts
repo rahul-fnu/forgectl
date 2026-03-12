@@ -13,9 +13,13 @@ import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { runValidationLoop } from "../validation/runner.js";
 import { collectGitOutput } from "../output/git.js";
-import { buildResultComment } from "./comment.js";
+import { buildResultComment as buildGHResultComment } from "../github/comments.js";
+import type { RunResult } from "../github/comments.js";
+import type { IssueContext } from "../github/types.js";
+import { updateProgressComment } from "../github/comments.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { parseDuration } from "../utils/duration.js";
+import { formatDuration } from "../utils/duration.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -23,6 +27,49 @@ export interface WorkerResult {
   executionResult?: ExecutionResult;
   validationResult?: ValidationResult;
   branch?: string;
+}
+
+/** Optional GitHub dependencies for progress comment updates during worker execution. */
+export interface GitHubDeps {
+  octokit: { rest: { issues: { updateComment(params: { owner: string; repo: string; comment_id: number; body: string }): Promise<unknown> } } };
+  issueContext: IssueContext;
+  commentId: number;
+  runId: string;
+}
+
+/**
+ * Map worker execution data to the github/comments.ts RunResult interface.
+ * Exported for testing.
+ */
+export function toRunResult(
+  runId: string,
+  agentResult: AgentResult,
+  durationMs: number,
+  validationResult?: ValidationResult,
+  _branch?: string,
+  workflow?: string,
+): RunResult {
+  const cost = agentResult.tokenUsage
+    ? {
+        input_tokens: agentResult.tokenUsage.input,
+        output_tokens: agentResult.tokenUsage.output,
+        estimated_usd: `$${((agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000).toFixed(4)}`,
+      }
+    : undefined;
+
+  return {
+    runId,
+    status: agentResult.status === "completed" ? "success" : "failure",
+    duration: formatDuration(durationMs),
+    cost,
+    changes: [],
+    validationResults: validationResult?.stepResults.map((sr) => ({
+      step: sr.name,
+      passed: sr.passed,
+    })),
+    workflow,
+    agent: agentResult.status === "completed" ? "claude-code" : undefined,
+  };
 }
 
 /**
@@ -143,6 +190,7 @@ export async function executeWorker(
   logger: Logger,
   onActivity?: () => void,
   validationConfig?: { steps: ValidationStep[]; on_failure: string },
+  githubDeps?: GitHubDeps,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   const wsInfo = await workspaceManager.ensureWorkspace(issue.identifier);
@@ -162,15 +210,10 @@ export async function executeWorker(
       durationMs: 0,
       turnCount: 0,
     };
+    const failRunResult = toRunResult("unknown", failResult, 0);
     return {
       agentResult: failResult,
-      comment: buildResultComment({
-        status: "failed",
-        durationMs: 0,
-        agentType: config.agent.type,
-        attempt,
-        tokenUsage: failResult.tokenUsage,
-      }),
+      comment: buildGHResultComment(failRunResult),
     };
   }
 
@@ -197,19 +240,61 @@ export async function executeWorker(
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(plan.task);
 
+    // Update progress: agent_executing complete
+    if (githubDeps) {
+      try {
+        await updateProgressComment(githubDeps.octokit as any, githubDeps.issueContext, githubDeps.commentId, {
+          runId: githubDeps.runId,
+          status: "running",
+          completedStages: ["agent_executing"],
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to update progress comment (agent stage): ${msg}`);
+      }
+    }
+
     // 8. Run validation loop BEFORE closing session (container must be alive)
     if (plan.validation.steps.length > 0) {
       logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
     }
 
-    // 9. Collect git output (non-critical — catch and log errors)
+    // Update progress: validating complete
+    if (githubDeps) {
+      try {
+        await updateProgressComment(githubDeps.octokit as any, githubDeps.issueContext, githubDeps.commentId, {
+          runId: githubDeps.runId,
+          status: "running",
+          completedStages: ["agent_executing", "validating"],
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to update progress comment (validation stage): ${msg}`);
+      }
+    }
+
+    // 9. Collect git output (non-critical -- catch and log errors)
     try {
       const gitResult = await collectGitOutput(container, plan, logger);
       branch = gitResult.branch;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Git output collection failed for ${issue.identifier} (ignored): ${message}`);
+    }
+
+    // Update progress: collecting_output complete
+    if (githubDeps) {
+      try {
+        await updateProgressComment(githubDeps.octokit as any, githubDeps.issueContext, githubDeps.commentId, {
+          runId: githubDeps.runId,
+          status: "running",
+          completedStages: ["agent_executing", "validating", "collecting_output"],
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to update progress comment (output stage): ${msg}`);
+      }
     }
 
     // 10. Now close session
@@ -229,21 +314,30 @@ export async function executeWorker(
     };
   }
 
-  // 11. Build structured comment with validation results and branch
-  const commentValidationResults = validationResult?.stepResults.map(sr => ({
-    name: sr.name,
-    passed: sr.passed,
-  }));
-
-  const comment = buildResultComment({
-    status: agentResult.status,
-    durationMs: agentResult.durationMs,
-    agentType: config.agent.type,
-    attempt,
-    tokenUsage: agentResult.tokenUsage,
-    validationResults: commentValidationResults,
+  // 11. Build structured result comment using github/comments.ts
+  const runResult = toRunResult(
+    githubDeps?.runId ?? "unknown",
+    agentResult,
+    agentResult.durationMs,
+    validationResult,
     branch,
-  });
+    "orchestrated",
+  );
+  const comment = buildGHResultComment(runResult);
+
+  // Update progress comment in-place with final result
+  if (githubDeps) {
+    try {
+      await updateProgressComment(githubDeps.octokit as any, githubDeps.issueContext, githubDeps.commentId, {
+        runId: githubDeps.runId,
+        status: agentResult.status === "completed" ? "completed" : "failed",
+        completedStages: ["agent_executing", "validating", "collecting_output"],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("worker", `Failed to update final progress comment: ${msg}`);
+    }
+  }
 
   // 12. Run after hook (catch and log errors)
   try {

@@ -1,5 +1,11 @@
+/**
+ * @deprecated Use src/github/comments.ts instead. This module is retained for backward compatibility only.
+ * All new code should import from "../github/comments.js".
+ */
+
 import type { AgentStatus, TokenUsage } from "../agent/session.js";
 
+/** @deprecated Use RunResult from src/github/comments.ts instead. */
 export interface CommentData {
   status: AgentStatus;
   durationMs: number;
@@ -10,6 +16,7 @@ export interface CommentData {
   branch?: string;
 }
 
+/** @deprecated Use RunResult from src/github/comments.ts instead. */
 export interface RichCommentData extends CommentData {
   filesChanged?: Array<{ path: string; additions: number; deletions: number }>;
   costEstimate?: { inputCost: number; outputCost: number; totalCost: number; currency: string };
@@ -123,6 +130,7 @@ function buildValidationDetailsSection(
 }
 
 /**
+ * @deprecated Use buildResultComment from src/github/comments.ts instead.
  * Build a structured markdown comment for posting to a tracker after a worker run.
  */
 export function buildResultComment(data: CommentData | RichCommentData): string {

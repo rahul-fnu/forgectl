@@ -343,8 +343,7 @@ describe("executeWorker", () => {
     const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
     expect(result.agentResult).toBeDefined();
     expect(result.agentResult.status).toBe("completed");
-    expect(result.comment).toContain("forgectl Agent Report");
-    expect(result.comment).toContain("Pass");
+    expect(result.comment).toContain("Completed");
   });
 
   it("passes onActivity callback to createAgentSession", async () => {
@@ -363,7 +362,7 @@ describe("executeWorker", () => {
     mockWorkspaceManager.runBeforeHook.mockRejectedValue(new Error("hook failed"));
     const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
     expect(result.agentResult.status).toBe("failed");
-    expect(result.comment).toContain("Fail");
+    expect(result.comment).toContain("Failed");
   });
 
   it("calls runValidationLoop when plan has validation steps", async () => {
@@ -423,7 +422,8 @@ describe("executeWorker", () => {
     const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
     expect(collectGitOutput).toHaveBeenCalled();
     expect(result.branch).toBe("forge/issue-42/abc");
-    expect(result.comment).toContain("forge/issue-42/abc");
+    // Comment now uses github/comments.ts format (RunResult), branch is in WorkerResult.branch not comment text
+    expect(result.comment).toContain("Completed");
   });
 
   it("keeps container alive until after validation and output collection", async () => {
