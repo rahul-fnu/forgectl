@@ -42,8 +42,8 @@ Requirements for v2.0 release. Each maps to roadmap phases.
 - [x] **GHAP-05**: Permission checks: only repo collaborators can issue commands
 - [x] **GHAP-06**: Conversational clarification: agent asks question mid-run, pauses, resumes on reply
 - [x] **GHAP-07**: Reactions as approvals (thumbs-up=approve, thumbs-down=reject, rocket=trigger, arrows=rerun)
-- [ ] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
-- [ ] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
+- [x] **GHAP-08**: Check runs on PRs (pending -> in_progress -> success/failure)
+- [x] **GHAP-09**: Auto-generated PR descriptions with changes, validation, cost, linked issue
 
 ### Browser-Use
 
@@ -130,8 +130,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GHAP-05 | Phase 14 | Complete |
 | GHAP-06 | Phase 14 | Complete |
 | GHAP-07 | Phase 18 | Complete |
-| GHAP-08 | Phase 18 | Pending |
-| GHAP-09 | Phase 18 | Pending |
+| GHAP-08 | Phase 18 | Complete |
+| GHAP-09 | Phase 18 | Complete |
 | BROW-01 | Phase 15 | Complete |
 | BROW-02 | Phase 15 | Complete |
 | BROW-03 | Phase 15 | Complete |

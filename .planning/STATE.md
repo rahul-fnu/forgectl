@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 18 of 18 (Wire GitHub App Utilities)
-Plan: 1 of 1 in current phase (all complete)
-Status: Plan 18-01 complete (Wire GitHub Comments + Document Reactions)
-Last activity: 2026-03-12 -- Completed plan 18-01 (Wire GitHub Comments)
+Plan: 2 of 2 in current phase (all complete)
+Status: Plan 18-02 complete (Wire Check Runs + PR Description Generation)
+Last activity: 2026-03-12 -- Completed plan 18-02 (Wire Check Runs + PR Descriptions)
 
 Progress: [██████████] 100%
 
@@ -63,6 +63,7 @@ Progress: [██████████] 100%
 | Phase 16 P01 | 2min | 2 tasks | 2 files |
 | Phase 17 P01 | 4min | 2 tasks | 5 files |
 | Phase 18 P01 | 8min | 2 tasks | 6 files |
+| Phase 18 P02 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,9 @@ Recent decisions affecting current work:
 - [Phase 18]: GitHubDeps optional parameter on executeWorker preserves backward compat (18-01)
 - [Phase 18]: orchestrator/comment.ts deprecated but not deleted for backward compatibility (18-01)
 - [Phase 18]: GHAP-07 documented as handler-ready but webhook-trigger-unavailable (18-01)
+- [Phase 18]: GitHubDeps extended with headSha/repoContext for check run and PR description APIs (18-02)
+- [Phase 18]: updatePRDescriptionForBranch does branch-based PR lookup with forgectl-generated marker preservation (18-02)
+- [Phase 18]: Check run/PR description errors caught as warnings, never crash worker (18-02)
 
 ### Pending Todos
 
@@ -145,6 +149,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-12T01:40:56Z
-Stopped at: Completed 18-01-PLAN.md
-Resume file: .planning/phases/18-wire-github-app-utilities/18-01-SUMMARY.md
+Last session: 2026-03-12T01:48:07Z
+Stopped at: Completed 18-02-PLAN.md
+Resume file: .planning/phases/18-wire-github-app-utilities/18-02-SUMMARY.md
