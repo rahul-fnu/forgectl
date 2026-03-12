@@ -6,13 +6,22 @@ import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { IssueContext, RepoContext } from "../github/types.js";
+import type { GitHubDeps } from "./worker.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
 import { executeWorker } from "./worker.js";
+import { createProgressComment } from "../github/comments.js";
 import { emitRunEvent } from "../logging/events.js";
 import { needsPreApproval } from "../governance/autonomy.js";
 import { enterPendingApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
+
+/** GitHub context passed from webhook handler (octokit + repo). */
+export interface GitHubContext {
+  octokit: unknown;
+  repo: RepoContext;
+}
 
 /** Optional governance context for pre-execution approval gate. */
 export interface GovernanceOpts {
@@ -130,6 +139,7 @@ export function dispatchIssue(
   logger: Logger,
   metrics: MetricsCollector,
   governance?: GovernanceOpts,
+  githubContext?: GitHubContext,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -157,6 +167,7 @@ export function dispatchIssue(
     logger,
     metrics,
     governance,
+    githubContext,
   );
 }
 
@@ -170,6 +181,7 @@ async function executeWorkerAndHandle(
   logger: Logger,
   metrics: MetricsCollector,
   governance?: GovernanceOpts,
+  githubContext?: GitHubContext,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -231,6 +243,46 @@ async function executeWorkerAndHandle(
     }
   }
 
+  // --- Construct GitHubDeps if GitHub context is available ---
+  let githubDeps: GitHubDeps | undefined;
+  if (githubContext) {
+    const issueContext: IssueContext = {
+      ...githubContext.repo,
+      issueNumber: Number(issue.id),
+    };
+    const runId = issue.identifier;
+    let commentId = 0;
+
+    // Create initial progress comment (best-effort)
+    try {
+      commentId = await createProgressComment(githubContext.octokit as any, issueContext, {
+        runId,
+        status: "started",
+        completedStages: [],
+      });
+      // Persist commentId if runRepo is available
+      if (governance?.runRepo) {
+        try {
+          governance.runRepo.setGithubCommentId(runId, commentId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to persist commentId for ${issue.identifier}: ${msg}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to create progress comment for ${issue.identifier}: ${msg}`);
+    }
+
+    githubDeps = {
+      octokit: githubContext.octokit as any,
+      issueContext,
+      commentId,
+      runId,
+      repoContext: githubContext.repo,
+    };
+  }
+
   try {
     const result = await executeWorker(
       issue,
@@ -240,6 +292,8 @@ async function executeWorkerAndHandle(
       attempt,
       logger,
       onActivity,
+      undefined,
+      githubDeps,
     );
 
     // Remove from running

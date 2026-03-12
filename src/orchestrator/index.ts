@@ -5,12 +5,19 @@ import type { Logger } from "../logging/logger.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { RepoContext } from "../github/types.js";
 import { createState, type OrchestratorState, SlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { MetricsCollector } from "./metrics.js";
 import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispatcher.js";
+
+/** GitHub context passed from webhook handler through to dispatcher. */
+export interface GitHubContext {
+  octokit: unknown;
+  repo: RepoContext;
+}
 
 export interface OrchestratorOptions {
   tracker: TrackerAdapter;
@@ -207,7 +214,7 @@ export class Orchestrator {
    * Delegates to the standalone dispatchIssue function using orchestrator internals.
    * No-op if the orchestrator is not running.
    */
-  dispatchIssue(issue: TrackerIssue): void {
+  dispatchIssue(issue: TrackerIssue, githubContext?: GitHubContext): void {
     if (!this.running) {
       this.logger.warn("orchestrator", `dispatchIssue called but orchestrator not running`);
       return;
@@ -229,6 +236,7 @@ export class Orchestrator {
       this.logger,
       this.metrics,
       governance,
+      githubContext,
     );
   }
 
