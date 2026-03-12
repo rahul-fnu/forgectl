@@ -3,7 +3,7 @@
 ## Milestones
 
 - [x] **v1.0 Core Orchestrator** - Phases 1-9 (shipped 2026-03-09)
-- [ ] **v2.0 Durable Runtime** - Phases 10-18 (in progress, gap closure 16-18)
+- [ ] **v2.0 Durable Runtime** - Phases 10-19 (in progress, gap closure 16-19)
 
 ## Phases
 
@@ -41,6 +41,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 16: Wire Flight Recorder** - Instantiate EventRecorder in daemon, fix audit trail pipeline (gap closure) (completed 2026-03-11)
 - [x] **Phase 17: Wire Governance Gates** - Pass GovernanceOpts to dispatcher, fix pre/post gates (gap closure) (completed 2026-03-11)
 - [x] **Phase 18: Wire GitHub App Utilities** - Wire comments, check runs, PR descriptions into execution lifecycle; document reaction limitation (gap closure) (completed 2026-03-12)
+- [ ] **Phase 19: Wire Post-Gate in Orchestrator Worker** - Wire post-execution approval gate into worker.ts for webhook-triggered runs (gap closure)
 
 ## Phase Details
 
@@ -181,6 +182,17 @@ Plans:
 - [x] 18-02-PLAN.md — Check run lifecycle and PR description generation wiring (GHAP-08, GHAP-09)
 - [ ] 18-03-PLAN.md — Gap closure: wire GitHub context plumbing from server.ts through dispatcher to worker (GHAP-03, GHAP-08, GHAP-09)
 
+### Phase 19: Wire Post-Gate in Orchestrator Worker
+**Goal**: Post-execution approval gate fires in the orchestrator worker path so interactive/supervised autonomy levels work for webhook-triggered runs
+**Depends on**: Phase 17
+**Requirements**: GOVN-01, GOVN-02
+**Gap Closure:** Closes POST-GATE-WORKER integration gap from audit
+**Success Criteria** (what must be TRUE):
+  1. After agent execution in `worker.ts`, `needsPostApproval` is checked against the run's governance config
+  2. When post-approval is required, `enterPendingOutputApproval` transitions the run to `pending_output_approval` state
+  3. Interactive and supervised autonomy levels behave identically whether triggered via CLI (`forgectl run`) or orchestrator dispatch (webhook)
+**Plans**: 0 plans (pending `/gsd:plan-phase 19`)
+
 ## Progress
 
 **Execution Order:**
@@ -198,3 +210,4 @@ Phases execute in numeric order: 10 -> 11 -> 12 -> 13 -> 14 -> 15
 | 16. Wire Flight Recorder | 1/1 | Complete    | 2026-03-11 |
 | 17. Wire Governance Gates | 1/1 | Complete    | 2026-03-11 |
 | 18. Wire GitHub App Utilities | 3/3 | Complete    | 2026-03-12 |
+| 19. Wire Post-Gate in Worker | 0/0 | Not Started | — |

@@ -120,8 +120,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DURA-02 | Phase 12 | Complete |
 | DURA-03 | Phase 12 | Complete |
 | DURA-04 | Phase 12 | Complete |
-| GOVN-01 | Phase 17 | Complete |
-| GOVN-02 | Phase 17 | Complete |
+| GOVN-01 | Phase 19 | Pending |
+| GOVN-02 | Phase 19 | Pending |
 | GOVN-03 | Phase 17 | Complete |
 | GHAP-01 | Phase 14 | Complete |
 | GHAP-02 | Phase 14 | Complete |
@@ -138,8 +138,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v2.0 requirements: 26 total
-- Satisfied: 17
-- Pending (gap closure): 9 (AUDT-01, AUDT-03, GOVN-01, GOVN-02, GOVN-03, GHAP-03, GHAP-07, GHAP-08, GHAP-09)
+- Satisfied: 24
+- Pending (gap closure): 2 (GOVN-01, GOVN-02)
 - Unmapped: 0
 
 ---
