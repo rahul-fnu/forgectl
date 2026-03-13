@@ -332,6 +332,59 @@ describe("PipelineExecutor", () => {
     expect(executeRun).toHaveBeenCalledTimes(1); // only a ran
   });
 
+  // ── Dry-run condition annotation tests ────────────────────────────────────
+
+  it("dry-run: conditional node with condition true on happy path is annotated RUN", async () => {
+    const pipeline = makePipeline([
+      { id: "build", task: "build it" },
+      { id: "deploy", task: "deploy it", depends_on: ["build"], condition: 'build == "completed"' },
+    ]);
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const executor = new PipelineExecutor(pipeline, { dryRun: true });
+    const result = await executor.execute();
+    consoleSpy.mockRestore();
+
+    expect(result.status).toBe("completed");
+    expect(executeRun).not.toHaveBeenCalled();
+    // deploy was annotated RUN (condition is true on happy path)
+    expect(result.nodes.get("deploy")!.status).toBe("pending"); // not overridden since RUN
+  });
+
+  it("dry-run: conditional node with condition false on happy path is annotated SKIP", async () => {
+    // if_failed shorthand: condition is `build == "failed"` — false on happy path
+    const pipeline = makePipeline([
+      { id: "build", task: "build it" },
+      { id: "notify", task: "notify failure", depends_on: ["build"], condition: 'build == "failed"' },
+    ]);
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const executor = new PipelineExecutor(pipeline, { dryRun: true });
+    const result = await executor.execute();
+    consoleSpy.mockRestore();
+
+    expect(result.status).toBe("completed");
+    expect(executeRun).not.toHaveBeenCalled();
+    // notify is skipped on happy path (condition false)
+    expect(result.nodes.get("notify")!.status).toBe("skipped");
+    expect(result.nodes.get("notify")!.skipReason).toContain("condition false on happy path");
+  });
+
+  it("dry-run: invalid condition expression reports error and fails pipeline", async () => {
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: "!!@@invalid!!" },
+    ]);
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const executor = new PipelineExecutor(pipeline, { dryRun: true });
+    const result = await executor.execute();
+    consoleSpy.mockRestore();
+
+    expect(result.status).toBe("failed");
+    expect(executeRun).not.toHaveBeenCalled();
+  });
+
   it("checkpoint-hydrated skips do not trigger cascade skip", async () => {
     // a is hydrated from checkpoint (status=skipped + hydratedFromCheckpoint + result.success)
     // b depends on a and has no condition — b should execute (NOT be cascade-skipped)

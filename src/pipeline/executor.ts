@@ -14,7 +14,7 @@ import type {
   ResolvedFileArtifact,
 } from "./types.js";
 import { collectAncestors, collectDescendants, validateDAG, topologicalSort, buildDependentsMap } from "./dag.js";
-import { evaluateCondition, ConditionSyntaxError, ConditionVariableError } from "./condition.js";
+import { evaluateCondition } from "./condition.js";
 import type { NodeStatusContext } from "./condition.js";
 import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
@@ -110,7 +110,9 @@ export class PipelineExecutor {
     const dependentsMap = buildDependentsMap(this.pipeline);
     const maxParallel = this.options.maxParallel ?? 3;
 
-    let pipelineStatus: "running" | "completed" | "failed" = "running";
+    // Use a mutable object so TypeScript doesn't narrow the type when processNode
+    // sets pipeline_state.status inside an async closure
+    const pipeline_state = { status: "running" as "running" | "completed" | "failed" };
 
     // Track in-flight promises
     const inFlight = new Map<string, Promise<void>>();
@@ -214,7 +216,7 @@ export class PipelineExecutor {
             status: "failed",
             error: errMsg,
           });
-          pipelineStatus = "failed";
+          pipeline_state.status = "failed";
           return;
         }
 
@@ -285,7 +287,7 @@ export class PipelineExecutor {
       }
       if (inFlight.size > 0) await Promise.race(inFlight.values());
       // If pipeline failed due to fatal condition error, stop processing
-      if (pipelineStatus === "failed") break;
+      if (pipeline_state.status === "failed") break;
     }
 
     // Wait for any remaining in-flight nodes (if we broke early due to failure)
@@ -296,17 +298,17 @@ export class PipelineExecutor {
     // Determine overall status
     const allStatuses = [...this.nodeStates.values()].map(s => s.status);
     if (allStatuses.some(s => s === "failed")) {
-      pipelineStatus = "failed";
+      pipeline_state.status = "failed";
     } else if (allStatuses.every(s => s === "completed" || s === "skipped")) {
-      pipelineStatus = "completed";
+      pipeline_state.status = "completed";
     }
 
     emitRunEvent({
       runId: this.pipelineRunId,
-      type: pipelineStatus === "completed" ? "completed" : "failed",
+      type: pipeline_state.status === "completed" ? "completed" : "failed",
       timestamp: new Date().toISOString(),
       data: {
-        status: pipelineStatus,
+        status: pipeline_state.status,
         completed: allStatuses.filter(s => s === "completed").length,
         failed: allStatuses.filter(s => s === "failed").length,
         skipped: allStatuses.filter(s => s === "skipped").length,
@@ -316,7 +318,7 @@ export class PipelineExecutor {
     return {
       id: this.pipelineRunId,
       pipeline: this.pipeline,
-      status: pipelineStatus,
+      status: pipeline_state.status,
       nodes: new Map(this.nodeStates),
       startedAt,
       completedAt: new Date().toISOString(),
@@ -649,48 +651,63 @@ export class PipelineExecutor {
     return { dir };
   }
 
-  private getDependencyIssues(deps: string[]): string[] {
-    const issues: string[] = [];
-    for (const dep of deps) {
-      const state = this.nodeStates.get(dep);
-      if (!state) {
-        issues.push(`Dependency ${dep} has no state`);
-        continue;
-      }
-
-      if (state.status === "failed") {
-        issues.push(`Dependency ${dep} failed`);
-        continue;
-      }
-
-      if (state.status === "completed") {
-        if (!state.result?.success) {
-          issues.push(`Dependency ${dep} completed unsuccessfully`);
-        }
-        continue;
-      }
-
-      if (state.status === "skipped") {
-        const hydratedSuccess = Boolean(state.result?.success && state.result.output);
-        if (!hydratedSuccess) {
-          issues.push(`Dependency ${dep} was skipped without hydrated output`);
-        }
-        continue;
-      }
-
-      if (state.status === "pending" || state.status === "running") {
-        issues.push(`Dependency ${dep} is not finished (${state.status})`);
-      }
-    }
-
-    return issues;
-  }
-
   private buildDryRunResult(startedAt: string): PipelineRun {
     const order = topologicalSort(this.pipeline);
     const nodeMap = new Map(this.pipeline.nodes.map(n => [n.id, n]));
+    const dryRunErrors: string[] = [];
 
-    console.log(chalk.bold(`\n📋 Pipeline: ${this.pipeline.name} (dry run)\n`));
+    // Simulate happy-path condition evaluation: all ancestors are "completed"
+    // Walk in topo order, tracking which nodes would run on happy path
+    const happyPathStatus = new Map<string, "completed" | "skipped">();
+    for (const nodeId of order) {
+      happyPathStatus.set(nodeId, "completed");
+    }
+
+    // Evaluate conditions on happy path to determine SKIP/RUN annotations
+    const conditionAnnotations = new Map<string, { outcome: "RUN" | "SKIP"; detail: string }>();
+    for (const nodeId of order) {
+      const node = nodeMap.get(nodeId)!;
+      if (node.condition === undefined) continue;
+
+      // Build simulated context: all ancestor nodes = "completed"
+      const simCtx: NodeStatusContext = {};
+      for (const dep of node.depends_on ?? []) {
+        simCtx[dep] = "completed";
+      }
+
+      try {
+        const result = evaluateCondition(node.condition, simCtx);
+        if (result) {
+          conditionAnnotations.set(nodeId, {
+            outcome: "RUN",
+            detail: `condition: ${node.condition} -> true on happy path`,
+          });
+        } else {
+          conditionAnnotations.set(nodeId, {
+            outcome: "SKIP",
+            detail: `condition: ${node.condition} -> false on happy path`,
+          });
+          // Mark as skipped in happy-path simulation
+          happyPathStatus.set(nodeId, "skipped");
+          // Update node state to reflect dry-run skip
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "skipped",
+            skipReason: `dry-run: condition false on happy path: ${node.condition}`,
+          });
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        dryRunErrors.push(`Node "${nodeId}": ${errMsg}`);
+        conditionAnnotations.set(nodeId, {
+          outcome: "SKIP",
+          detail: `condition error: ${errMsg}`,
+        });
+      }
+    }
+
+    // Render output
+    console.log(chalk.bold(`\nPipeline: ${this.pipeline.name} (dry run)\n`));
     if (this.pipeline.description) {
       console.log(chalk.gray(`  ${this.pipeline.description}\n`));
     }
@@ -702,15 +719,32 @@ export class PipelineExecutor {
       const workflow = node.workflow ?? this.pipeline.defaults?.workflow ?? "code";
       const agent = node.agent ?? this.pipeline.defaults?.agent ?? "codex";
       const deps = node.depends_on?.join(", ") ?? "(root)";
-      console.log(chalk.gray(`    ${i + 1}. ${nodeId} [${workflow}/${agent}] depends: ${deps}`));
+      const annotation = conditionAnnotations.get(nodeId);
+
+      let line = chalk.gray(`    ${i + 1}. ${nodeId} [${workflow}/${agent}] depends: ${deps}`);
+      if (annotation) {
+        const color = annotation.outcome === "RUN" ? chalk.green : chalk.yellow;
+        line += `  ${color(annotation.outcome)} (${annotation.detail})`;
+      }
+      console.log(line);
       console.log(chalk.gray(`       Task: ${node.task.slice(0, 80)}${node.task.length > 80 ? "..." : ""}`));
     }
     console.log();
 
+    if (dryRunErrors.length > 0) {
+      console.log(chalk.red(`  DRY RUN ERRORS:`));
+      for (const err of dryRunErrors) {
+        console.log(chalk.red(`    - ${err}`));
+      }
+      console.log();
+    }
+
+    const hasFatalErrors = dryRunErrors.length > 0;
+
     return {
       id: this.pipelineRunId,
       pipeline: this.pipeline,
-      status: "completed",
+      status: hasFatalErrors ? "failed" : "completed",
       nodes: this.nodeStates,
       startedAt,
       completedAt: startedAt,
