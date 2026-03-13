@@ -160,7 +160,7 @@ Plans:
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
-| 21. Conditional Pipeline Nodes | 2/2 | Complete   | 2026-03-13 | - |
+| 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
