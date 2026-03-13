@@ -4,6 +4,7 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { ParsedCommand, RepoContext, IssueContext } from "./types.js";
 import type { RunRepository, RunRow } from "../storage/repositories/runs.js";
 import type { ResumeResult } from "../durability/pause.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { parseSlashCommand, buildErrorMessage } from "./commands.js";
 import { hasWriteAccess } from "./permissions.js";
 
@@ -27,6 +28,8 @@ export interface WebhookDeps {
   findWaitingRunForIssue?: (owner: string, repo: string, issueNumber: number) => RunRow | undefined;
   /** Resume a paused run with human input. */
   resumeRun?: (runRepo: RunRepository, runId: string, humanInput: string) => ResumeResult;
+  /** Optional sub-issue cache for invalidation on issue edits. */
+  subIssueCache?: SubIssueCache;
 }
 
 /**
@@ -104,6 +107,13 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
       repo: repository.name,
     };
     deps.onDispatch(trackerIssue, octokit as unknown as Octokit, repo);
+  });
+
+  // Cache invalidation: clear sub-issue cache entry when an issue is edited
+  app.webhooks.on("issues.edited", async ({ payload }) => {
+    if (deps.subIssueCache) {
+      deps.subIssueCache.invalidate(String(payload.issue.number));
+    }
   });
 
   // Comment handler: parse slash commands, check permissions, dispatch

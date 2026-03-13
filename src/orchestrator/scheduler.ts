@@ -7,6 +7,7 @@ import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 
@@ -25,6 +26,8 @@ export interface TickDeps {
   runRepo?: RunRepository;
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
+  /** Optional sub-issue cache for populating terminalIssueIds (SUBISSUE-03). */
+  subIssueCache?: SubIssueCache;
 }
 
 /**
@@ -60,8 +63,18 @@ export async function tick(deps: TickDeps): Promise<void> {
     return;
   }
 
-  // Step 4: Filter candidates (terminalIds from config)
-  const terminalIds = new Set<string>(); // Built from recent reconciliation data
+  // Step 4: Build terminalIssueIds from SubIssueCache (SUBISSUE-03), then filter candidates
+  const terminalIds = new Set<string>();
+  if (deps.subIssueCache) {
+    const terminalStates = new Set(deps.config.tracker?.terminal_states ?? ["closed"]);
+    for (const entry of deps.subIssueCache.getAllEntries()) {
+      for (const [childId, childState] of entry.childStates) {
+        if (terminalStates.has(childState)) {
+          terminalIds.add(childId);
+        }
+      }
+    }
+  }
   const doneLabel = config.tracker?.done_label;
   const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
 
