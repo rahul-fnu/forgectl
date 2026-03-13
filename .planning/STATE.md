@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
-status: planning
-stopped_at: Phase 20 context gathered
-last_updated: "2026-03-12T06:12:08.380Z"
-last_activity: 2026-03-12 — Roadmap created, 26 requirements mapped to 5 phases (20-24)
+status: executing
+stopped_at: Completed 20-01-PLAN.md
+last_updated: "2026-03-13T02:54:00.000Z"
+last_activity: 2026-03-13 — Phase 20 Plan 01 complete (schema migration, delegations repo, pipeline types, filtrex)
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 1
+  completed_plans: 1
+  percent: 20
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 ## Current Position
 
 Phase: 20 of 24 (Schema Foundation)
-Plan: 0 of 1 in current phase
-Status: Ready to plan
-Last activity: 2026-03-12 — Roadmap created, 26 requirements mapped to 5 phases (20-24)
+Plan: 1 of 1 in current phase (Phase 20 complete)
+Status: Executing — Phase 21 next
+Last activity: 2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -43,7 +43,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 20. Schema Foundation | TBD | - | - |
+| 20. Schema Foundation | 1 | 12min | 12min |
 | 21. Conditional Nodes | TBD | - | - |
 | 22. Loop Nodes | TBD | - | - |
 | 23. Delegation | TBD | - | - |
@@ -57,6 +57,10 @@ Progress: [░░░░░░░░░░] 0%
 - [v2.1 roadmap]: Phase 23 (Delegation) depends only on Phase 20, not on pipeline phases — can be planned in parallel after Phase 20 ships
 - [v2.1 roadmap]: filtrex ^3.1.0 is the chosen expression evaluator (zero deps, ESM, boolean-first, sandboxed)
 - [v2.1 roadmap]: Two-tier slot pool required before any delegation code — design decision deferred to Phase 23 plan
+- [20-01]: delegations table uses INTEGER AUTOINCREMENT id — repo uses Number(result.lastInsertRowid) for BigInt conversion
+- [20-01]: filtrex installed but not imported in any src/ file — noUnusedLocals:true would error; Phase 21 adds the import
+- [20-01]: All 5 new runs columns are nullable/defaulted — backward compat, existing INSERT calls unchanged
+- [20-01]: updateStatus() in DelegationRepository auto-sets completedAt when status is 'completed' or 'failed'
 
 ### Pending Todos
 
@@ -69,6 +73,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T06:12:08.375Z
-Stopped at: Phase 20 context gathered
-Resume file: .planning/phases/20-schema-foundation/20-CONTEXT.md
+Last session: 2026-03-13T02:54:00.000Z
+Stopped at: Completed 20-01-PLAN.md
+Resume file: .planning/phases/20-schema-foundation/20-01-SUMMARY.md

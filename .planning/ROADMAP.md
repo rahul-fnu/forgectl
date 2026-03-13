@@ -47,7 +47,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 **Milestone Goal:** Enable forgectl to autonomously decompose complex issues into subtasks, delegate to child agents, and self-correct through conditional/loop pipeline nodes.
 
-- [ ] **Phase 20: Schema Foundation** — SQLite migration and PipelineNode type extensions that all v2.1 features depend on
+- [x] **Phase 20: Schema Foundation** — SQLite migration and PipelineNode type extensions that all v2.1 features depend on
 - [ ] **Phase 21: Conditional Pipeline Nodes** — if/else branch routing with safe expression evaluation and executor ready-queue refactor
 - [ ] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery
 - [ ] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation
@@ -68,7 +68,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 **Plans:** 1 plan
 
 Plans:
-- [ ] 20-01: Schema migration, PipelineNode type extensions, and filtrex installation
+- [x] 20-01: Schema migration, PipelineNode type extensions, and filtrex installation (2026-03-13)
 
 ### Phase 21: Conditional Pipeline Nodes
 **Goal**: Pipeline YAML supports if/else branch routing — the executor evaluates conditions at runtime, skips false-branch nodes, surfaces skip status in the API, and treats condition errors as fatal
@@ -159,7 +159,7 @@ Plans:
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
-| 20. Schema Foundation | v2.1 | 0/1 | Not started | - |
+| 20. Schema Foundation | v2.1 | 1/1 | Complete | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | v2.1 | 0/2 | Not started | - |
 | 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
