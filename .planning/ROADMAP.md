@@ -63,7 +63,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   2. Sub-issue relationships appear in TrackerIssue as populated `blocked_by` entries, not an empty set
   3. If a sub-issue DAG contains a cycle (from manual overrides), the orchestrator posts a GitHub comment identifying the cycle and skips dispatch rather than hanging
   4. The GitHub internal resource ID for each issue is stored in metadata and survives across polling cycles
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 25-01-PLAN.md — SubIssueCache and cycle detection modules (new standalone files + tests)
 - [ ] 25-02-PLAN.md — Wire into GitHub adapter, scheduler, and webhooks
@@ -123,7 +123,7 @@ Plans:
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
-| 25. Sub-Issue DAG | v3.0 | 0/2 | Planning | - |
+| 25. Sub-Issue DAG | 1/2 | In Progress|  | - |
 | 26. Skill Mounting | v3.0 | 0/TBD | Not started | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
