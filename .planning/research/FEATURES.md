@@ -1,367 +1,181 @@
 # Feature Landscape
 
-**Domain:** Durable AI agent runtime with persistent state, GitHub App interaction, audit trail, governance, and browser-use integration
-**Researched:** 2026-03-09
+**Domain:** AI agent orchestrator -- GitHub sub-issues, skill/config mounting, Claude Code agent teams
+**Researched:** 2026-03-13
+**Builds on:** forgectl v2.0 (existing orchestrator, tracker adapters, container sandbox, agent adapters)
 
 ---
 
-## 1. SQLite-Backed Persistent State with Migrations
+## Table Stakes
 
-### Table Stakes
+Features users expect given existing forgectl capabilities. Missing = orchestrator feels incomplete for multi-issue workflows.
 
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Schema-driven migrations with up/down | Any production system with evolving schema needs reversible migrations | Low | None (foundational) |
-| WAL mode for concurrent reads during writes | Without WAL, the daemon blocks reads during agent state writes; users will see stalls | Low | None |
-| Repository pattern (typed query/mutation functions) | Raw SQL scattered through business logic is unmaintainable; Drizzle's query builder handles this | Med | Schema design |
-| Atomic transactions for state transitions | Orchestrator state machine transitions must be atomic (claim + lock + update) or you get double-dispatch | Low | Schema design |
-| Connection pooling / singleton management | better-sqlite3 is synchronous; one connection per process, but must handle concurrent async callers safely | Low | None |
-| Graceful migration on first run | Users should not run a separate migration command; `forgectl orchestrate` should auto-migrate on startup | Low | Migration infra |
+### 1. GitHub Sub-Issue Fetching and DAG Construction
 
-### Differentiators
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| Fetch sub-issues via REST API (`GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues`) | Parent issues with sub-issues are standard GitHub workflow; orchestrator must see them | Medium | Existing `GitHubAdapter` in `src/tracker/github.ts` |
+| Build parent-child DAG from sub-issue relationships | Without this, orchestrator treats each sub-issue as independent work with no ordering | Medium | `TrackerIssue.blocked_by` field already exists but is always `[]` |
+| Populate `blocked_by` from sub-issue hierarchy | Existing orchestrator already filters on `blocked_by`; just needs real data | Low | Sub-issue fetch above |
+| Topological dispatch ordering respecting sub-issue hierarchy | Orchestrator should not start a child issue if its parent/blocker is incomplete | Low | Existing pipeline DAG executor has topological sort in `src/pipeline/` |
+| Store GitHub internal `id` in TrackerIssue metadata | REST sub-issue API requires internal numeric `id` (not issue `number` and not `node_id`) for POST/DELETE operations | Low | Extend `normalizeIssue()` to store `ghIssue.id` in `metadata` |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Schema versioning with rollback | Lets users downgrade forgectl versions without data loss | Med | Drizzle Kit generates SQL files; rollback requires storing down-migrations |
-| Query-level observability (slow query logging) | Debugging production issues when the daemon feels slow | Low | Log queries > N ms via better-sqlite3 verbose mode |
-| Backup on migration (automatic `.bak` before schema change) | Safety net for users self-hosting; SQLite file copy is trivial | Low | Copy file before `migrate()` |
-| Export/import (JSON dump of full DB state) | Disaster recovery, moving between machines | Med | Useful but not urgent |
+**Confidence:** HIGH -- GitHub sub-issues REST API is documented and GA. Endpoints: `GET`, `POST`, `DELETE` on `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues`, plus `PATCH .../sub_issues/priority` for reprioritize. Limits: 100 sub-issues per parent, 8 nesting levels.
 
-### Anti-Features
+**Critical API detail:** The REST `POST` endpoint to add a sub-issue requires the issue's internal numeric `id` (from the `id` JSON field), NOT the issue `number` and NOT the `node_id`. The existing adapter uses `ghIssue.number` for `TrackerIssue.id`. Sub-issue operations will need `ghIssue.id` stored in `metadata.github_internal_id`.
+
+### 2. CLAUDE.md / Skills / Agents Directory Mounting into Containers
+
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| Mount project `.claude/` directory into container | Claude Code inside containers cannot see project skills, CLAUDE.md, or agent definitions without this | Low | Existing `prepareClaudeMounts()` in `src/auth/mount.ts` already mounts `~/.claude` for OAuth; extend pattern |
+| Mount user-level `~/.claude/skills/` and `~/.claude/agents/` | Users' personal skills and agents (e.g., GSD framework at `~/.claude/skills/gsd-*/`) must be available inside the sandbox | Low | Same bind-mount pattern |
+| Mount project `.claude/skills/` and `.claude/agents/` | Project-specific skills and agent definitions checked into the repo | Low | Workspace already copied via `prepareRepoWorkspace()` -- `.claude/` just needs to not be in exclude list |
+| CLAUDE.md hierarchy preservation | Claude Code expects `~/.claude/CLAUDE.md` (global), `./CLAUDE.md` (project root), and nested `dir/CLAUDE.md` files | Low | Workspace copy already includes these if not excluded |
+| Read-only mount for skills/agents, writable for agent-memory | Skills and agents should not be modified by the sandbox agent; `~/.claude/agent-memory/` directories need write access for persistent memory feature | Medium | Split bind-mounts: `:ro` for skills/agents, writable tmpdir for memory |
+
+**Confidence:** HIGH -- Claude Code skill/agent/CLAUDE.md loading is purely file-system based and well-documented. Skill locations: `~/.claude/skills/<name>/SKILL.md` (user), `.claude/skills/<name>/SKILL.md` (project). Agent locations: `~/.claude/agents/<name>.md` (user), `.claude/agents/<name>.md` (project). Loading is hierarchical with priority: CLI flag > project > user > plugin.
+
+### 3. Agent Config Passthrough (--agents flag, --model, etc.)
+
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| Pass `--agents` JSON flag to Claude Code invocations | Allows forgectl to inject subagent definitions for in-container Claude Code sessions without files on disk | Low | Existing `claudeCodeAdapter.buildShellCommand()` in `src/agent/claude-code.ts` appends flags |
+| Pass `--agent <name>` flag to run Claude Code as a specific agent type | Enables running the main thread as a coordinator agent that can spawn subagents | Low | Same flag passthrough |
+| Configure model per-agent in WORKFLOW.md | Already partially supported (`agent.model`); ensure it flows through to `--model` flag | Low | Existing config merge |
+| Pass `--add-dir` for additional skill directories | Claude Code can load skills from additional directories; useful for shared skill repos | Low | Flag passthrough |
+
+**Confidence:** HIGH -- Claude Code CLI flags are well-documented. `--agents` accepts inline JSON with `description`, `prompt`, `tools`, `disallowedTools`, `model`, `permissionMode`, `mcpServers`, `hooks`, `maxTurns`, `skills`, `memory` fields. `--agent` sets main thread agent type.
+
+---
+
+## Differentiators
+
+Features that set forgectl apart from manual multi-agent workflows. Not expected, but highly valued.
+
+### 4. Automatic Sub-Issue DAG with Cross-Issue Dependency Resolution
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| Auto-discover full sub-issue tree (up to 8 levels deep) | No manual dependency annotation needed; orchestrator builds work graph from GitHub's native hierarchy | Medium | Sub-issue fetch, recursive traversal |
+| Merge sub-issue hierarchy with explicit blocked-by dependencies | GitHub has BOTH parent/child (sub-issues) AND blocking/blocked-by (dependencies) -- forgectl should unify both into one DAG | High | Two different API surfaces; dependency API access is unclear (see pitfall below) |
+| Progress rollup comments on parent issues | When sub-issues complete, post progress summary on parent ("3/5 sub-issues done, 2 in progress") | Medium | Existing `postComment()` on adapter |
+| Auto-close parent when all sub-issues complete | Natural completion semantics for hierarchical work | Low | Existing `updateState()` + `auto_close` config |
+| Create sub-issues from pipeline definitions | Allow forgectl to decompose a parent issue into sub-issues based on a pipeline YAML, then dispatch each | High | REST `POST /repos/{owner}/{repo}/issues` + sub-issue linking via internal `id` |
+
+### 5. Claude Code Agent Teams in Containers
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| Enable agent teams inside containers via environment variable | Multiple Claude Code instances collaborate on complex issues within a single sandbox | Low | Pass `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var to container |
+| Teammate isolation via git worktrees inside container | Each teammate gets its own worktree (Claude Code native `isolation: worktree` feature on subagents) | Medium | Container needs git installed, sufficient disk, worktree support |
+| Configure team structure in WORKFLOW.md | Define lead agent type, preferred teammate count, task decomposition hints | Medium | New `team:` config schema section |
+| Writable team state directories in container | Agent teams store state at `~/.claude/teams/{name}/config.json` and `~/.claude/tasks/{name}/`; these must be writable | Low | Writable bind-mount for `~/.claude/teams/` and `~/.claude/tasks/` |
+| Token budget awareness for teams | Teams use significantly more tokens (each teammate is a separate Claude instance); forgectl should enforce per-run budget limits | Medium | Existing cost tracking + team multiplier estimation |
+| In-process teammate mode (no tmux dependency) | Containers will not have tmux/iTerm2; in-process mode is the only viable option | Low | Set `--teammate-mode in-process` or config equivalent |
+
+**Confidence:** MEDIUM -- Agent teams are experimental (gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var). Known limitations: no session resumption with in-process teammates, task status can lag, one team per session, no nested teams, lead is fixed. Feature could change or be removed. The in-process mode works in any terminal, which is good for containers.
+
+### 6. Skill Injection and Custom Agent Definitions per Workflow
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| Workflow-specific skill bundles | Different workflows mount different skill sets (e.g., "api-conventions" for backend, "component-patterns" for frontend) | Medium | New `skills:` list in WORKFLOW.md front matter, selective skill directory mounting |
+| Workflow-specific agent definitions (subagents) | Each workflow defines specialized subagents (e.g., code-reviewer, test-writer) that Claude Code can delegate to | Medium | Mount `.claude/agents/` or pass `--agents` JSON |
+| Dynamic skill generation from issue context | Generate a temporary SKILL.md from the issue description/labels to guide the agent | Medium | Template expansion into `.claude/skills/` before mount |
+| Preload skills into subagents via agent definition | Subagent `skills:` field injects full skill content at startup -- no discovery needed | Low | Agent definitions with `skills` field in frontmatter |
+
+---
+
+## Anti-Features
+
+Features to explicitly NOT build.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| PostgreSQL / MySQL support | Adds operational complexity (connection management, hosting, config). SQLite handles single-machine workloads up to hundreds of thousands of runs. Scale later if needed. | Stick with SQLite via better-sqlite3. Abstract behind repository pattern so swapping drivers is possible but not planned. |
-| ORM auto-sync (push schema without migrations) | Drizzle supports `push` for dev, but it is destructive in production. Generates no migration files, so you cannot audit what changed. | Always use `drizzle-kit generate` to produce migration SQL files. Use `push` only in dev/test. |
-| Embedded migration runner as separate CLI | Adds friction. Users forget to run it. | Auto-migrate on daemon start with version check. |
-| Multi-database sharding | Premature optimization for single-machine | Single SQLite file per installation |
-
-### Complexity Assessment
-
-**Overall: LOW-MEDIUM.** Drizzle ORM + better-sqlite3 is well-documented and widely adopted for exactly this use case. The main complexity is schema design (getting tables right for identity, runs, events, approvals, costs) rather than the infrastructure itself.
-
-### Dependencies on Existing Features
-
-- Replaces file-based `RunLog` JSON writer (`src/logging/run-log.ts`) as the primary persistence layer
-- Replaces in-memory orchestrator state (`src/orchestrator/`) with SQLite-backed state
-- Must preserve backward compatibility: existing `forgectl run` still works, just writes to SQLite instead of JSON files
-- PID file management (`src/daemon/`) stays file-based (appropriate for PID lifecycle)
+| Custom inter-agent messaging protocol | Claude Code agent teams already have mailbox messaging and shared task lists; don't reinvent | Use native agent team communication; forgectl orchestrates at the issue/container level |
+| Persistent agent team sessions across issues | Agent teams are experimental and don't support session resumption; coupling forgectl to this is fragile | Spawn fresh teams per issue; use forgectl checkpoints for durable state |
+| Nested agent teams (teams spawning sub-teams) | Claude Code explicitly prohibits this -- teammates cannot spawn their own teams | Decompose work via sub-issues instead; one team per leaf issue |
+| Real-time streaming of teammate output to dashboard | Adds massive complexity; teammates run inside containers with their own contexts | Collect results after completion; post summaries to GitHub comments |
+| Full CQRS for sub-issue state | Already decided against CQRS in v2.0; sub-issue state lives in GitHub | Poll GitHub for state; use flight recorder for audit trail |
+| Managing GitHub Projects boards | Out of scope; forgectl manages issues, not project views | Users manage board views in GitHub UI |
+| Sub-issue creation across repositories | GitHub sub-issues work within a single repo; cross-repo adds enormous complexity | Keep sub-issues within the configured repo; document limitation |
+| Split-pane teammate mode in containers | Requires tmux/iTerm2 which containers do not have; adds unnecessary dependency | Always use `in-process` teammate mode in containers |
+| Mounting entire `~/.claude/` writable | Security risk -- agent could modify user's global config, settings, or credentials | Mount specific subdirectories; skills/agents as `:ro`, only agent-memory as writable |
+| Skill marketplace / skill package manager | Over-engineering for v2.1; manual skill placement works fine | Users place skills in `.claude/skills/` or mount via WORKFLOW.md config |
 
 ---
 
-## 2. GitHub App Interaction Model
-
-### Table Stakes
-
-Studied: Dependabot, Renovate, GitHub Copilot coding agent, Probot framework.
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Webhook receiver with HMAC-SHA256 verification | Any GitHub App must verify webhook signatures. Without this, anyone can POST fake events. | Low | Fastify route |
-| Bot identity (`forgectl[bot]` comments) | Users expect a recognizable bot persona. Dependabot and Copilot both do this. | Low | GitHub App registration |
-| Label-based triggers (`issues.labeled`) | The simplest trigger model. Dependabot uses config, Copilot uses assignment. Label is most explicit. | Low | Webhook receiver |
-| Structured issue comments (status, result, cost) | Dependabot and Copilot both post structured markdown. This IS the UI for mobile users. | Med | Flight recorder (for data), template engine |
-| Basic slash commands (`/run`, `/rerun`, `/stop`, `/status`) | Copilot uses `@copilot` mentions. Renovate uses checkboxes in its dashboard issue. Slash commands are the standard for bots. | Med | Comment webhook + command parser |
-| Permission checks (only collaborators can issue commands) | Without this, any commenter can trigger expensive runs. Dependabot restricts to maintainers. | Low | GitHub API `get collaborator` |
-| PR creation with structured description | Copilot creates PRs with plans. Dependabot creates PRs with changelogs. The PR body IS the audit trail for reviewers. | Med | Git output mode, template engine |
-| Check runs on created PRs | Standard for any bot that creates PRs. Shows validation status inline in the PR. | Med | GitHub Checks API |
-| Webhook event deduplication | GitHub retries webhooks on timeout. Without dedup, you dispatch the same issue twice. | Low | Run ID + idempotency key |
-| Fallback to polling for self-hosted without webhooks | Not everyone can expose a public endpoint. Existing polling must keep working. | Low | Already built in v1.0 |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Reactions as approvals (thumbs-up = approve) | Phone-friendly. One tap to approve. No bot in the market does this well for autonomous agents. | Med | Reaction webhook + approval system integration |
-| Conversational clarification (mid-run questions) | The agent asks a question in a comment, pauses, resumes when you reply. This is the "from your phone" killer feature. Copilot does a version of this but limited to plan review. | High | Durable execution (pause/resume), context serialization |
-| Dynamic autonomy escalation | Agent running in `full` mode encounters something unexpected, auto-escalates to ask. No existing bot does this. | High | Governance system, agent state machine |
-| `/forgectl decompose` (break issue into sub-issues) | Manager agent creates sub-issues. Unique to multi-agent orchestration. | High | Multi-agent delegation (Phase 9) |
-| Comment templates customizable per workflow | Different workflows need different comment styles. WORKFLOW.md controls the bot's voice. | Med | Template engine in WORKFLOW.md |
-| Auto-close issue on PR merge | Full lifecycle: issue -> agent -> PR -> merge -> auto-close with summary. Dependabot does this for dependency PRs. | Low | PR merge webhook |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Probot as a framework dependency | Probot adds opinions about app lifecycle, logging, and configuration that conflict with forgectl's existing Fastify daemon. It was valuable in 2018-2022 but modern GitHub App development is straightforward with octokit + raw webhooks. | Use `@octokit/app` + `@octokit/webhooks` directly. Handle webhook routing in Fastify. |
-| Dependency Dashboard issue (Renovate-style) | Renovate creates a persistent "Dependency Dashboard" issue that lists all pending updates. This pattern becomes noisy for general-purpose agent work. | Use per-issue comments. Status lives where the work lives. |
-| Excessive slash commands at launch | Every command is a maintenance burden. Renovate has dozens of checkbox options; it overwhelms new users. | Ship 6 commands: `/run`, `/rerun`, `/stop`, `/status`, `/approve`, `/help`. Add more based on real usage. |
-| GitHub Actions as the runtime | Some bots run inside Actions. This limits execution to 6 hours, provides no persistent state, and is expensive at scale. | forgectl IS the runtime. The GitHub App is just the interaction surface. |
-| Bidirectional issue sync | Syncing issue state between GitHub and an internal tracker adds enormous complexity (conflict resolution, ordering). Linear does this and it is their entire product. | One-way: GitHub issues trigger work. forgectl writes results back as comments and PRs. Internal state is in SQLite. |
-
-### Complexity Assessment
-
-**Overall: HIGH.** The GitHub App is the most complex feature in the milestone. Sub-phasing (6a-6e) is essential. The core bot (6a) is medium complexity. Conversational clarification (6c) is the hardest part -- it requires durable execution, context serialization, and reliable webhook-to-run matching.
-
-### Dependencies on Existing Features
-
-- **Fastify daemon** (`src/daemon/`): webhook receiver is a new route group (`/webhooks/github`)
-- **Tracker adapter** (`src/tracker/`): GitHub App replaces polling for repos where it is installed; polling remains as fallback
-- **Orchestrator** (`src/orchestrator/`): webhook events enqueue into the existing RunQueue
-- **Output** (`src/output/`): PR creation extends the existing git output mode
-- **Durable execution**: conversational clarification requires pause/resume (Phase 4)
-- **Governance**: reactions-as-approvals requires the approval system (Phase 5)
-
----
-
-## 3. Event-Sourced Audit Trail / Flight Recorder
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Append-only event log per run | Core of event sourcing. Every state change is an immutable event. This is what makes runs inspectable and replayable. | Med | SQLite storage (Phase 1) |
-| Event types covering the full run lifecycle | `run_started`, `prompt_built`, `agent_invoked`, `tool_called`, `validation_started`, `validation_passed`, `validation_failed`, `retry_scheduled`, `cost_incurred`, `run_completed`, `run_failed` | Med | Schema design |
-| Structured event payloads (not just strings) | Events need typed metadata: timestamps, durations, token counts, file paths, exit codes. Otherwise the audit trail is useless for debugging. | Med | Zod schemas for each event type |
-| Query by run ID, agent, issue, time range | Operators need to filter runs. "Show me all failed runs for agent X in the last 24 hours." | Low | SQLite indexes |
-| CLI inspection (`forgectl run inspect <run-id>`) | Operators should not need to query SQLite directly. | Low | CLI command + query layer |
-| Cost event tracking (tokens, model, provider, cents) | Budget enforcement depends on accurate cost data. Every LLM call records its cost. | Med | Agent adapter hooks |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| State reconstruction from events | Rebuild the current state of any run from its event history (event sourcing, not just event logging). Enables time-travel debugging. | High | Requires event replay logic, projection functions |
-| Rich write-back to GitHub/Notion | The audit trail IS the comment. Structured summaries with files changed, validation results, cost breakdown, PR link. This replaces the need for a dashboard for 80% of use cases. | Med | Template engine, tracker write-back |
-| Conversation events (clarification Q&A in the event stream) | Questions asked and answers received become part of the audit trail. Full context of human-agent interaction is preserved. | Med | Durable execution (Phase 4) |
-| Diff/commit recording | Record what the agent actually changed (git diff summaries, file list). Enables "what did the agent do?" without reading the PR. | Med | Git integration in output module |
-| Event streaming (SSE/WebSocket for live run monitoring) | Watch a run in real-time from the dashboard. Existing `RunEvent` emitter in v1 can feed this. | Med | Already have `RunEvent` emitter; need to bridge to SSE |
-| Retention policies (auto-archive old events) | Without retention, the SQLite DB grows unbounded. Archive events older than N days to compressed files. | Low | Scheduled cleanup task |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Full CQRS (separate read/write databases) | Massively over-engineered for a single-machine daemon. CQRS is for distributed systems with different scaling needs for reads vs writes. | Single SQLite database with append-only events table and materialized views (or denormalized query tables) for fast reads. |
-| Event store as a separate service (EventStoreDB, Kafka) | External dependency for a self-hosted CLI tool is a non-starter. | SQLite events table with auto-incrementing sequence numbers. |
-| Replaying events to rebuild entire system state on startup | Slow startup, complex replay logic. Fine for a bank, overkill for an agent runtime. | Maintain current state in separate tables. Events are the audit trail, not the primary state store. Use events for inspection and debugging, not for running the system. |
-| Recording raw LLM responses | Token-for-token recording of model outputs is expensive (storage), potentially contains sensitive code, and rarely useful. | Record: prompt hash, model, token counts, cost, duration, tool calls. Not the full response body. |
-
-### Complexity Assessment
-
-**Overall: MEDIUM.** The event logging itself is straightforward (append rows to an events table). The complexity is in (a) designing event schemas that cover all cases without being too granular, and (b) rich write-back formatting that is actually useful and not noisy.
-
-### Dependencies on Existing Features
-
-- **Logging** (`src/logging/`): the existing `RunEvent` emitter and `RunLog` JSON writer are the starting point; flight recorder replaces RunLog as the persistence layer
-- **Agent adapters** (`src/agent/`): must emit cost events after each invocation
-- **Validation** (`src/validation/`): must emit validation pass/fail events with error details
-- **Tracker** (`src/tracker/`): write-back uses tracker adapters to post comments
-
----
-
-## 4. Durable Execution with Pause/Resume and Crash Recovery
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Crash recovery (resume interrupted runs on daemon restart) | If the daemon crashes mid-run, it must detect interrupted runs and either resume or mark them failed. Without this, runs silently disappear. | Med | SQLite state (Phase 1), reconciliation logic |
-| Idempotent step boundaries | Resuming a run must not re-execute completed steps. Each step records its completion status. | Med | Checkpoint storage |
-| Execution locks (one agent per issue at a time) | Without locks, two daemon restarts can dispatch two agents to the same issue. SQLite `BEGIN IMMEDIATE` provides atomic locking. | Low | SQLite transactions |
-| Heartbeat with stall detection | v1 has this in-memory. Must survive restarts: last heartbeat timestamp in SQLite, reconciler checks on startup. | Low | Existing stall detection + SQLite |
-| Configurable timeout per workflow | Some tasks take 5 minutes, some take 2 hours. Timeout must be in WORKFLOW.md. | Low | WORKFLOW.md extension |
-| State snapshot at step boundaries | Before each major step (prompt build, agent invoke, validation), snapshot current state so resume knows where to pick up. | Med | Event stream (Phase 3) |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Pause/resume for human clarification | Agent enters `waiting_for_input`, serializes context, releases container resources. Human replies (via GitHub comment), agent resumes with full context restored. This is the "conversation from your phone" feature. | High | Context serialization, container lifecycle, webhook-to-run matching |
-| Container reclamation during pause | While waiting for human input (could be hours), release the Docker container to free resources. Restore workspace from persistent storage when resuming. | High | Workspace persistence, container rebuild |
-| Invocation source tracking | Know whether a run was triggered by `timer`, `webhook`, `slash_command`, `label`, or `manual`. Affects priority and audit trail. | Low | Enum field on run record |
-| Wakeup coalescing | If 3 webhooks fire for the same issue within 5 seconds, dispatch once, not three times. | Med | Dedup with time window |
-| Graceful shutdown (drain active runs) | On `SIGTERM`, finish active runs (or checkpoint them) rather than killing mid-execution. | Med | Signal handling, checkpoint |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Full Temporal-style workflow replay | Temporal replays the entire workflow history on every decision point. This requires deterministic workflow code and a Temporal server. Far too heavy for a single-process daemon. | Simple checkpoint-resume: save state at step boundaries, resume from last checkpoint. No replay, no determinism requirement. |
-| CRIU-based container checkpointing (Trigger.dev-style) | CRIU freezes entire Linux processes. Requires root, kernel support, and is fragile across kernel versions. Trigger.dev runs their own infrastructure to support this. | Checkpoint at the application level: serialize run state to SQLite, not at the process/container level. |
-| Distributed execution across workers | Multiple workers picking up checkpointed runs adds consensus, state transfer, and networking complexity. | Single daemon, single machine. One process owns all runs. |
-| Persistent agent subprocesses across daemon restarts | Keeping a Claude Code subprocess alive across restarts requires PID management, signal forwarding, and is unreliable. | Kill agent subprocess on daemon stop. Resume by re-invoking agent with restored context (prior conversation, completed steps). |
-
-### Complexity Assessment
-
-**Overall: HIGH.** Crash recovery and idempotent steps are medium. Pause/resume for human clarification is the hardest feature in the milestone -- it requires clean context serialization (what does the agent need to know when it resumes?), container lifecycle management (keep warm vs. reclaim?), and reliable webhook-to-suspended-run matching.
-
-**Risk:** The "resume with full context" problem. When an agent pauses and resumes hours later, it gets a fresh invocation with injected context. The quality of that context injection determines whether the agent can actually continue effectively. This needs experimentation, not just engineering.
-
-### Dependencies on Existing Features
-
-- **Orchestrator** (`src/orchestrator/`): state machine gains `paused`, `waiting_for_input` states
-- **Agent** (`src/agent/`): session adapters need `serialize()` / `restore()` for context
-- **Workspace** (`src/workspace/`): workspaces must persist across container reclamation
-- **Container** (`src/container/`): must support "rebuild container for existing workspace"
-- **Flight recorder** (Phase 3): state snapshots are events in the audit trail
-
----
-
-## 5. Governance with Configurable Autonomy and Budget Enforcement
-
-### Table Stakes
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Autonomy levels per workflow (`full`, `semi`, `interactive`, `supervised`) | Different work needs different oversight. A typo fix should be `full`. A DB migration should be `supervised`. | Med | WORKFLOW.md extension |
-| Budget cap per workflow | "Don't spend more than $5 on this type of task." Without this, a runaway agent can burn $100 on a simple bug fix. | Med | Cost tracking (Phase 3), pre-flight check |
-| Pre-flight cost estimation | Before starting a run, estimate cost based on task complexity signals (issue length, file count, historical data). Block if estimate exceeds budget. | Med | Historical cost data |
-| Approval state machine (`pending -> approved/rejected`) | Approvals must be tracked, not ad-hoc. State machine prevents double-approval or approval after rejection. | Low | SQLite storage |
-| Auto-approve rules (cost < $X, files < N, has specific label) | Most runs should not require manual approval. Auto-approve is what makes `full` autonomy viable. | Med | Rule engine in governance module |
-| Budget exhaustion auto-pause | When a company/agent budget is depleted, pause all runs rather than silently failing or continuing to spend. | Med | Cost aggregation queries |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Dynamic escalation (agent self-escalates when uncertain) | An agent in `full` mode encounters 200 test failures it didn't expect and pauses to ask. No other agent runtime does this automatically. | High | Agent adapter integration, confidence signals |
-| Budget periods with auto-reset (monthly, weekly) | "$500/month for this agent" with automatic reset. Prevents one bad month from permanently blocking the agent. | Med | Scheduled budget reset |
-| Cost attribution per agent and per company | Multi-agent setups need to know which agent is expensive. Company-level budgets scope costs to projects. | Med | Identity model (Phase 2) |
-| Approval via GitHub reaction | Thumbs-up on the bot's "plan review" comment = approve. This is the mobile-first approval UX. | Med | GitHub App (Phase 6), reaction webhooks |
-| Configurable approval types | `expensive_run`, `destructive_change`, `plan_review`, custom types. Each type can have different approvers and rules. | Med | Extensible approval system |
-| Budget alerts (warn at 80%, pause at 100%) | Proactive warnings before budget is exhausted. Post a comment: "This agent has used 80% of its monthly budget." | Low | Threshold checks on cost events |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Role-based access control (RBAC) | Multi-user RBAC is a separate product concern. v2.0 is single-user. | Simple permission checks: is this person a repo collaborator? That is enough. |
-| Complex approval workflows (multi-approver, quorum) | Enterprise approval chains are scope creep. | Single approver per action. The repo maintainer approves. |
-| Real-time cost streaming from LLM providers | Most providers don't stream cost data. You get token counts after the call completes. | Calculate cost post-hoc from token counts and model pricing tables. |
-| Granular per-tool budgets | "Limit search to $0.50, code generation to $2.00" is too fine-grained. Users cannot reason about costs at this level. | Budget per run and per agent/period. Not per tool. |
-
-### Complexity Assessment
-
-**Overall: MEDIUM.** The autonomy levels and approval state machine are straightforward. Budget enforcement is medium (accounting is fiddly but not algorithmically hard). Dynamic escalation is the hard part -- it requires the agent to signal uncertainty, which depends on prompt engineering and agent adapter support.
-
-### Dependencies on Existing Features
-
-- **WORKFLOW.md** (`src/workflow/`): gains `autonomy` and `budget_cap` fields
-- **Config merge** (`src/config/`): governance settings participate in 4-layer merge
-- **Identity** (Phase 2): budget scoping requires agent/company identity
-- **Flight recorder** (Phase 3): cost events are audit trail events
-- **Agent adapters** (`src/agent/`): must report token usage per invocation
-
----
-
-## 6. Browser-Use Integration
-
-### Table Stakes
-
-If you are going to offer web research as a capability, these are expected.
-
-| Feature | Why Expected | Complexity | Depends On |
-|---------|--------------|------------|------------|
-| Browser-use runs inside a Docker container (sandboxed) | Browser automation must be sandboxed. A rogue browser session accessing arbitrary URLs is a security risk. | Med | Docker sandbox (`src/container/`) |
-| LLM-driven web navigation (search, read, extract) | The core value: agent can research topics by browsing the web, not just generating text. | Med | browser-use framework, LLM API key |
-| Structured output extraction (not raw HTML) | The agent should return structured findings (JSON, markdown), not browser screenshots. | Med | browser-use output parsing |
-| Configurable via WORKFLOW.md | A "research" workflow type that enables browser-use as a tool for the agent. | Low | WORKFLOW.md extension |
-| Cost tracking for browser-use sessions | Browser-use calls an LLM for every navigation decision. These costs must be tracked like any other LLM invocation. | Med | Cost tracking (Phase 3/5) |
-
-### Differentiators
-
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Browser-use as a tool available to coding agents | Not a separate workflow type -- the coding agent (Claude Code) can invoke browser-use as a tool when it needs to look something up. Research is embedded in the coding flow. | High | Tool registration, subprocess management, cross-language bridge |
-| Pre-built research workflow template | "Here is a research task, go find the answer on the web." A WORKFLOW.md template that sets up browser-use with appropriate prompts. | Low | WORKFLOW.md template |
-| Screenshot capture for audit trail | Record what the browser saw at each step. Useful for debugging and verification. | Med | Playwright screenshot API |
-| URL allowlist/blocklist | Restrict which sites the browser agent can visit. Important for security and cost control. | Low | Browser-use config |
-
-### Anti-Features
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Building a custom browser automation framework | browser-use exists, is well-maintained (50k+ GitHub stars), and handles the hard problems (element detection, navigation, error recovery). | Integrate browser-use as a subprocess. Do not rebuild. |
-| Browser-use in the same process as forgectl | browser-use is Python. forgectl is TypeScript. In-process integration is impossible. | Run browser-use as a Python subprocess inside the Docker container. Communicate via stdout/stdin JSON or a temporary file. |
-| Browser-use Cloud (hosted service) | Adds an external dependency and network latency. forgectl's value proposition is self-hosted. | Run browser-use locally inside the container with a headless Chromium. |
-| Real-time browser streaming to dashboard | Showing a live browser view in the web dashboard is cool but enormously complex (WebRTC, frame encoding). | Capture periodic screenshots and final page content. Display in audit trail. |
-| Replacing Claude Code's built-in web search | Claude Code and Codex may have their own web search tools. browser-use is for cases where you need deeper web interaction (filling forms, navigating multi-page flows, extracting structured data). | Position browser-use as a complementary tool, not a replacement for built-in search. |
-
-### Architecture Notes: Browser-Use Integration Model
-
-Browser-use is a **Python** library (Python 3.11+, Playwright, Chromium). forgectl is TypeScript. The integration model is:
-
-1. **Container image**: A `forgectl/research` Docker image that includes Python 3.11+, browser-use, Playwright, and Chromium alongside the standard forgectl agent tools.
-2. **Invocation**: The agent (Claude Code) calls browser-use as a tool via a shell command inside the container: `python3 /opt/browser-use/research.py --task "find pricing for X" --output /workspace/research.json`
-3. **Communication**: browser-use writes structured JSON output to a file. The agent reads the file and incorporates findings.
-4. **LLM keys**: browser-use uses the same BYOK API keys already configured in forgectl. Passed as environment variables into the container.
-5. **Cost tracking**: browser-use's LLM calls are tracked via a wrapper that logs token usage to a file, which forgectl collects post-run.
-
-**Confidence: MEDIUM.** This integration model is viable but untested. The cross-language bridge (TypeScript -> Python subprocess) adds operational complexity. The main risk is that browser-use's LLM usage is opaque -- tracking costs requires instrumenting browser-use or wrapping the LLM client.
-
-### Complexity Assessment
-
-**Overall: MEDIUM-HIGH.** The browser-use framework itself handles the hard browser automation problems. The complexity is in the integration: building the Docker image with Python + Chromium + browser-use, making it available as a tool to agents, and tracking costs across the TypeScript/Python boundary.
-
-### Dependencies on Existing Features
-
-- **Container** (`src/container/`): needs a new Docker image with Python + browser-use + Chromium
-- **Agent adapters** (`src/agent/`): agents must be able to invoke browser-use as a tool
-- **WORKFLOW.md** (`src/workflow/`): new workflow type or tool configuration
-- **Cost tracking** (Phase 3/5): must capture browser-use LLM costs
-
----
-
-## Feature Dependencies (Cross-Cutting)
+## Feature Dependencies
 
 ```
-Phase 1: SQLite Storage
+GitHub Internal ID Storage (1)
     |
-    +---> Phase 2: Identity (needs storage)
-    |         |
-    |         +---> Phase 5: Governance (needs identity for budget scoping)
-    |         |         |
-    |         |         +---> Phase 6: GitHub App (needs governance for approvals)
-    |         |
-    |         +---> Phase 3: Flight Recorder (needs identity for attribution)
-    |                   |
-    |                   +---> Phase 4: Durable Execution (needs events for state recovery)
-    |                             |
-    |                             +---> Phase 6: GitHub App (needs pause/resume for conversations)
-    |
-    +---> Browser-Use: Can be built independently (container + workflow config)
-          but cost tracking needs Phase 3/5
+    v
+Sub-Issue Fetch (1) --> DAG Construction (1) --> Topological Dispatch (1)
+                                              --> Progress Rollup (4)
+                                              --> Auto-Close Parent (4)
+                                              --> Sub-Issue Creation from Pipeline (4)
+
+Skill/Config Mounting (2) --> Agent Config Passthrough (3)
+                          |       |
+                          |       v
+                          |   Agent Teams in Containers (5)
+                          |       |
+                          |       v
+                          |   Team Config in WORKFLOW.md (5)
+                          |
+                          --> Skill Injection per Workflow (6)
+                          --> Dynamic Skill Generation (6)
+
+CLAUDE.md Mounting (2) --> Agent Definitions Mounting (2) --> Workflow-Specific Agents (6)
 ```
+
+**Critical path:** Sub-issue fetching must come first (unlocks DAG). Skill/config mounting must come before agent teams (teams need skills and agent definitions available in the container).
+
+---
 
 ## MVP Recommendation
 
-### Build first (foundation, no user-visible change):
-1. **SQLite storage** -- everything else depends on it
-2. **Identity model** -- budget scoping and audit attribution need it
+### Build first (foundation):
 
-### Build second (core value):
-3. **Flight recorder** -- makes every run inspectable; enables rich write-back
-4. **Durable execution** -- crash recovery, pause/resume
+1. **GitHub sub-issue fetching + `blocked_by` population** -- Immediately makes the existing orchestrator DAG-aware for real GitHub hierarchies. Low-medium complexity, high value. Extends existing `GitHubAdapter.normalizeIssue()` to store `ghIssue.id` in metadata and populate `blocked_by` from sub-issue parent relationships. The orchestrator's existing `blocked_by` filtering logic handles the rest.
 
-### Build third (the product):
-5. **Governance** -- budget enforcement, autonomy levels (can parallelize with Phase 4)
-6. **GitHub App** (sub-phased 6a-6e) -- the primary interaction surface
+2. **`.claude/` directory mounting (skills + agents + CLAUDE.md)** -- Unlocks customizable agent behavior inside containers. Low complexity, extends existing `prepareClaudeMounts()` pattern in `src/auth/mount.ts`. Foundation for both agent teams and skill injection.
+
+### Build second (configuration):
+
+3. **Agent config passthrough (`--agents`, `--agent`, `--add-dir` flags)** -- Low complexity, immediate value. Lets WORKFLOW.md define specialized agents and skills for Claude Code to use inside containers.
+
+4. **Workflow-specific skill/agent config in WORKFLOW.md** -- New `skills:` and `agents:` config sections that control what gets mounted and passed via CLI flags per workflow.
+
+### Build third (advanced):
+
+5. **Agent teams enablement** -- Pass `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, ensure writable `~/.claude/teams/` and `~/.claude/tasks/` directories, set `in-process` teammate mode. Medium complexity, high differentiator.
+
+6. **Sub-issue DAG features (progress rollup, auto-close parent)** -- Low-medium complexity, builds on foundation from step 1.
 
 ### Defer:
-- **Browser-use integration**: Build after the core runtime is solid. It is a capability extension, not a runtime requirement. Could be a v2.1 feature or a late v2.0 addition if time permits.
-- **Multi-agent delegation**: v2.1+
-- **Dashboard v2**: v2.1+, GitHub App is the primary UI
+- **Cross-issue dependency resolution (blocking/blocked-by)**: GitHub's dependency API for programmatic access is poorly documented; start with sub-issue hierarchy only.
+- **Sub-issue creation from pipelines**: Complex two-way sync; start with read-only consumption of existing sub-issues.
+- **Team task persistence across crashes**: Experimental feature limitations make this fragile; fresh teams per issue is safer.
+- **Dynamic skill generation from issue context**: Nice optimization but not needed for initial value.
+
+---
 
 ## Sources
 
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite)
-- [Drizzle ORM Migrations](https://orm.drizzle.team/docs/migrations)
-- [Drizzle vs Prisma comparison (2026)](https://www.bytebase.com/blog/drizzle-vs-prisma/)
-- [Node.js ORM comparison (2025)](https://thedataguy.pro/blog/2025/12/nodejs-orm-comparison-2025/)
-- [Probot framework](https://probot.github.io/docs/best-practices/)
-- [Probot slash commands extension](https://github.com/probot/commands)
-- [Renovate bot comparison](https://docs.renovatebot.com/bot-comparison/)
-- [GitHub Copilot coding agent interaction model](https://dev.to/pwd9000/using-github-copilot-coding-agent-for-devops-automation-3f43)
-- [Event sourcing as audit log (Event-Driven.io)](https://event-driven.io/en/audit_log_event_sourcing/)
-- [Event sourcing with Node.js (RisingStack)](https://blog.risingstack.com/event-sourcing-with-examples-node-js-at-scale/)
-- [Event sourcing explained (2025)](https://www.baytechconsulting.com/blog/event-sourcing-explained-2025)
-- [Temporal durable execution](https://temporal.io/product)
-- [Trigger.dev v3 checkpoint-resume](https://trigger.dev/docs/how-it-works)
-- [TypeScript orchestration comparison (Temporal vs Trigger.dev vs Inngest)](https://medium.com/@matthieumordrel/the-ultimate-guide-to-typescript-orchestration-temporal-vs-trigger-dev-vs-inngest-and-beyond-29e1147c8f2d)
-- [Agentic AI governance (McKinsey)](https://www.mckinsey.com/capabilities/risk-and-resilience/our-insights/trust-in-the-age-of-agents)
-- [AI agent governance principles (2025)](https://www.arionresearch.com/blog/g9jiv24e3058xsivw6dig7h6py7wml)
-- [browser-use GitHub repository](https://github.com/browser-use/browser-use)
-- [browser-use website](https://browser-use.com/)
-- [Agentic browser landscape (2026)](https://www.nohackspod.com/blog/agentic-browser-landscape-2026)
-- [Best cloud browser APIs (2026)](https://scrapfly.io/blog/posts/best-cloud-browser-apis)
+### HIGH Confidence
+- [GitHub REST API for sub-issues](https://docs.github.com/en/rest/issues/sub-issues) -- Official docs, GA endpoints
+- [GitHub sub-issues architecture blog post](https://github.blog/engineering/architecture-optimization/introducing-sub-issues-enhancing-issue-management-on-github/) -- 100 sub-issues per parent, 8 nesting levels
+- [GitHub issue dependencies docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies) -- blocked-by/blocking relationships
+- [Claude Code subagents documentation](https://code.claude.com/docs/en/sub-agents) -- Full subagent config: YAML frontmatter, --agents flag, tool restrictions, model selection, skills preloading, hooks, memory, worktree isolation
+- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) -- SKILL.md format, directory locations (`~/.claude/skills/`, `.claude/skills/`), frontmatter fields, context:fork, supporting files, --add-dir
+
+### MEDIUM Confidence
+- [Claude Code agent teams documentation](https://code.claude.com/docs/en/agent-teams) -- Experimental feature, requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var, shared task list, mailbox messaging, in-process and split-pane modes, known limitations
+- [GitHub sub-issues API practical guide](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- REST POST needs internal `id` not `number`; GraphQL needs `GraphQL-Features: sub_issues` header
+- [GSD (Get-Shit-Done) framework](https://github.com/gsd-build/get-shit-done) -- Real-world example of skill/agent mounting, `$HOME` path handling in containers
+
+### LOW Confidence
+- GitHub dependency API programmatic access -- Docs are UI-focused only; no clear REST endpoints for reading blocked-by/blocking relationships programmatically. May require GraphQL with undocumented schema fields. Needs phase-specific research before building.

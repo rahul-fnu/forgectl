@@ -1,201 +1,161 @@
 # Project Research Summary
 
-**Project:** forgectl v2.0 Durable Runtime
-**Domain:** Durable AI agent runtime with persistent state, event sourcing, governance, GitHub App interaction, and browser-use integration
-**Researched:** 2026-03-09
-**Confidence:** HIGH
+**Project:** forgectl v2.1 -- Sub-issue DAGs, Skill Mounting, Agent Teams
+**Domain:** AI agent orchestrator enhancement (Docker-based, GitHub-integrated)
+**Researched:** 2026-03-13
+**Confidence:** HIGH (stack, features, architecture) / MEDIUM (agent teams -- experimental)
 
 ## Executive Summary
 
-forgectl v2.0 transforms the existing v1.0 orchestrator from an ephemeral, in-memory runtime into a durable, persistent system capable of surviving crashes, pausing for human input, enforcing budgets, and interacting natively through GitHub. The research confirms this is achievable with a minimal dependency footprint: 5 new production dependencies (drizzle-orm, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest) layered onto the existing stack. No frameworks need replacement. The architecture is additive -- existing subsystems gain persistence and new interaction surfaces without architectural rewrites.
+forgectl v2.1 adds three capabilities to the existing orchestrator: GitHub sub-issue DAG dependencies for automatic work ordering, skill/config bind-mounting for customizable agent behavior inside containers, and Claude Code agent teams for intra-task parallelism. The critical finding across all research is that **zero new NPM dependencies are needed** -- all three features build on existing libraries (Octokit, Dockerode, Zod) and existing architectural patterns (TrackerIssue enrichment, ContainerMounts, prompt-level orchestration). This is integration work, not library adoption.
 
-The recommended approach is a strict bottom-up build order: storage layer first (SQLite + Drizzle), then identity, then the flight recorder (audit trail), then durable execution (crash recovery and pause/resume), then governance (budgets and approvals), and finally the GitHub App as the primary interaction surface. This order is dictated by hard dependencies: every subsystem above storage needs it, governance needs identity for budget scoping, the GitHub App needs both durable execution (for conversations) and governance (for approvals). Browser-use integration is architecturally independent and should be deferred to late v2.0 or v2.1.
+The recommended approach is a three-phase build following dependency order: sub-issues first (populates the already-existing but empty `blocked_by` field), skill mounting second (independent but prerequisite for teams), and agent teams third (depends on skills, highest risk). The architecture principle is **extend, don't restructure** -- each feature plugs into well-defined seams in the existing tracker/dispatcher/worker pipeline. Sub-issues enrich data at fetch time; the dispatcher's existing `filterCandidates()` logic handles the rest. Skills use the established `ContainerMounts` pattern. Teams are a prompt-level and env-level concern, not an architectural change.
 
-The primary risks are: (1) context serialization for pause/resume -- when an agent resumes hours later with injected context, quality depends on serialization fidelity, which needs experimentation not just engineering; (2) SQLite synchronous blocking under concurrent load -- better-sqlite3 blocks the event loop, requiring WAL mode, short transactions, and careful batching; (3) webhook signature verification against parsed bodies instead of raw bytes -- a common Fastify pitfall that silently breaks authentication. All three are well-understood and have documented mitigations.
+The top risks are: GitHub's sub-issue API uses internal resource IDs (not issue numbers), which will cause silent 404s if not handled; mounting `~/.claude/` for skills can expose OAuth tokens to container code; and agent teams spawn N+1 processes that will OOM the container without resource scaling. All three are well-understood with clear prevention strategies documented in PITFALLS.md. The agent teams feature carries additional risk as an experimental Claude Code capability -- session resumption is not supported, and the feature could change or be removed.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The v2.0 stack adds exactly 5 production dependencies and 3 dev dependencies to the existing v1.0 foundation. The key decision is using `@octokit/app` instead of Probot (which would conflict with the existing Fastify daemon) and `drizzle-orm` + `better-sqlite3` instead of heavier alternatives (Prisma, PostgreSQL, external event stores). No new dependencies are needed for event sourcing, governance state machines, or durable execution -- these are implemented with SQLite tables and existing patterns (discriminated unions, transition functions).
+No new dependencies. All three features build on the existing stack: `@octokit/rest` for sub-issue REST API calls via the existing `githubFetch()`, `dockerode` for additional bind mounts and env vars, and `zod` for new config schema sections. The existing `src/pipeline/dag.ts` provides DAG validation, cycle detection, and topological sort -- no graph library needed.
 
-**Core technologies:**
-- **drizzle-orm + better-sqlite3:** Embedded database with TypeScript-first ORM. SQLite handles single-machine workloads; WAL mode enables concurrent read/write. Drizzle provides typed queries and migration management without Prisma's binary engine overhead.
-- **@octokit/app:** GitHub App toolkit (JWT auth, installation tokens, webhook verification). Replaces Probot, which bundles Express and would conflict with Fastify. Provides the same `webhooks.on()` DX without framework baggage.
-- **@octokit/webhooks + @octokit/rest:** Type-safe webhook event handling and GitHub API client. Used via installation-scoped Octokit instances from @octokit/app.
+**Core technologies (all existing):**
+- `@octokit/rest` ^22.0.1: Sub-issue REST API calls -- GA endpoints, no special headers needed (unlike GraphQL)
+- `dockerode` ^4.0.2: Bind mounts for skills, env vars for teams, resource scaling
+- `zod`: New `skills`, `team`, and `subIssues` config schema sections
 
-**What NOT to add:** Probot (Express conflict), xstate (overkill for 4-state machines), Prisma (heavy), Temporal/Trigger.dev (require separate servers), BullMQ (requires Redis), EventStoreDB/Kafka (distributed overkill).
+**What NOT to add:** `@octokit/graphql` (REST is simpler), `graphlib`/`dagre` (existing DAG code suffices), tmux in containers (in-process mode works), any Claude Code SDK (does not exist).
 
 ### Expected Features
 
 **Must have (table stakes):**
-- Schema-driven migrations with WAL mode and auto-migrate on daemon startup
-- Repository pattern for all database access (typed query/mutation functions)
-- Webhook receiver with HMAC-SHA256 verification and event deduplication
-- Bot identity with structured issue comments (status, result, cost)
-- Label-based triggers and basic slash commands (/run, /rerun, /stop, /status, /approve, /help)
-- Append-only event log per run with typed event payloads
-- Crash recovery (resume or fail interrupted runs on daemon restart)
-- Idempotent step boundaries with checkpoint storage
-- Autonomy levels per workflow (full/semi/interactive/supervised)
-- Budget caps per workflow with pre-flight estimation
-- PR creation with structured descriptions and check runs
+- GitHub sub-issue fetching and `blocked_by` population -- orchestrator currently ignores sub-issue hierarchy
+- CLAUDE.md / skills / agents directory mounting into containers -- agents cannot access project or personal skills today
+- Agent config passthrough (`--agents`, `--agent`, `--add-dir` flags) -- necessary for skill and subagent discovery
+- Store GitHub internal `id` in TrackerIssue metadata -- required for any sub-issue write operations
 
 **Should have (differentiators):**
-- Conversational clarification (agent asks question mid-run, pauses, resumes on reply) -- the "from your phone" killer feature
-- Reactions as approvals (thumbs-up = approve) -- mobile-first approval UX
-- Dynamic autonomy escalation (agent self-escalates when uncertain)
-- Budget periods with auto-reset (monthly, weekly)
-- Container reclamation during pause (release resources, restore on resume)
+- Automatic sub-issue DAG with progress rollup comments on parent issues
+- Claude Code agent teams inside containers (experimental but high-value for complex tasks)
+- Workflow-specific skill bundles and agent definitions per WORKFLOW.md
+- Auto-close parent issues when all sub-issues complete
 
-**Defer to v2.1+:**
-- Browser-use integration (cross-language bridge complexity, no built-in REST API)
-- Multi-agent delegation (/forgectl decompose)
-- Dashboard v2 (GitHub App is the primary UI)
-- Full CQRS / event replay for state management
-- PostgreSQL support, multi-database sharding
-- RBAC, multi-approver workflows
+**Defer:**
+- Cross-issue dependency resolution (blocking/blocked-by API poorly documented for programmatic access)
+- Sub-issue creation from pipeline definitions (complex two-way sync)
+- Dynamic skill generation from issue context (optimization, not needed for initial value)
+- Persistent agent team sessions across crashes (experimental feature limitation)
+- Skill marketplace / package manager (over-engineering for v2.1)
 
 ### Architecture Approach
 
-The v2.0 architecture layers six new subsystems onto the v1.0 foundation: Storage (SQLite + Drizzle), Identity (company/agent), Flight Recorder (append-only events), Durable Orchestrator (extended state machine with pause/resume/checkpoint), Governance (autonomy/approvals/budgets), and GitHub App (webhook receiver + bot). The guiding principle is that in-memory state becomes a cache of persistent state -- the scheduler and orchestrator keep their in-memory working sets for performance, but persist at state transitions and rebuild from the database on startup recovery.
+Three features integrate at well-defined seams in the existing pipeline. Sub-issues enrich `TrackerIssue` at fetch time and populate `terminalIssueIds` at tick time -- the dispatcher's existing `filterCandidates()` handles filtering unchanged. Skills use a new `prepareSkillMounts()` function following the established `ContainerMounts` pattern from `auth/mount.ts`. Agent teams are purely prompt-level and env-level: set the feature flag, scale resources, wrap the prompt with team instructions, and let Claude Code handle all coordination internally.
 
 **Major components:**
-1. **src/storage/** -- SQLite connection singleton, Drizzle schema (12 tables), migrations, repository modules per entity
-2. **src/company/** -- Company and agent identity, budget scoping, role assignment
-3. **src/audit/** -- Flight recorder subscribing to existing RunEvent emitter, append-only event persistence, state snapshots, query API
-4. **src/orchestrator/** (modified) -- Extended state machine with `paused`, `waiting_for_input`, `checkpointed` states; execution locks via SQLite; crash recovery from DB
-5. **src/governance/** -- Autonomy enforcement as middleware wrapping dispatch, approval state machine, budget pre-flight checks with atomic reservation
-6. **src/github-app/** -- Fastify plugin for webhook routes, slash command parser, bot comment templates, check run creation
-
-**Key patterns:** Repository pattern for all storage access. Event subscriber pattern for cross-cutting concerns (recorder, cost tracking). Fastify plugin encapsulation for route groups. Governance as middleware wrapper (not embedded in orchestrator).
+1. `src/tracker/sub-issues.ts` (NEW) -- REST API client for sub-issue fetching, enriches TrackerIssue with `parent_id`, `sub_issue_ids`, populated `blocked_by`
+2. `src/container/skills.ts` (NEW) -- Resolves skill directories, prepares read-only bind mounts, sets `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`
+3. `src/agent/teams.ts` (NEW) -- Team env builder, prompt prefix builder, container resource scaler
+4. `src/orchestrator/scheduler.ts` (MODIFY) -- Populate `terminalIssueIds` from cached terminal issue fetch (currently always empty Set)
+5. `src/config/schema.ts` (MODIFY) -- New `skills`, `team`, `subIssues` Zod schema sections
 
 ### Critical Pitfalls
 
-1. **SQLite synchronous blocking** -- better-sqlite3 blocks the event loop. Drizzle's async wrapper is deceptive (resolves synchronously). Enable WAL mode, set busy_timeout=5000, keep transactions under 10ms, batch event inserts. Monitor event loop lag in integration tests.
+1. **GitHub sub-issue API uses internal `id`, not issue number** -- The `sub_issue_id` parameter needs the 10+ digit internal resource ID, not the human-visible `#42`. Store `ghIssue.id` in `TrackerIssue.metadata.github_internal_id`. Write integration tests against real GitHub.
 
-2. **Webhook signature verification against parsed body** -- Fastify parses JSON before handlers run. HMAC must be computed against raw bytes, not `JSON.stringify(request.body)`. Use `@fastify/raw-body` or `preParsing` hook. Use `crypto.timingSafeEqual()`, never `===`.
+2. **Mounting `~/.claude/` exposes OAuth tokens** -- Never mount `~/.claude/` wholesale. Use an explicit allowlist: copy only CLAUDE.md, skills/, agents/ directories. Exclude `.credentials.json`, `statsig/`, token files. Keep auth credentials on the existing `/run/secrets/` path.
 
-3. **Context serialization failure on pause/resume** -- Docker container references, closures, Buffers, and class instances don't survive JSON round-trips. Define a strict `SerializableContext` type. Store container ID strings, not container objects. Write round-trip serialization tests.
+3. **Agent teams OOM containers** -- Each teammate is a full Claude Code process (~500MB-1GB). Scale memory by team size (base + 1GB per teammate). Update slot manager to weight by team size, not just run count. Add OOM detection via `container.inspect()`.
 
-4. **Event sourcing over-engineering** -- Do NOT build full CQRS. The flight recorder is an audit log, not the source of truth. Current state lives in the `runs` table. Events are for inspection, debugging, and write-back formatting.
+4. **Agent teams incompatible with checkpoint/resume** -- Team state (`~/.claude/teams/`, `~/.claude/tasks/`) is internal to Claude Code with no serialize/restore API. Disable checkpointing for team runs; use restart-from-scratch on failure.
 
-5. **Budget race conditions** -- Two concurrent runs can both pass budget checks. Use `BEGIN IMMEDIATE` transactions with atomic reservation: deduct estimated cost before starting, refund difference on completion. Track `reserved` vs `spent` amounts.
+5. **Sub-issue DAG cycles from merged dependency sources** -- GitHub sub-issues are tree-structured (no cycles), but merging with manual `blocked_by` overrides can create cycles. Implement cycle detection (Kahn's algorithm); report cycles via GitHub comment.
 
 ## Implications for Roadmap
 
 Based on research, suggested phase structure:
 
-### Phase 1: Persistent Storage Layer
-**Rationale:** Every other phase depends on SQLite storage. Zero user-visible change, pure foundation.
-**Delivers:** src/storage/ with Drizzle schema, migrations, repository pattern, auto-migrate on daemon startup. Runs table replaces file-based RunLog as primary persistence.
-**Addresses:** Schema-driven migrations, WAL mode, repository pattern, atomic transactions, connection management
-**Avoids:** SQLite migration 12-step dance (design schema carefully upfront); synchronous blocking (WAL + busy_timeout from day one)
+### Phase 1: Sub-Issues DAG Dependencies
+**Rationale:** Highest standalone value. Unblocks dependency-aware orchestration immediately. The existing `blocked_by` + `filterCandidates` infrastructure just needs real data -- no architectural changes. Independent of other features.
+**Delivers:** Automatic work ordering based on GitHub sub-issue hierarchy. Parent issues wait for children to complete before dispatch.
+**Addresses:** Sub-issue fetching (table stakes #1), `blocked_by` population, topological dispatch ordering, GitHub internal ID storage
+**Avoids:** Pitfalls #1 (ID confusion), #2 (GraphQL feature header -- use REST instead), #6 (DAG cycles), #7 (pagination), #11 (ETag cache invalidation), #12 (feature not enabled on repo)
+**Key work:** Extend TrackerIssue type, build `sub-issues.ts` REST client, populate `terminalIssueIds` in scheduler with caching, cycle detection
 
-### Phase 2: Company and Agent Identity
-**Rationale:** Budget scoping and audit attribution need identity. Lightweight phase that sets up the entity model.
-**Delivers:** src/company/ with company and agent CRUD, roles, budget scope assignment. Extends agent module with identity.ts.
-**Addresses:** Multi-agent identity, cost attribution, budget scoping foundations
-**Avoids:** Over-designing RBAC (single-user for v2.0, just collaborator checks)
+### Phase 2: Skill/Config Bind-Mounting
+**Rationale:** Independent of Phase 1 but prerequisite for Phase 3 (teams benefit from mounted skills). Improves agent quality immediately for all runs, not just team runs.
+**Delivers:** Personal skills, project skills, CLAUDE.md hierarchy, and external skill packs available inside containers. Workflow-specific skill selection.
+**Addresses:** CLAUDE.md mounting (table stakes #2), agent config passthrough (table stakes #3), workflow-specific skill bundles (differentiator #6)
+**Avoids:** Pitfalls #3 (credential exposure -- allowlist mounting), #8 (.planning/ directory conflicts), #9 (read-only mount breaking writes)
+**Key work:** New `skills.ts` module (ContainerMounts pattern), config schema additions, `--add-dir` flag passthrough, WORKFLOW.md `skills:` section
 
-### Phase 3: Flight Recorder / Run Ledger
-**Rationale:** Low-risk additive phase (subscriber pattern). Needed by Phase 4 for crash recovery and by Phase 5 for cost tracking.
-**Delivers:** src/audit/ with append-only event persistence, cost event recording, CLI inspection (`forgectl run inspect`), rich write-back formatting.
-**Addresses:** Event log per run, structured event payloads, cost tracking, query by run/agent/time
-**Avoids:** Full CQRS (events are audit trail only, not source of truth); monolithic event types (typed discriminated union)
+### Phase 3: Agent Teams
+**Rationale:** Depends on Phase 2 (skills should be mountable before teams use them). Highest risk (experimental API, resource scaling, checkpoint incompatibility). Highest token cost. Most novel differentiator.
+**Delivers:** Multi-agent collaboration within a single container for complex tasks. Prompt-driven team creation with automatic resource scaling.
+**Addresses:** Agent teams enablement (differentiator #5), team config in WORKFLOW.md, resource scaling, in-process teammate mode
+**Avoids:** Pitfalls #4 (OOM from multiple processes), #5 (checkpoint incompatibility), #10 (untracked token costs), #13 (version requirement), #14 (tmux requirement)
+**Key work:** New `teams.ts` module, env vars + prompt wrapping, resource auto-scaling, slot manager weighting, disable checkpointing for team runs
 
-### Phase 4: Durable Execution
-**Rationale:** Hardest engineering phase. Modifies the core state machine. Needs storage and events. Required by Phase 6 for conversational clarification.
-**Delivers:** Crash recovery, checkpoint/resume, pause for human input, execution locks, heartbeat persistence, graceful shutdown.
-**Addresses:** State machine extensions (paused, waiting_for_input, checkpointed), idempotent step boundaries, container lifecycle during suspension
-**Avoids:** Context serialization failures (strict SerializableContext type, round-trip tests); container zombies (workspace bind-mounts as durable state, not containers); Temporal-style replay (simple checkpoint-resume)
-
-### Phase 5: Governance, Approvals, and Budget Enforcement
-**Rationale:** Can partially parallelize with Phase 4 (different code paths). Needs identity (Phase 2) and cost tracking (Phase 3).
-**Delivers:** src/governance/ and src/costs/ with autonomy levels, approval state machine, budget pre-flight checks, auto-approve rules, budget periods.
-**Addresses:** Configurable autonomy per workflow, budget caps, approval gates with timeout, cost attribution
-**Avoids:** Approval deadlocks (mandatory timeouts on all pending states); budget race conditions (atomic reservation with BEGIN IMMEDIATE); granular per-tool budgets (budget per run and per agent/period)
-
-### Phase 6: GitHub App
-**Rationale:** The primary interaction surface. Depends on durable execution (conversations) and governance (approvals). Highest user-facing impact, should be last major phase.
-**Delivers:** src/github-app/ with webhook receiver, slash commands, bot comments, PR creation with check runs, reactions-as-approvals.
-**Sub-phases recommended:** 6a (core webhook + bot identity), 6b (slash commands + permissions), 6c (conversational clarification), 6d (reactions-as-approvals), 6e (check runs + PR lifecycle)
-**Addresses:** Label-based triggers, structured comments, slash commands, permission checks, webhook deduplication
-**Avoids:** Webhook signature verification bugs (raw body capture, timingSafeEqual); synchronous webhook processing (enqueue and return 200); excessive slash commands at launch (6 commands only)
-
-### Phase 7 (Optional): Browser-Use Integration
-**Rationale:** Architecturally independent capability extension. Cross-language bridge adds complexity. Defer unless time permits.
-**Delivers:** Python sidecar in Docker container, BrowserUseSession adapter, research workflow template.
-**Addresses:** LLM-driven web navigation, structured output extraction, cost tracking across TypeScript/Python boundary
-**Avoids:** Process zombies (Docker container isolation, not bare subprocess); building custom browser automation (use browser-use framework)
+### Phase 4: Sub-Issue Advanced Features
+**Rationale:** Builds on Phase 1 foundation. Lower priority -- nice-to-have polish on top of working DAG dispatch.
+**Delivers:** Progress rollup comments on parent issues, auto-close parent when all children complete, webhook handling for sub-issue events.
+**Addresses:** Progress rollup (differentiator #4), auto-close parent (differentiator #4)
+**Key work:** Parent comment updates, auto-close logic, webhook sub-issue event handling
 
 ### Phase Ordering Rationale
 
-- **Bottom-up by dependency:** Storage -> Identity -> Events -> Durability -> Governance -> Interaction. Each phase has a clear dependency on the one before it.
-- **Risk front-loading:** Phase 4 (durable execution) is the hardest engineering. Placing it mid-sequence means the foundation is solid but it's tackled before governance and GitHub App add more surface area.
-- **Phase 5 parallelization opportunity:** Governance touches different code paths than durable execution. Teams with capacity can overlap Phases 4 and 5.
-- **GitHub App last:** It depends on everything else and is the most user-visible. Building it last means it can leverage all infrastructure.
-- **Browser-use deferred:** Low confidence on integration model (no REST API, cross-language bridge). Not a runtime requirement.
+- Phase 1 is independent and delivers the most fundamental capability (work ordering) with the lowest risk -- it extends existing patterns that already work
+- Phase 2 is independent of Phase 1 but must precede Phase 3 -- teams without skills are possible but less effective
+- Phase 3 depends on Phase 2 and carries the most risk (experimental API, resource scaling, checkpoint interaction) -- it should come last among the core features
+- Phase 4 is additive polish on Phase 1 and can be deferred if schedule is tight
+- Phases 1 and 2 could run in parallel if resourced, as they have no dependencies on each other
 
 ### Research Flags
 
 Phases likely needing deeper research during planning:
-- **Phase 4 (Durable Execution):** Context serialization for resume is under-documented. Needs experimentation with real agent sessions to validate that injected context produces useful agent behavior. Container lifecycle during suspension needs design spikes.
-- **Phase 6 (GitHub App):** Sub-phase 6c (conversational clarification) is the hardest feature in the milestone. Webhook-to-suspended-run matching, conversation context management, and mobile UX need phase-level research.
-- **Phase 6 (GitHub App):** Fastify 5 raw body support needs verification. May not need `@fastify/raw-body` if Fastify 5 has built-in support via route config.
+- **Phase 3 (Agent Teams):** Experimental feature with known limitations. Needs hands-on testing of in-process teammate mode inside Docker containers. Resource scaling heuristics (memory per teammate) should be validated empirically. Checkpoint/resume interaction needs explicit test cases.
+- **Phase 1 (Sub-Issues, partial):** The `terminalIssueIds` caching strategy needs validation -- whether to use a simple TTL cache or event-driven invalidation from webhooks. Also need to verify sub-issue API pagination behavior with >20 children.
 
 Phases with standard patterns (skip research-phase):
-- **Phase 1 (Storage):** Drizzle + better-sqlite3 + SQLite is thoroughly documented. Standard setup.
-- **Phase 2 (Identity):** Simple CRUD entity model. No novel patterns.
-- **Phase 3 (Flight Recorder):** Append-only event log is well-documented. Event subscriber pattern already exists in v1.0.
-- **Phase 5 (Governance):** State machine and budget enforcement are standard patterns. Existing v1.0 state machine patterns extend naturally.
+- **Phase 2 (Skill Mounting):** Well-documented Claude Code skill discovery. Straightforward bind-mount pattern already proven in `auth/mount.ts`. Config schema extension is routine.
+- **Phase 4 (Sub-Issue Advanced):** Standard GitHub comment/webhook patterns already established in v2.0 GitHub App integration.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All dependencies verified via npm with exact versions. Alternatives evaluated with clear rationale. Probot vs @octokit/app decision well-justified. |
-| Features | HIGH | Studied Dependabot, Renovate, Copilot coding agent, Probot. Table stakes vs differentiators clearly separated. Dependency graph across features is well-mapped. |
-| Architecture | HIGH | Component boundaries, integration points, and data flows are concrete with code examples. Schema design covers all 12 tables across phases. Patterns grounded in v1.0 codebase. |
-| Pitfalls | HIGH | 10 critical pitfalls with specific prevention strategies and phase mapping. Most verified via official docs (GitHub webhook docs, SQLite ALTER TABLE docs, better-sqlite3 performance docs). |
+| Stack | HIGH | Zero new dependencies. All existing libraries verified for needed capabilities. |
+| Features | HIGH | Table stakes clearly defined. Sub-issues REST API is GA. Skill discovery is well-documented. |
+| Architecture | HIGH | All three features integrate at well-defined seams. Detailed code-level integration points identified. |
+| Pitfalls | HIGH (sub-issues, skills) / MEDIUM (teams) | Sub-issue and skill pitfalls verified with official docs and community reports. Agent team pitfalls based on experimental feature docs. |
 
-**Overall confidence:** HIGH
+**Overall confidence:** HIGH for Phases 1-2, MEDIUM for Phase 3
 
 ### Gaps to Address
 
-- **Fastify 5 raw body support:** STACK.md flags MEDIUM confidence on `@fastify/raw-body`. Verify during Phase 6 planning whether Fastify 5 has built-in `rawBody` support via route config, which would eliminate this dependency.
-- **Context quality on resume:** The pause/resume feature depends on the agent producing useful output when given injected context about prior work. This is a prompt engineering problem, not a systems problem. Needs experimentation during Phase 4 with real Claude Code sessions.
-- **browser-use integration model:** LOW confidence. No built-in REST API (open feature request). The sidecar HTTP bridge pattern is viable but untested. Verify during Phase 7 planning whether browser-use has shipped a REST API by then.
-- **Cost tracking across TypeScript/Python boundary:** If browser-use is included, browser-use's LLM calls are opaque. Tracking costs requires instrumenting browser-use or wrapping its LLM client. No established pattern for this.
-- **Migration strategy for existing v1.0 installations:** First-run migration from file-based state to SQLite needs design. Not complex, but must not lose existing run history.
+- **GitHub dependency API (blocking/blocked-by):** Docs are UI-focused only. No clear REST endpoints for reading programmatic blocking relationships. Defer to v2.2 or later; start with sub-issue hierarchy only.
+- **Agent teams token accounting:** Claude Code may not report per-teammate token usage. Need empirical testing to determine if lead's `tokenUsage` includes teammate consumption or if a multiplier estimate is required.
+- **ETag behavior across GitHub App token rotations:** Unclear if 304 responses work when the installation token changes. Need integration testing to confirm whether ETag cache should be cleared on rotation.
+- **Sub-issue webhook events:** GitHub may not send webhook events specifically for sub-issue link/unlink operations. Need to verify which webhook event types fire when sub-issues are added or removed.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [drizzle-orm on npm](https://www.npmjs.com/package/drizzle-orm) -- v0.45.1, TypeScript ORM
-- [better-sqlite3 on npm](https://www.npmjs.com/package/better-sqlite3) -- v12.6.2, performance docs, WAL mode
-- [SQLite ALTER TABLE docs](https://www.sqlite.org/lang_altertable.html) -- migration limitations
-- [SQLite WAL mode](https://sqlite.org/wal.html) -- concurrent read/write
-- [@octokit/app on npm](https://www.npmjs.com/package/@octokit/app) -- v16.1.2, GitHub App toolkit
-- [@octokit/webhooks on npm](https://www.npmjs.com/package/@octokit/webhooks) -- v14.2.0, event handling
-- [@octokit/rest on npm](https://www.npmjs.com/package/@octokit/rest) -- v22.0.1, REST API client
-- [GitHub webhook validation docs](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) -- HMAC-SHA256
-- [GitHub webhook troubleshooting](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks)
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite) -- setup and migrations
-- [Temporal durable execution](https://temporal.io/blog/building-reliable-distributed-systems-in-node-js-part-2) -- patterns to borrow
+- [GitHub Sub-Issues REST API Docs](https://docs.github.com/en/rest/issues/sub-issues) -- GA endpoints, parameters, limits
+- [Claude Code Skills Documentation](https://code.claude.com/docs/en/skills) -- SKILL.md format, discovery paths, --add-dir
+- [Claude Code Agent Teams Documentation](https://code.claude.com/docs/en/agent-teams) -- team architecture, limitations, in-process mode
+- [Claude Code CLI Reference](https://code.claude.com/docs/en/cli-reference) -- --agents, --agent, --add-dir flags
+- [GitHub API Rate Limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) -- 5000 req/hr, ETag behavior
+- [Claude Code Subagents Documentation](https://code.claude.com/docs/en/sub-agents) -- subagent config, skills preloading
 
 ### Secondary (MEDIUM confidence)
-- [Event sourcing with relational databases](https://softwaremill.com/implementing-event-sourcing-using-a-relational-database/)
-- [Event sourcing pitfalls](https://www.baytechconsulting.com/blog/event-sourcing-explained-2025) -- over-engineering traps
-- [Cloudflare human-in-the-loop patterns](https://developers.cloudflare.com/agents/guides/human-in-the-loop/) -- dehydration pattern
-- [TypeScript orchestration comparison](https://medium.com/@matthieumordrel/the-ultimate-guide-to-typescript-orchestration-temporal-vs-trigger-dev-vs-inngest-and-beyond-29e1147c8f2d)
-- [Renovate bot comparison](https://docs.renovatebot.com/bot-comparison/)
-- [GitHub Copilot coding agent interaction model](https://dev.to/pwd9000/using-github-copilot-coding-agent-for-devops-automation-3f43)
-- [browser-use GitHub repository](https://github.com/browser-use/browser-use) -- 50k+ stars, Python 3.11+
+- [Create GitHub Issue Hierarchy Using the API](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- sub_issue_id vs number gotcha
+- [GitHub Sub-Issues Public Preview Discussion](https://github.com/orgs/community/discussions/148714) -- community limitations, nesting depth
+- [GSD Framework](https://github.com/gsd-build/get-shit-done) -- skill/agent mounting patterns
+- [Running Claude Code Safely in Devcontainers](https://www.solberg.is/claude-devcontainer) -- credential exposure risk
 
-### Tertiary (LOW confidence)
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- open, not implemented; integration model unverified
+### Low confidence (needs validation)
+- GitHub dependency API programmatic access -- no clear REST endpoints found; may require GraphQL with undocumented fields
 
 ---
-*Research completed: 2026-03-09*
+*Research completed: 2026-03-13*
 *Ready for roadmap: yes*

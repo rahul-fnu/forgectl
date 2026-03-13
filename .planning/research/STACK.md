@@ -1,218 +1,299 @@
-# Technology Stack: v2.0 Additions
+# Technology Stack
 
-**Project:** forgectl v2.0 Durable Runtime
-**Researched:** 2026-03-09
-**Scope:** NEW dependencies only. Existing stack (TypeScript, Node 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, etc.) is validated and excluded.
+**Project:** forgectl v2.1 — Sub-issue DAGs, Skill Mounting, Agent Teams
+**Researched:** 2026-03-13
+**Scope:** NEW capabilities only. Existing stack (TypeScript, Node 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, Drizzle/SQLite, Octokit, etc.) is validated and excluded.
 
-## Recommended Stack Additions
+## Key Finding: Zero New NPM Dependencies
 
-### Database Layer
+All three features build on existing dependencies. This milestone is integration work, not library adoption.
+
+| Feature | Existing Dependency | Change Needed |
+|---------|-------------------|---------------|
+| Sub-issue DAGs | `@octokit/rest` + existing `githubFetch()` | New API calls, populate `blocked_by` |
+| Skill mounting | `dockerode` | Additional bind mounts, `--add-dir` CLI flag |
+| Agent teams | `dockerode` | Env vars, resource scaling, prompt changes |
+
+---
+
+## Feature 1: GitHub Sub-Issues DAG Dependencies
+
+### API Endpoints
+
+GitHub sub-issues reached GA in 2025. The REST API provides these endpoints (all callable via existing `githubFetch()` in `src/tracker/github.ts`):
+
+| Endpoint | Method | Path | Purpose |
+|----------|--------|------|---------|
+| List sub-issues | GET | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Fetch child issues of a parent |
+| Add sub-issue | POST | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Link an issue as child of parent |
+| Remove sub-issue | DELETE | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues/{sub_issue_id}` | Unlink child from parent |
+| Reprioritize | PATCH | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Reorder children |
+| Get parent | GET | `/repos/{owner}/{repo}/issues/{issue_number}/parent` | Fetch parent issue for a given issue |
+
+**Confidence: HIGH** (official GitHub docs, GA feature, verified endpoints)
+
+### Critical API Gotcha: sub_issue_id vs issue number
+
+The `sub_issue_id` parameter in POST/DELETE requests requires the issue's **internal numeric ID** (the `id` field, e.g. `7890123456`), NOT the human-readable issue number (e.g. `42`). This is a common source of 500 errors.
+
+The current `normalizeIssue()` in `src/tracker/github.ts` stores `ghIssue.number` as `TrackerIssue.id` but discards `ghIssue.id`. The internal ID must be captured.
+
+**Recommendation:** Store `ghIssue.id` in `TrackerIssue.metadata.github_internal_id`. This keeps the TrackerIssue interface tracker-agnostic (Notion doesn't have this concept) while preserving the data needed for sub-issue API calls.
+
+### What Exists Already (Reusable)
+
+| Component | Location | Reuse Strategy |
+|-----------|----------|----------------|
+| `TrackerIssue.blocked_by: string[]` | `src/tracker/types.ts` | Currently always `[]` for GitHub. Populate from parent issue chain. |
+| `filterCandidates()` blocked_by check | `src/orchestrator/dispatcher.ts:100-105` | Already blocks dispatch when blockers are non-terminal. Just populate `blocked_by`. |
+| DAG validation + topological sort | `src/pipeline/dag.ts` | Reuse `validateDAG()` and `topologicalSort()` for sub-issue dependency ordering. |
+| `githubFetch()` with retry/rate-limit | `src/tracker/github.ts:131-193` | Add sub-issue endpoint calls using same authenticated fetch. |
+| `getParallelGroups()` | `src/pipeline/dag.ts:155-191` | Use for parallel sub-issue scheduling. |
+
+### Technology Needed
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `better-sqlite3` | ^12.6.2 | SQLite driver | Fastest synchronous SQLite driver for Node.js. Native bindings, zero-config embedded database. Synchronous API is an advantage for forgectl's single-process daemon -- no connection pool needed, no async overhead for simple queries. WAL mode gives concurrent read/write without blocking. |
-| `drizzle-orm` | ^0.45.1 | ORM / query builder | TypeScript-first, SQL-like syntax, zero runtime overhead. Schema defined in TypeScript (co-located with Zod validation already in the project). Supports prepared statements for performance. Thin abstraction -- you can drop to raw SQL when needed. |
-| `drizzle-kit` | ^0.31.9 | Schema migrations (dev dep) | Generates and runs SQL migrations from schema diffs. `drizzle-kit generate` creates migration files, `drizzle-kit migrate` applies them. Keeps schema changes version-controlled and reviewable. |
-| `@types/better-sqlite3` | ^7.6.13 | Type definitions (dev dep) | TypeScript types for better-sqlite3 API. |
+| `@octokit/rest` | ^22.0.1 (existing) | Sub-issues REST API | Already installed. Sub-issues use standard REST; no special headers required (unlike GraphQL which needs `GraphQL-Features: sub_issues`). |
 
-**Confidence:** HIGH -- drizzle-orm + better-sqlite3 is the standard TypeScript/SQLite combination. Verified via npm and official docs.
+### What NOT to Add
 
-**Key configuration:**
-- Enable WAL mode on database open: `db.pragma('journal_mode = WAL')` -- required for concurrent read/write during daemon operation.
-- Use `BEGIN IMMEDIATE` transactions for execution locks (prevents SQLITE_BUSY on write contention).
-- Store database at `~/.forgectl/forgectl.db` (alongside existing `daemon.pid`).
-- Drizzle config file (`drizzle.config.ts`) points to schema directory and migrations output.
+- **No `@octokit/graphql`.** The REST API covers all sub-issue operations. The GraphQL API requires a special `GraphQL-Features: sub_issues` header and uses `node_id` instead of issue numbers, adding complexity. REST is simpler and matches the existing adapter pattern.
+- **No dependency graph library (e.g. `graphlib`, `dagre`).** The existing `src/pipeline/dag.ts` already implements DAG validation, cycle detection, topological sort, and parallel grouping. Reuse it.
 
-### GitHub App
+---
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `@octokit/app` | ^16.1.2 | GitHub App toolkit | Handles JWT authentication, installation tokens, webhook verification, and event routing. Lower-level than Probot, which is the right choice because forgectl already has Fastify and its own daemon architecture. Probot brings its own Express server -- unnecessary overhead and architectural conflict. |
-| `@octokit/webhooks` | ^14.2.0 | Webhook event handling | Type-safe webhook event definitions and payload parsing. `webhooks.on("issues.labeled", handler)` pattern. Included transitively by `@octokit/app` but useful to reference directly for types. |
-| `@octokit/rest` | ^22.0.1 | GitHub REST API client | Typed methods for all GitHub API endpoints. `octokit.rest.issues.createComment()`, `octokit.rest.checks.create()`, etc. Used via installation-scoped Octokit instances from `@octokit/app`. |
-| `@octokit/types` | ^16.0.0 | Shared TypeScript types (dev dep) | Webhook payload types, API response types. Useful for typing handler functions. |
+## Feature 2: Skill/Config Bind-Mounting into Containers
 
-**Confidence:** HIGH -- Octokit is GitHub's official SDK. Versions verified via npm.
+### How Claude Code Discovers Skills
 
-**Why NOT Probot:**
-Probot (v14.2.4) is a framework that bundles its own Express server, logging, and app lifecycle. forgectl already has all of this via Fastify + structured logger + daemon lifecycle. Using Probot would mean either (a) running two HTTP servers, (b) fighting Probot's Express internals to integrate with Fastify via `@fastify/middie`, or (c) replacing Fastify with Express. None of these are acceptable.
+Claude Code loads skills from these locations (in priority order):
 
-Instead, use `@octokit/app` directly, which is what Probot uses internally. This gives you:
-- `app.webhooks.on()` for event routing (same DX as Probot)
-- `app.getInstallationOctokit()` for per-installation API calls
-- `app.webhooks.verify()` for HMAC-SHA256 signature verification
-- Full control over HTTP layer (Fastify routes, not Express middleware)
+| Priority | Location | Path Pattern | Loaded When |
+|----------|----------|-------------|-------------|
+| 1 (highest) | Enterprise | Managed settings | Always |
+| 2 | Personal | `~/.claude/skills/<name>/SKILL.md` | Always |
+| 3 | Project | `.claude/skills/<name>/SKILL.md` (in CWD) | Always |
+| 4 | Additional dirs | `.claude/skills/<name>/SKILL.md` inside `--add-dir` paths | When `--add-dir` specified |
 
-**Fastify integration pattern:**
-```typescript
-// Register webhook route in existing Fastify daemon
-fastify.post('/webhooks/github', {
-  config: { rawBody: true } // needed for HMAC verification
-}, async (request, reply) => {
-  await app.webhooks.verifyAndReceive({
-    id: request.headers['x-github-delivery'],
-    name: request.headers['x-github-event'],
-    signature: request.headers['x-hub-signature-256'],
-    payload: request.rawBody,
-  });
-  reply.send({ ok: true });
-});
+For CLAUDE.md files from additional directories: set `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`.
+
+**Confidence: HIGH** (official Claude Code docs at code.claude.com/docs/en/skills)
+
+### Skill File Format
+
+Every skill directory contains a `SKILL.md` with YAML frontmatter:
+
+```yaml
+---
+name: my-skill
+description: What this skill does and when to use it
+disable-model-invocation: true   # optional: manual-only
+allowed-tools: Read, Grep, Bash  # optional: tool restrictions
+context: fork                     # optional: run in subagent
+---
+
+Markdown instructions here...
 ```
 
-No middleware adapter needed. Direct Fastify route handler calling Octokit's verify/receive directly.
+Key frontmatter fields relevant to forgectl integration:
 
-### Supporting Libraries
+| Field | Purpose | Relevance |
+|-------|---------|-----------|
+| `name` | Slash command name | Used for invocation |
+| `description` | When Claude should auto-load | Drives automatic skill activation |
+| `disable-model-invocation` | Prevent auto-triggering | Important for dangerous skills like deploy |
+| `allowed-tools` | Tool restrictions | Security boundary |
+| `context: fork` | Run in isolated subagent | Useful for parallel skill execution |
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| `@fastify/raw-body` | ^3.1.0 | Raw body access in Fastify | Required for GitHub webhook HMAC-SHA256 verification. Fastify parses JSON by default -- you need the raw bytes to verify the signature. |
+### Docker Bind-Mount Strategy
 
-**Confidence:** MEDIUM -- need to verify exact package name and version. Fastify 5 may have built-in `rawBody` support via route config. Check Fastify 5 docs before adding this dependency.
+The existing `createContainer()` in `src/container/runner.ts` accepts `binds: string[]`. Skills/configs are mounted read-only so Claude Code inside the container can discover them.
 
-### Event Sourcing / Flight Recorder
+| Mount Purpose | Host Path | Container Path | Mode | Claude Code Flag |
+|---------------|-----------|----------------|------|-----------------|
+| GSD skills directory | User-configured skill path(s) | `/forgectl-skills/.claude/skills/` | `ro` | `--add-dir /forgectl-skills` |
+| Project CLAUDE.md | Workspace `.claude/CLAUDE.md` | Already in workspace bind | `rw` | None (auto-discovered in CWD) |
+| Settings with env vars | Generated settings.json | `/home/node/.claude/settings.json` | `ro` | None (auto-discovered in `~/.claude/`) |
 
-**No new dependencies needed.** The event sourcing pattern for the flight recorder is implemented with:
-- `drizzle-orm` + `better-sqlite3` (already added above) for the append-only event store
-- `zod` (already in project) for event payload validation
-- Standard SQLite features: auto-increment IDs for ordering, timestamps, JSON columns for event payloads
+The container's Claude Code invocation appends `--add-dir /forgectl-skills` to pick up mounted skills. Skills from `--add-dir` directories are auto-discovered and support hot-reload (changes detected without restart).
 
-**Architecture notes:**
-- Events table: `id`, `run_id`, `event_type`, `payload` (JSON), `created_at`, `sequence_number`
-- Append-only: never UPDATE or DELETE event rows. Use a DB trigger or application-level enforcement.
-- State snapshots: periodic materialized state stored in a separate `state_snapshots` table for fast reconstruction without replaying full history.
-- SQLite JSON functions (`json_extract`, `json_each`) handle querying into event payloads when needed.
+### Integration Changes Needed
 
-### Governance / Approval State Machine
+1. **`src/agent/types.ts`** - Add `additionalDirs?: string[]` to `AgentOptions`
+2. **`src/agent/claude-code.ts`** - Append `--add-dir` flags in `buildShellCommand()`
+3. **`src/container/runner.ts`** - Accept skill bind mounts in `createContainer()`
+4. **`src/config/schema.ts`** - New `skills` config section (Zod validated)
+5. **`src/workflow/types.ts`** - Workflow-level skill path overrides
 
-**No new dependencies needed.** The approval state machine and budget enforcement use:
-- `zod` (existing) for approval/budget config validation
-- `drizzle-orm` + `better-sqlite3` (added above) for approval records, budget tracking
-- Existing orchestrator state machine patterns from v1.0 extend naturally
+### Technology Needed
 
-**Architecture notes:**
-- Approvals table: `id`, `type`, `status` (pending/approved/rejected), `requested_by`, `decided_by`, `reason`, `created_at`, `decided_at`
-- Budget tracking: `cost_events` table with running aggregation queries
-- State transitions enforced in application code (TypeScript discriminated unions + Zod), not DB triggers
-- `BEGIN IMMEDIATE` transactions for atomic budget checks (check-then-deduct pattern)
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `dockerode` | ^4.0.2 (existing) | Bind mounts via `HostConfig.Binds` | Already used. Add more bind entries for skill directories. |
 
-### Durable Execution
+### What NOT to Add
 
-**No new dependencies needed.** Session persistence and crash recovery use:
-- `drizzle-orm` + `better-sqlite3` (added above) for session state, checkpoints
-- Existing workspace manager and agent session interfaces from v1.0
+- **No Docker volume plugins.** Simple bind mounts suffice. Skills are small text files (< 500 lines per SKILL.md recommended).
+- **No file-sync tools.** Read-only mounts are sufficient. Skills are static during execution.
+- **No special packaging/bundling.** Skills are just directories with SKILL.md files. Mount the directory tree as-is.
+- **No `settings.json` generation library.** Write a simple JSON file with the needed env vars. It is three fields.
 
-**Architecture notes:**
-- `sessions` table: `id`, `agent_id`, `issue_id`, `status`, `checkpoint_data` (JSON), `last_heartbeat`, `created_at`
-- On daemon restart: query `sessions WHERE status IN ('running', 'paused')`, reconcile against actual container state
-- Checkpoint data serialized as JSON blob -- contains enough context to rebuild agent prompt with prior work
-- Execution locks via SQLite `BEGIN IMMEDIATE` + unique constraint on `(issue_id, status='running')`
+---
 
-### Browser-Use Integration (Deferred Assessment)
+## Feature 3: Claude Code Agent Teams Inside Containers
 
-| Technology | Version | Purpose | Notes |
-|------------|---------|---------|-------|
-| `browser-use` (Python) | 0.12.1 | Browser automation agent | Python package, NOT a Node.js dependency. Would run as a separate Docker container with a thin HTTP API wrapper. |
+### How Agent Teams Work
 
-**Confidence:** LOW -- browser-use does NOT have a built-in REST API server (there is an open feature request, GitHub issue #166). Integration requires building a custom Python FastAPI/Flask wrapper around the browser-use Agent class and running it as a sidecar service.
+Agent teams are an experimental Claude Code feature (v2.1.32+) where a lead session spawns teammate instances that coordinate via shared task list and mailbox messaging.
 
-**Recommendation:** Defer browser-use integration to v2.1+. The integration effort is non-trivial (custom Python service, Docker orchestration, API contract design) and is not listed in the v2.0 roadmap phases. If needed earlier, the simplest approach is a Docker container running a FastAPI app that exposes `/run` endpoint wrapping `browser_use.Agent`.
+**Confidence: MEDIUM** (official docs, but marked experimental with known limitations)
+
+### Architecture Summary
+
+| Component | Role | Storage |
+|-----------|------|---------|
+| Team lead | Creates team, spawns teammates, coordinates | Main Claude Code session |
+| Teammates | Independent Claude Code instances, own context window | `~/.claude/teams/{team-name}/config.json` |
+| Task list | Shared work items with pending/in-progress/completed states | `~/.claude/tasks/{team-name}/` |
+| Mailbox | Inter-agent messaging (point-to-point and broadcast) | Internal to Claude Code |
+
+### Enabling Inside Containers
+
+| Requirement | Configuration | Notes |
+|-------------|--------------|-------|
+| Feature flag | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var | Pass via container env |
+| Display mode | `--teammate-mode in-process` or `teammateMode: "in-process"` in settings.json | Containers have no tmux/iTerm2. Must use in-process mode. |
+| Writable home | `~/.claude/tasks/` and `~/.claude/teams/` must be writable | Default container filesystem is writable; just ensure the paths exist |
+| Resources | N+1 Claude Code processes (lead + N teammates) | Increase memory/CPU limits for team-enabled workflows |
+| API key | All teammates share the lead's Anthropic API key | Already injected via container secrets |
+| Permissions | Teammates inherit lead's `--dangerously-skip-permissions` | Already set by forgectl |
+| Version | Claude Code >= v2.1.32 | Container image must have recent enough version |
+
+### How forgectl Triggers Teams
+
+Agent teams are NOT triggered by a CLI flag. They are triggered by the **prompt content** instructing the lead to create a team. This means:
+
+1. The prompt builder (`src/context/`) generates prompts that instruct the lead to spawn teammates
+2. The container needs scaled resources when team mode is expected
+3. The `AgentOptions.timeout` should be higher (teams do parallel work but wall-clock time is longer)
+
+Example prompt injection for team mode:
+```
+Create an agent team with 3 teammates to work on this task:
+- Teammate 1: Implement the core logic in src/feature/
+- Teammate 2: Write tests in test/feature/
+- Teammate 3: Update documentation
+
+Wait for all teammates to complete before finishing.
+```
+
+### Resource Scaling
+
+| Config | Single Agent | Agent Team (3 teammates) | Agent Team (5 teammates) |
+|--------|-------------|-------------------------|-------------------------|
+| Memory | 4 GB (default) | 8 GB | 12 GB |
+| CPUs | 2 | 4 | 6 |
+| Timeout | 10 min | 20 min | 30 min |
+
+The multiplier should be configurable per workflow, not hardcoded.
+
+### Known Limitations (from official docs)
+
+| Limitation | Impact on forgectl |
+|------------|-------------------|
+| No session resumption for teammates | If container crashes, team state is lost. Checkpoint at issue level, not team level. |
+| Task status can lag | Teammates may not mark tasks complete. The lead may need nudging via timeout. |
+| One team per session | Fine for forgectl -- one issue = one container = one team. |
+| No nested teams | Teammates cannot spawn sub-teams. OK for current scope. |
+| Shutdown can be slow | Budget for graceful shutdown time in container lifecycle. |
+
+### Technology Needed
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `dockerode` | ^4.0.2 (existing) | Container env vars, resource limits | Add team-specific env vars and scale resources. |
+
+### What NOT to Add
+
+- **No tmux in container images.** `in-process` mode works without tmux. Adding tmux to Docker images increases image size and complexity for zero benefit in headless operation.
+- **No external team orchestration.** Let Claude Code's built-in team coordination handle intra-task parallelism. forgectl orchestrates at the issue level; Claude Code orchestrates at the sub-task level. These are different abstraction layers.
+- **No `agent-relay` for team communication.** The existing `agent-relay` package is for forgectl's own multi-agent patterns (review mode, parallel pipelines). Claude Code teams use their own internal messaging. Do not mix them.
+- **No Claude Code SDK or programmatic API.** Claude Code is invoked as a CLI tool via `claude -p`. There is no SDK for controlling teams programmatically. The prompt is the interface.
+
+---
+
+## Configuration Additions
+
+New Zod schema fields in `src/config/schema.ts`:
+
+```typescript
+// Skills mounting config
+skills: z.object({
+  paths: z.array(z.string()).optional(),    // Extra skill dirs to mount
+  mountUserSkills: z.boolean().default(true), // Mount ~/.claude/skills/
+}).optional()
+
+// Agent team config (per workflow in WORKFLOW.md)
+team: z.object({
+  enabled: z.boolean().default(false),
+  size: z.number().min(2).max(10).default(3),  // Suggested teammate count
+  resourceMultiplier: z.number().min(1).max(5).default(2),  // Memory/CPU scaling
+  timeout: z.number().optional(),  // Override timeout for team tasks
+}).optional()
+
+// Sub-issue config (extends tracker config)
+subIssues: z.object({
+  enabled: z.boolean().default(false),
+  maxDepth: z.number().min(1).max(5).default(2),  // Max nesting depth to fetch
+  autoBlock: z.boolean().default(true),  // Auto-populate blocked_by from parent chain
+}).optional()
+```
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| SQLite driver | `better-sqlite3` | `libsql` / `@libsql/client` | libsql is Turso's fork -- adds features forgectl doesn't need (embedded replicas, HTTP protocol). better-sqlite3 is simpler, faster for local-only use, and the standard choice for embedded SQLite in Node.js. |
-| ORM | `drizzle-orm` | `prisma` | Prisma generates a query engine binary, adds significant bundle size, and has its own migration system that conflicts with the lightweight approach. Drizzle is SQL-like (less magic), TypeScript-native, and 10x smaller. |
-| ORM | `drizzle-orm` | `kysely` | Kysely is query-builder only (no migrations, no schema introspection). Drizzle provides the full package: schema definition, migrations, query builder, and prepared statements. |
-| ORM | `drizzle-orm` | Raw SQL via `better-sqlite3` | Possible but loses type safety on queries, requires manual migration management, and increases maintenance burden as schema grows to 10+ tables. |
-| GitHub App framework | `@octokit/app` | `probot` | Probot bundles Express, its own logging, and app lifecycle. forgectl already has Fastify + structured logger + daemon. Using Probot creates architectural conflicts. `@octokit/app` provides the same webhook/auth primitives without the framework baggage. |
-| GitHub App framework | `@octokit/app` | Raw `@octokit/rest` + manual JWT | Too much boilerplate. `@octokit/app` handles JWT generation, installation token refresh, and webhook verification -- all things you'd have to reimplement. |
-| Event store | SQLite (Drizzle) | EventStoreDB | Overkill for single-machine. EventStoreDB is a separate server process, adds operational complexity, and forgectl's event volume (thousands, not millions) is well within SQLite's capabilities. |
-| Event store | SQLite (Drizzle) | Kafka / NATS | Distributed streaming is out of scope. forgectl is single-process. SQLite append-only table is the event log. |
-| State machine | Application code | `xstate` | xstate adds complexity for state machines that are simple enough to express as TypeScript discriminated unions + transition functions (pattern already used in v1.0 orchestrator). The governance state machine has ~4 states and ~6 transitions -- xstate is overkill. |
-| Durable execution | Custom (SQLite checkpoints) | `temporal` SDK | Temporal requires a separate server cluster. forgectl needs durable execution semantics, not the full Temporal infrastructure. Borrow the patterns (checkpointing, idempotent steps, replay), implement with SQLite. |
-| Durable execution | Custom (SQLite checkpoints) | `trigger.dev` | Trigger.dev is a hosted service / self-hosted server. Same problem as Temporal -- adds infrastructure forgectl doesn't need. |
-
-## What NOT to Add
-
-| Dependency | Why Skip |
-|------------|----------|
-| `probot` | Bundles Express server. Architectural conflict with existing Fastify daemon. Use `@octokit/app` instead. |
-| `xstate` | Overkill for the state machines in this project. Existing pattern (discriminated unions + transition functions) works. |
-| `prisma` | Heavy ORM with binary engine. Drizzle is lighter, faster, more SQL-like. |
-| `temporal` / `@temporalio/worker` | Requires separate server infrastructure. Borrow patterns, don't import the framework. |
-| `eventemitter3` or `mitt` | Node.js built-in `EventEmitter` is sufficient. Already used in v1.0. |
-| `bull` / `bullmq` | Requires Redis. forgectl's RunQueue is in-memory with SQLite persistence -- no need for a separate job queue. |
-| `pg` / `postgres` | Out of scope. Single-machine deployment uses SQLite. Postgres migration is a v3+ concern if ever. |
-| `express` | Already using Fastify. Don't introduce a second HTTP framework via Probot or otherwise. |
-| `smee-client` | Probot's webhook proxy for development. Use `ngrok` or Cloudflare Tunnel instead if needed for local webhook testing -- don't add a dependency for it. |
-| `jsonwebtoken` | `@octokit/app` handles JWT internally. Don't add a separate JWT library. |
-| `cron` / `node-cron` | Existing setTimeout chain pattern from v1.0 scheduler works. Don't add a cron library. |
-| `uuid` | Node.js 20+ has `crypto.randomUUID()` built-in. |
-| `date-fns` / `dayjs` | Not needed. Use `Date` and ISO strings. Budget periods use simple epoch math. |
-| `browser-use` (npm) | Doesn't exist as an npm package. The Python package requires a custom sidecar service -- defer. |
+| Sub-issue API | REST via `githubFetch()` | GraphQL via `@octokit/graphql` | REST is simpler, no special headers, consistent with existing adapter. GraphQL `sub_issues` feature flag adds fragility. |
+| Sub-issue ID storage | `metadata.github_internal_id` | New `internalId` field on TrackerIssue | Keeps TrackerIssue interface tracker-agnostic. Only GitHub needs this internal ID. Notion sub-tasks (if ever) would use UUIDs natively. |
+| Skill delivery | Bind mounts + `--add-dir` | Copy skills into container image at build time | Bind mounts allow per-run skill selection without image rebuilds. More flexible. |
+| Skill delivery | Bind mounts + `--add-dir` | Docker volumes | Volumes add lifecycle management complexity. Bind mounts are simpler for read-only content. |
+| Team coordination | Claude Code native teams | forgectl `agent-relay` multi-agent | Different abstraction levels. `agent-relay` coordinates across issues/containers. Claude Code teams coordinate within a single task. Using `agent-relay` for intra-task work would fight Claude Code's own coordination. |
+| Team display | `in-process` mode | Install `tmux` in container | Containers run headless via `claude -p`. tmux adds image bloat for zero benefit. |
+| DAG library | Existing `src/pipeline/dag.ts` | `graphlib` npm package | Already have validated, tested DAG code. Adding a dependency for the same functionality is waste. |
 
 ## Installation
 
-```bash
-# Core new dependencies
-npm install drizzle-orm better-sqlite3 @octokit/app @octokit/webhooks @octokit/rest
+No new packages required:
 
-# Dev dependencies
-npm install -D drizzle-kit @types/better-sqlite3 @octokit/types
+```bash
+# Verify existing dependencies cover all needs
+npm ls @octokit/rest dockerode zod
+# All three should already be installed at current versions
+
+# No new installs needed
 ```
 
-**Total new production dependencies:** 5
-**Total new dev dependencies:** 3
+## What NOT to Add (Summary)
 
-This is a minimal surface area for the scope of v2.0. Every dependency earns its place.
-
-## Integration Points with Existing Stack
-
-| Existing | New | Integration |
-|----------|-----|-------------|
-| Fastify daemon (`src/daemon/`) | `@octokit/app` webhooks | New route group `/webhooks/github` in Fastify. Octokit's verify/receive called from Fastify handler. No middleware adapter needed. |
-| Fastify daemon (`src/daemon/`) | `better-sqlite3` | Database opened on daemon start, closed on shutdown. Connection passed to repository layer. |
-| Zod (`src/config/`) | `drizzle-orm` schema | Zod validates runtime config/input. Drizzle defines DB schema. They complement, don't overlap. |
-| Orchestrator state machine (`src/orchestration/`) | SQLite sessions/checkpoints | State machine transitions write to SQLite. On restart, state is recovered from DB instead of lost. |
-| Tracker adapters (`src/tracker/`) | GitHub App webhooks | GitHub tracker adapter gains a second input path: webhooks in addition to polling. Polling remains fallback for users who can't receive webhooks. |
-| RunLog JSON writer (`src/logging/`) | Flight recorder (SQLite events) | RunLog writes become event inserts. Existing RunLog format can be a compatibility layer that reads from the event store. |
-| Commander CLI (`src/cli/`) | SQLite queries | New CLI commands (`forgectl approval list`, `forgectl costs summary`, `forgectl run inspect`) query SQLite directly. |
-| Agent sessions (`src/agent/`) | Durable execution | Session state serialized to SQLite. On resume, session context rebuilt from checkpoint + event replay. |
-
-## Database Schema Preview
-
-Tables needed across all v2.0 phases:
-
-| Table | Phase | Purpose |
-|-------|-------|---------|
-| `companies` | 2 | Tenant identity, config |
-| `agents` | 2 | Agent identity, role, status, budget scope |
-| `runs` | 1 | Run metadata (replaces file-based run logs) |
-| `events` | 3 | Append-only event ledger (flight recorder) |
-| `state_snapshots` | 3-4 | Materialized state at step boundaries |
-| `sessions` | 4 | Durable execution sessions |
-| `checkpoints` | 4 | Step-boundary state for crash recovery |
-| `approvals` | 5 | Approval requests and decisions |
-| `cost_events` | 5 | Token/cost tracking per run/agent |
-| `budgets` | 5 | Agent/company budget limits and usage |
-| `conversations` | 6 | GitHub comment threads for clarification |
-| `webhook_deliveries` | 6 | Idempotency tracking for webhook deduplication |
-
-All tables defined in `src/storage/schema.ts` using Drizzle's TypeScript schema DSL. Migrations generated by `drizzle-kit generate` and applied via `drizzle-kit migrate` (or programmatically on daemon start).
+| Dependency | Why Skip |
+|------------|----------|
+| `@octokit/graphql` | REST API covers all sub-issue operations without special headers |
+| `graphlib` / `dagre` | Existing `src/pipeline/dag.ts` already has DAG validation, cycle detection, topological sort |
+| `tmux` (in container image) | `in-process` teammate mode works without it |
+| Any Claude Code SDK | Does not exist. CLI with `-p` flag is the programmatic interface |
+| `agent-relay` for teams | Wrong abstraction level. Claude Code teams have their own messaging |
+| Docker volume plugins | Bind mounts are simpler and sufficient for read-only skill files |
+| `node-cron` / scheduling lib | Existing poll loop + setTimeout patterns suffice |
 
 ## Sources
 
-- [drizzle-orm on npm](https://www.npmjs.com/package/drizzle-orm) -- v0.45.1
-- [drizzle-kit on npm](https://www.npmjs.com/package/drizzle-kit) -- v0.31.9
-- [better-sqlite3 on npm](https://www.npmjs.com/package/better-sqlite3) -- v12.6.2
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite)
-- [@octokit/app on npm](https://www.npmjs.com/package/@octokit/app) -- v16.1.2
-- [@octokit/app GitHub](https://github.com/octokit/app.js/) -- GitHub App toolkit
-- [@octokit/webhooks on npm](https://www.npmjs.com/package/@octokit/webhooks) -- v14.2.0
-- [@octokit/rest on npm](https://www.npmjs.com/package/@octokit/rest) -- v22.0.1
-- [Probot on npm](https://www.npmjs.com/package/probot) -- v14.2.4 (evaluated, not recommended)
-- [SQLite WAL mode](https://sqlite.org/wal.html) -- concurrent read/write
-- [Event sourcing with SQLite](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- append-only patterns
-- [browser-use on PyPI](https://pypi.org/project/browser-use/) -- v0.12.1 (Python, no REST API)
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- open, not implemented
+- [GitHub Sub-Issues REST API Docs](https://docs.github.com/en/rest/issues/sub-issues) -- HIGH confidence, GA feature
+- [GitHub Blog: Sub-Issues and Projects REST API](https://github.blog/changelog/2025-09-11-a-rest-api-for-github-projects-sub-issues-improvements-and-more/) -- HIGH confidence
+- [Create GitHub Issue Hierarchy Using the API](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- MEDIUM confidence, verified sub_issue_id vs number gotcha
+- [GitHub Sub-Issues Public Preview Discussion](https://github.com/orgs/community/discussions/148714) -- MEDIUM confidence, community discussion
+- [Claude Code Agent Teams Documentation](https://code.claude.com/docs/en/agent-teams) -- HIGH confidence, official docs
+- [Claude Code Skills Documentation](https://code.claude.com/docs/en/skills) -- HIGH confidence, official docs
+- [Claude Code CLI Reference](https://code.claude.com/docs/en/cli-reference) -- HIGH confidence, official docs
+- [Claude Code --add-dir Guide](https://claudelog.com/faqs/--add-dir/) -- MEDIUM confidence, community source verified against official docs
+- [Claude Code Headless Mode](https://code.claude.com/docs/en/headless) -- HIGH confidence, official docs

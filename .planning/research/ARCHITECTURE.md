@@ -1,963 +1,686 @@
 # Architecture Patterns
 
-**Domain:** Durable AI agent runtime with persistent storage, event sourcing, governance, GitHub App integration, and browser-use agent adapter
-**Researched:** 2026-03-09
+**Domain:** GitHub sub-issues DAG, skill/config mounting, agent teams -- integration with forgectl orchestrator
+**Researched:** 2026-03-13
 
 ## Recommended Architecture
 
-The v2.0 architecture layers new capabilities onto the existing v1.0 foundation without replacing it. Each new subsystem integrates at well-defined seams in the current codebase. The guiding principle: **existing in-memory state becomes a cache of persistent state**, not the other way around.
+Three features, each with a clear integration surface into the existing codebase. The overarching principle: **extend, don't restructure**. forgectl's existing tracker/dispatcher/worker pipeline is sound; these features add capabilities at well-defined seams.
 
 ```
-                   INTERACTION SURFACES
-        ┌──────────────────┬──────────────────┐
-        │  GitHub App      │  Existing         │
-        │  /webhooks/github│  REST API + UI    │
-        │  (Fastify routes)│  (unchanged)      │
-        └────────┬─────────┴────────┬──────────┘
-                 │                  │
-        ┌────────▼──────────────────▼──────────┐
-        │        GOVERNANCE LAYER               │
-        │  Autonomy enforcement, approval gates │
-        │  Budget pre-flight checks             │
-        │  (wraps dispatcher, new middleware)    │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     DURABLE ORCHESTRATOR              │
-        │  Extended state machine:              │
-        │    + waiting_for_input                │
-        │    + paused, checkpointed             │
-        │  Session persistence + resume         │
-        │  Execution locks via SQLite           │
-        │  (modifies src/orchestrator/)         │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     FLIGHT RECORDER                   │
-        │  Append-only event ledger             │
-        │  Subscribes to RunEvent emitter       │
-        │  Persists to events table             │
-        │  State reconstruction from events     │
-        │  (new src/audit/, hooks into logging) │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     IDENTITY LAYER                    │
-        │  Company + Agent entities             │
-        │  Budget scoping, attribution          │
-        │  (new src/company/, extends agent/)   │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     STORAGE LAYER                     │
-        │  SQLite + Drizzle ORM                 │
-        │  Repository pattern per entity        │
-        │  Migrations via drizzle-kit           │
-        │  (new src/storage/)                   │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     V1.0 FOUNDATION                   │
-        │  Docker sandbox, validation loop,     │
-        │  agent sessions, tracker adapters,    │
-        │  workspace manager, WORKFLOW.md       │
-        └──────────────────────────────────────┘
+                    GitHub Sub-Issues
+                         |
+                    TrackerAdapter
+                    (enriched blocked_by)
+                         |
+              +----------+----------+
+              |                     |
+         Dispatcher            Scheduler
+    (DAG-aware filtering)  (terminalIds from sub-issues)
+              |
+           Worker
+              |
+    +---------+---------+
+    |                   |
+  Skill Mount       Agent Teams
+  (bind mounts)    (team mode env)
+    |                   |
+  Container         Container
+  (createContainer)  (invokeAgent)
 ```
 
 ### Component Boundaries
 
-| Component | Directory | New/Modified | Responsibility | Communicates With |
-|-----------|-----------|-------------|----------------|-------------------|
-| Storage Layer | `src/storage/` | **NEW** | SQLite connection, Drizzle schema, migrations, repository functions | Everything above it |
-| Company/Identity | `src/company/` | **NEW** | Company CRUD, agent identity, roles, budget scopes | Storage, Orchestrator, Governance |
-| Agent Identity | `src/agent/identity.ts` | **NEW file in existing dir** | Agent entity model, lifecycle states | Storage, Company |
-| Flight Recorder | `src/audit/` | **NEW** | Append-only event persistence, state snapshots, query API | Storage, Logging (events.ts) |
-| Durable Orchestrator | `src/orchestrator/` | **MODIFIED** | Extended state machine, checkpointing, pause/resume, execution locks | Storage, Audit, Agent sessions |
-| Governance | `src/governance/` | **NEW** | Approval gates, autonomy enforcement, budget checks | Storage, Orchestrator, WORKFLOW.md |
-| Cost Tracking | `src/costs/` | **NEW** | CostEvent recording, budget enforcement, period resets | Storage, Governance, Agent sessions |
-| GitHub App | `src/github-app/` | **NEW** | Webhook receiver, slash commands, reactions, check runs | Fastify daemon, Orchestrator, Governance |
-| Browser-Use Adapter | `src/agent/browser-use.ts` | **NEW file in existing dir** | Sidecar process management, HTTP bridge to Python service | Agent session interface, Container |
-| Daemon Server | `src/daemon/server.ts` | **MODIFIED** | Initialize storage on startup, register webhook routes, pass db to services | Storage, all services |
-| Daemon Routes | `src/daemon/routes.ts` | **MODIFIED** | Add webhook route group, audit trail API endpoints | GitHub App, Flight Recorder |
-| Config Schema | `src/config/schema.ts` | **MODIFIED** | Add autonomy, budget_cap, triggers fields | Governance, Workflow |
-| Workflow Types | `src/workflow/types.ts` | **MODIFIED** | Add autonomy, budget_cap, triggers to WorkflowFileConfig | Governance |
-| RunEvent/RunLog | `src/logging/events.ts`, `run-log.ts` | **MODIFIED** | Extended event types, flight recorder subscription | Audit |
+| Component | Responsibility | Communicates With |
+|-----------|---------------|-------------------|
+| `src/tracker/github.ts` (MODIFY) | Fetch sub-issues from GitHub REST API, populate `blocked_by` | Dispatcher, Scheduler |
+| `src/tracker/types.ts` (MODIFY) | Add `parent_id`, `sub_issue_ids` to TrackerIssue | All consumers of TrackerIssue |
+| `src/orchestrator/scheduler.ts` (MODIFY) | Build `terminalIssueIds` from terminal state fetch | Dispatcher via tick |
+| `src/container/skills.ts` (NEW) | Resolve skill directories, prepare bind mounts for CLAUDE.md + skills | Worker, prepareExecution |
+| `src/config/schema.ts` (MODIFY) | Add `skills` config section with skill source paths, team config | Skill mount, agent teams |
+| `src/agent/teams.ts` (NEW) | Agent teams orchestration: env setup, team lead prompt, teammate coordination | Worker |
+| `src/agent/claude-code.ts` (MODIFY) | Support team env vars passed through | invoke.ts |
 
+### Data Flow
+
+**Sub-issues flow:**
+```
+GitHub API (GET /repos/{owner}/{repo}/issues/{number}/sub_issues)
+  -> github.ts fetchSubIssues()
+    -> normalizeIssue() populates blocked_by from sub-issue parent relationship
+      -> dispatcher filterCandidates() checks blocked_by against terminalIssueIds
+        -> terminalIssueIds built from closed issues (scheduler tick)
+```
+
+**Skill mounting flow:**
+```
+forgectl.yaml skills config OR WORKFLOW.md skills section
+  -> skills.ts resolveSkillSources()
+    -> prepareSkillMounts() returns { binds, env } (ContainerMounts pattern)
+      -> prepareExecution() adds skill binds to container creation
+        -> CLAUDE.md + skills available inside container at expected paths
+```
+
+**Agent teams flow:**
+```
+WORKFLOW.md team config OR forgectl.yaml agent.team section
+  -> worker detects team config
+    -> teams.ts buildTeamEnv() sets CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+      -> teams.ts buildTeamPromptPrefix() wraps task with team instructions
+        -> Claude Code internally creates lead + teammates
+          -> Claude Code manages task list, mailbox, coordination
+```
+
+## Feature 1: GitHub Sub-Issues DAG Dependencies
+
+### Current State
+
+- `TrackerIssue.blocked_by: string[]` exists but is **always empty** for GitHub issues
+- `normalizeIssue()` in `github.ts` line 76 hardcodes `blocked_by: []`
+- `filterCandidates()` in `dispatcher.ts` already checks `blocked_by` against `terminalIssueIds` (lines 99-105)
+- `terminalIssueIds` in `scheduler.ts` line 64 is always an empty `Set<string>` -- never populated
+- Pipeline system (`dag.ts`) has full DAG support but is separate from the orchestrator
+- `webhookPayloadToTrackerIssue()` in `webhooks.ts` also hardcodes `blocked_by: []`
+
+### GitHub Sub-Issues REST API
+
+The sub-issues REST API is GA (since late 2024). Key endpoints:
+
+```
+GET  /repos/{owner}/{repo}/issues/{issue_number}/sub_issues
+POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues  (body: {sub_issue_id: <internal_id>})
+DELETE /repos/{owner}/{repo}/issues/{issue_number}/sub_issue  (body: {sub_issue_id: <internal_id>})
+```
+
+GraphQL also available (requires `GraphQL-Features: sub_issues` header):
+```graphql
+query { node(id: "...") { ... on Issue { subIssues(first: 100) { nodes { number state title } } parent { number } } } }
+```
+
+**Important distinction:** The REST endpoint URL uses issue `number`, but the POST body requires the internal `id` field (not `node_id`, not `number`). The GET endpoint returns sub-issue objects with both `id` and `number`.
+
+Limits: 100 sub-issues per parent, 8 levels of nesting.
+
+### Integration Design
+
+**Approach: Enrich TrackerIssue at fetch time, populate terminalIds at tick time.**
+
+The existing `filterCandidates` logic is correct -- it just needs real data.
+
+#### Step 1: Extend TrackerIssue type
+
+```typescript
+// src/tracker/types.ts
+export interface TrackerIssue {
+  // ... existing fields ...
+  blocked_by: string[];        // Already exists -- now populated
+  parent_id: string | null;    // NEW: parent issue number if this is a sub-issue
+  sub_issue_ids: string[];     // NEW: child sub-issue numbers
+}
+```
+
+#### Step 2: Fetch sub-issues in GitHub adapter
+
+**Key design decision: batch sub-issue fetching, not per-issue.**
+
+Fetching sub-issues for every candidate issue on every poll is expensive (1 API call per issue). Instead, fetch sub-issues only for issues that have them (GitHub includes a `sub_issues_summary` field in the GraphQL API that indicates child count).
+
+Strategy:
+1. Fetch candidate issues as normal (existing)
+2. For each candidate, check if it has sub-issues (via body parsing or metadata)
+3. Batch-fetch sub-issues for those that do (parallel Promise.all)
+4. Build the `blocked_by` relationships
+
+**Dependency semantics for sub-issues:**
+- A **parent issue** should not be dispatched until all its sub-issues are in terminal states. So `parent.blocked_by = [sub1.id, sub2.id, ...]`
+- A **sub-issue** is independent unless it has explicit dependencies. `sub.blocked_by = []` by default.
+- This means: sub-issues get dispatched first, parent dispatches when all children complete. Natural bottom-up execution.
+
+```typescript
+// src/tracker/sub-issues.ts
+export async function fetchSubIssues(
+  githubFetch: FetchFn,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<SubIssueInfo[]> {
+  const url = `${API_BASE}/repos/${owner}/${repo}/issues/${issueNumber}/sub_issues`;
+  const response = await githubFetch(url);
+  return (await response.json()) as SubIssueInfo[];
+}
+
+export interface SubIssueInfo {
+  id: number;      // Internal GitHub ID
+  number: number;  // Issue number
+  state: string;
+  title: string;
+}
+```
+
+#### Step 3: Populate terminalIssueIds in scheduler tick
+
+This is the critical missing piece. The scheduler needs to know which issues are terminal to unblock dependents.
+
+```typescript
+// In scheduler tick(), replace the empty terminalIds:
+// Option A: Fetch terminal issues from tracker
+const terminalIssues = await tracker.fetchIssuesByStates(config.tracker.terminal_states);
+const terminalIds = new Set(terminalIssues.map(i => i.id));
+
+// Option B: Cache terminalIds in OrchestratorState with TTL
+// (preferred -- avoids re-fetching closed issues every tick)
+if (!state.terminalIdsCache || state.terminalIdsCacheExpiry < Date.now()) {
+  const terminalIssues = await tracker.fetchIssuesByStates(config.tracker.terminal_states);
+  state.terminalIdsCache = new Set(terminalIssues.map(i => i.id));
+  state.terminalIdsCacheExpiry = Date.now() + config.orchestrator.poll_interval_ms;
+}
+const terminalIds = state.terminalIdsCache;
+```
+
+Option B is strongly preferred because:
+- Fetching all closed issues every 30s is wasteful
+- Terminal state rarely changes (closed issues stay closed)
+- Cache TTL matching poll interval is good enough
+
+#### Step 4: Handle webhook sub-issue events
+
+`webhookPayloadToTrackerIssue()` currently hardcodes `blocked_by: []`. When a sub-issue is closed via webhook, we should update the terminal IDs cache.
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `src/tracker/sub-issues.ts` | `fetchSubIssues()` REST API calls, `enrichWithSubIssues()` |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `src/tracker/types.ts` | Add `parent_id: string \| null`, `sub_issue_ids: string[]` to TrackerIssue |
+| `src/tracker/github.ts` | Import and call sub-issues API in `fetchCandidateIssues()`, populate `blocked_by` |
+| `src/tracker/notion.ts` | Add `parent_id: null, sub_issue_ids: []` for interface compat |
+| `src/orchestrator/scheduler.ts` | Build `terminalIssueIds` from cached terminal issue fetch |
+| `src/orchestrator/state.ts` | Add `terminalIdsCache: Set<string>` with TTL to OrchestratorState |
+| `src/github/webhooks.ts` | Populate `parent_id`, `sub_issue_ids` from webhook payload (best-effort) |
+
+
+## Feature 2: Skill/Config Bind-Mounting
+
+### Current State
+
+- Container bind mounts created in `prepareExecution()` (`src/orchestration/single.ts`, lines 72-84)
+- Auth mounts use the `ContainerMounts` pattern (`src/auth/mount.ts`): `{ binds, env, cleanup }`
+- `createContainer()` takes a `binds: string[]` array -- fully extensible
+- Claude Code reads CLAUDE.md from working directory and `~/.claude/` for personal skills
+- Claude Code skills follow the Agent Skills standard: `SKILL.md` with YAML frontmatter
+- Skills from `--add-dir` directories are loaded when `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`
+- No mechanism exists today to inject skills or CLAUDE.md files into containers
+
+### What Needs to Be Available Inside the Container
+
+| Host Source | Container Target | Why |
+|------------|-----------------|-----|
+| Project `.claude/skills/` | `/workspace/.claude/skills/` | Already there (workspace bind covers it) |
+| Project `CLAUDE.md` | `/workspace/CLAUDE.md` | Already there (workspace bind covers it) |
+| `~/.claude/skills/` | `/home/node/.claude/skills/` | Personal skills (NOT in workspace) |
+| `~/.claude/CLAUDE.md` | `/home/node/.claude/CLAUDE.md` | Personal context (NOT in workspace) |
+| External skill packs (e.g., GSD) | `/home/node/.claude/additional/{name}/` | Third-party skill collections |
+| Custom CLAUDE.md files | Appended/layered | Workflow-specific agent instructions |
+
+**Key insight:** Project-level skills and CLAUDE.md are already available via the workspace bind mount. The gap is personal/global skills and external skill packs that live outside the repo.
+
+### Integration Design
+
+**Approach: New `skills.ts` module that mirrors the `auth/mount.ts` ContainerMounts pattern.**
+
+#### Config Schema Addition
+
+```typescript
+// src/config/schema.ts -- new section
+skills: z.object({
+  sources: z.array(z.string()).default([]),       // External skill directories to mount
+  mount_personal: z.boolean().default(true),       // Mount ~/.claude/skills/
+  claude_md: z.array(z.string()).default([]),       // Additional CLAUDE.md files
+}).default({})
+```
+
+#### WORKFLOW.md Extension
+
+```yaml
 ---
-
-## Integration Point 1: SQLite/Drizzle Storage Layer
-
-### Where It Plugs In
-
-**New directory:** `src/storage/` with the following structure:
-
-```
-src/storage/
-  db.ts          # SQLite connection singleton (better-sqlite3 + drizzle)
-  schema.ts      # Drizzle table definitions
-  migrate.ts     # Migration runner (drizzle-kit)
-  repositories/
-    runs.ts      # Run CRUD
-    events.ts    # Append-only event store
-    agents.ts    # Agent identity CRUD
-    companies.ts # Company CRUD
-    approvals.ts # Approval gate CRUD
-    costs.ts     # Cost event recording
-    sessions.ts  # Durable session state
-```
-
-### What It Replaces vs. What It Preserves
-
-| Current | v2.0 |
-|---------|------|
-| `OrchestratorState` (in-memory Sets/Maps) | In-memory state **backed by** SQLite; rebuilt from DB on daemon restart |
-| `RunLog` saved as JSON files via `saveRunLog()` | Run metadata in `runs` table; JSON log files **still written** for backward compat |
-| `RunEvent` emitted to EventEmitter only | Events **also** persisted to `events` table by flight recorder subscriber |
-| `MetricsCollector` (in-memory counters) | Metrics computed from persistent events; in-memory collector becomes a cache |
-| Retry attempts tracked in `state.retryAttempts` Map | Attempt count stored in `runs` table, loaded on recovery |
-
-### Connection Initialization
-
-The database initializes **once** at daemon startup, before any services start:
-
-```typescript
-// src/storage/db.ts
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from './schema.js';
-
-let _db: ReturnType<typeof drizzle> | null = null;
-
-export function initDb(path: string = '~/.forgectl/forgectl.db') {
-  const sqlite = new Database(resolvedPath, { /* WAL mode for concurrent reads */ });
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('busy_timeout = 5000');
-  _db = drizzle(sqlite, { schema });
-  return _db;
-}
-
-export function getDb() {
-  if (!_db) throw new Error('Database not initialized — call initDb() first');
-  return _db;
-}
-```
-
-**Modified file:** `src/daemon/server.ts` adds `initDb()` call before `new Orchestrator()`:
-
-```typescript
-// In startDaemon():
-import { initDb, runMigrations } from '../storage/db.js';
-
-const db = initDb();
-await runMigrations(db);
-// ... then create orchestrator, register routes, etc.
-```
-
-### Schema Design (Key Tables)
-
-```typescript
-// src/storage/schema.ts
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
-
-export const companies = sqliteTable('companies', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  config: text('config'),  // JSON blob
-  createdAt: text('created_at').notNull(),
-});
-
-export const agents = sqliteTable('agents', {
-  id: text('id').primaryKey(),
-  companyId: text('company_id').references(() => companies.id),
-  name: text('name').notNull(),
-  role: text('role').notNull(),
-  status: text('status').notNull(), // pending_approval | idle | running | paused | waiting_for_input | terminated
-  reportsTo: text('reports_to'),
-  budgetCents: integer('budget_cents'),
-  budgetPeriod: text('budget_period'), // monthly | weekly
-  createdAt: text('created_at').notNull(),
-});
-
-export const runs = sqliteTable('runs', {
-  id: text('id').primaryKey(),
-  agentId: text('agent_id').references(() => agents.id),
-  issueId: text('issue_id'),
-  issueIdentifier: text('issue_identifier'),
-  trackerKind: text('tracker_kind'),
-  status: text('status').notNull(), // queued | running | paused | waiting_for_input | completed | failed | abandoned
-  attempt: integer('attempt').notNull().default(1),
-  checkpointData: text('checkpoint_data'), // JSON: serialized execution state
-  costCents: integer('cost_cents').default(0),
-  startedAt: text('started_at'),
-  completedAt: text('completed_at'),
-  createdAt: text('created_at').notNull(),
-});
-
-export const events = sqliteTable('events', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  type: text('type').notNull(),
-  data: text('data').notNull(), // JSON
-  createdAt: text('created_at').notNull(),
-});
-
-export const approvals = sqliteTable('approvals', {
-  id: text('id').primaryKey(),
-  runId: text('run_id').references(() => runs.id),
-  type: text('type').notNull(), // plan_review | expensive_run | deploy | custom
-  status: text('status').notNull(), // pending | approved | rejected | revision_requested
-  requestedBy: text('requested_by'),
-  decidedBy: text('decided_by'),
-  reason: text('reason'),
-  createdAt: text('created_at').notNull(),
-  decidedAt: text('decided_at'),
-});
-
-export const costEvents = sqliteTable('cost_events', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  agentId: text('agent_id').references(() => agents.id),
-  provider: text('provider').notNull(), // anthropic | openai
-  model: text('model').notNull(),
-  inputTokens: integer('input_tokens').notNull(),
-  outputTokens: integer('output_tokens').notNull(),
-  cents: real('cents').notNull(),
-  createdAt: text('created_at').notNull(),
-});
-
-export const conversations = sqliteTable('conversations', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  role: text('role').notNull(), // agent | human
-  content: text('content').notNull(),
-  source: text('source'), // github_comment | notion_comment | cli
-  externalId: text('external_id'), // GitHub comment ID, etc.
-  createdAt: text('created_at').notNull(),
-});
-```
-
-### Backward Compatibility
-
-The `saveRunLog()` function in `src/logging/run-log.ts` continues to write JSON files. A new `persistRunLog()` function writes to both the `runs` table and the JSON file. Existing `forgectl run` commands see no difference. The database is an additive layer.
-
+skills:
+  sources:
+    - ~/.claude/get-shit-done
+    - ./team-skills
+  mount_personal: true
+  claude_md:
+    - ~/.claude/CLAUDE.md
 ---
-
-## Integration Point 2: GitHub App Webhook Receiver in Fastify Daemon
-
-### Where It Plugs In
-
-**New directory:** `src/github-app/` with the following structure:
-
-```
-src/github-app/
-  webhook.ts        # Fastify route plugin for /webhooks/github
-  verify.ts         # HMAC-SHA256 signature verification
-  events.ts         # Event handlers (issue labeled, comment created, reaction, etc.)
-  commands.ts       # Slash command parser
-  bot.ts            # Bot comment formatting (templates)
-  auth.ts           # GitHub App JWT + installation token management
-  types.ts          # Event payload types
 ```
 
-### Integration with Fastify Daemon
-
-The webhook receiver is a **Fastify plugin** registered on the existing app instance. This follows Fastify's encapsulation model.
-
-**Modified file:** `src/daemon/server.ts`
+#### Skill Mount Module
 
 ```typescript
-// After existing registerRoutes():
-import { registerGitHubAppRoutes } from '../github-app/webhook.js';
+// src/container/skills.ts
+import { existsSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { homedir } from "node:os";
 
-if (config.githubApp) {
-  registerGitHubAppRoutes(app, {
-    appId: config.githubApp.appId,
-    privateKey: config.githubApp.privateKey,
-    webhookSecret: config.githubApp.webhookSecret,
-    orchestrator,
-    governance,  // approval/budget system
-    db,
-  });
-}
-```
-
-**Modified file:** `src/daemon/routes.ts` -- the webhook route group is separate, NOT added here. It gets its own plugin for encapsulation.
-
-### Webhook Flow
-
-```
-GitHub POST /webhooks/github
-  → verify.ts: HMAC-SHA256 signature check (preValidation hook)
-  → webhook.ts: route handler, parse event type from X-GitHub-Event header
-  → events.ts: dispatch to handler by event type
-    → issues.labeled → check trigger rules → enqueue into orchestrator via dispatchIssue()
-    → issue_comment.created → check for slash command → commands.ts parser
-    → pull_request_review → feed back to agent session
-    → check_run.rerequested → re-trigger run
-```
-
-### Key Design Decision: Webhook Events Enqueue, Don't Execute
-
-Webhook handlers do NOT execute runs synchronously. They either:
-1. Call `orchestrator.triggerTick()` to wake the scheduler (for new work)
-2. Post to an internal event bus for the governance system (for approvals)
-3. Resume a paused run by updating the `runs` table status and waking the scheduler
-
-This keeps webhook response times under 1 second (GitHub expects a response within 10 seconds).
-
-### Authentication: @octokit/auth-app + @octokit/webhooks
-
-Use `@octokit/app` which bundles auth-app, webhooks, and Octokit REST client. This is the official GitHub SDK for GitHub Apps.
-
-```typescript
-// src/github-app/auth.ts
-import { App } from '@octokit/app';
-
-export function createGitHubApp(config: GitHubAppConfig) {
-  return new App({
-    appId: config.appId,
-    privateKey: config.privateKey,
-    webhooks: { secret: config.webhookSecret },
-  });
-}
-```
-
-Webhook signature verification uses the Octokit webhooks library's `verify()` function, wrapped as a Fastify `preValidation` hook. This requires `@fastify/raw-body` to access the raw request body for signature computation.
-
-### Relationship to Existing Tracker Adapter
-
-The GitHub App does NOT replace the existing `TrackerAdapter`. The tracker adapter handles **polling** for candidate issues. The GitHub App handles **push events** (webhooks). They coexist:
-
-- **Without GitHub App:** Polling-only mode (existing v1 behavior, unchanged)
-- **With GitHub App:** Webhooks trigger immediate dispatch; polling is fallback/reconciliation
-
-When a webhook arrives for an issue event, the handler calls `orchestrator.triggerTick()` which re-runs the normal candidate selection pipeline. The webhook just makes it faster (seconds instead of poll interval).
-
----
-
-## Integration Point 3: Event-Sourced Flight Recorder Under RunEvent/RunLog
-
-### Where It Plugs In
-
-**New directory:** `src/audit/`
-
-```
-src/audit/
-  recorder.ts    # Flight recorder: subscribes to RunEvent, persists to DB
-  snapshots.ts   # State snapshot creation at step boundaries
-  query.ts       # Query API: run history, filter, replay
-  writeback.ts   # Rich write-back formatting for GitHub/Notion comments
-```
-
-### How It Layers Under Existing Logging
-
-The existing `RunEvent` emitter (`src/logging/events.ts`) is the **source**. The flight recorder is a **subscriber** that persists events to SQLite. This is purely additive -- no existing code changes except adding the subscription.
-
-```
-  Agent/Worker/Orchestrator
-         │
-         ▼
-  emitRunEvent(event)          ← existing, unchanged
-         │
-    ┌────┴────────────────┐
-    ▼                     ▼
-  SSE listeners       FlightRecorder.onEvent(event)   ← NEW subscriber
-  (existing)               │
-                           ▼
-                    INSERT INTO events (run_id, type, data, created_at)
-```
-
-**Modified file:** `src/logging/events.ts` -- extend the `RunEvent.type` union to include new event types:
-
-```typescript
-export interface RunEvent {
-  runId: string;
-  type: "started" | "phase" | "validation" | "retry" | "output" | "completed" | "failed"
-    | "dispatch" | "reconcile" | "stall" | "orch_retry"
-    // v2.0 additions:
-    | "checkpoint" | "paused" | "resumed" | "waiting_for_input" | "input_received"
-    | "approval_requested" | "approval_decided" | "cost_event"
-    | "agent_tool_call" | "container_lifecycle";
-  timestamp: string;
-  data: Record<string, unknown>;
-}
-```
-
-**Modified file:** `src/daemon/server.ts` -- initialize the recorder after db:
-
-```typescript
-import { FlightRecorder } from '../audit/recorder.js';
-
-const recorder = new FlightRecorder(db);
-recorder.start(); // Subscribes to runEvents emitter
-```
-
-### State Reconstruction
-
-The flight recorder enables reconstructing any run's state by replaying its events. This powers:
-- `forgectl run inspect <run-id>` CLI command
-- Dashboard run detail view
-- Crash recovery (rebuild in-memory state from events on daemon restart)
-
-### Append-Only Guarantee
-
-Events are INSERT-only into the `events` table. No UPDATE or DELETE. Corrections are new compensating events. The table has no unique constraint on (run_id, type) -- duplicates are valid (multiple retries produce multiple events).
-
----
-
-## Integration Point 4: Durable Execution Extending Orchestrator State Machine
-
-### What Changes in `src/orchestrator/`
-
-**Modified file:** `src/orchestrator/state.ts`
-
-The `IssueState` type gains new states:
-
-```typescript
-export type IssueState =
-  | "claimed"
-  | "running"
-  | "retry_queued"
-  | "released"
-  // v2.0 additions:
-  | "paused"              // Human requested pause via slash command
-  | "waiting_for_input"   // Agent asked a clarification question
-  | "checkpointed";       // Saved state, container may be reclaimed
-```
-
-The `OrchestratorState` changes from ephemeral to **persistent-backed**:
-
-```typescript
-export interface OrchestratorState {
-  // Existing (now backed by DB):
-  claimed: Set<string>;
-  running: Map<string, WorkerInfo>;
-  retryTimers: Map<string, ReturnType<typeof setTimeout>>;
-  retryAttempts: Map<string, number>;
-  // v2.0 additions:
-  paused: Map<string, PausedRunInfo>;
-  waitingForInput: Map<string, WaitingRunInfo>;
+export interface SkillMountConfig {
+  sources: string[];
+  mountPersonal: boolean;
+  claudeMd: string[];
 }
 
-export interface PausedRunInfo {
-  issueId: string;
-  runId: string;
-  checkpointId: string;  // References state snapshot in DB
-  pausedAt: number;
-  reason: string;
+export interface SkillMounts {
+  binds: string[];
+  env: Record<string, string>;
 }
 
-export interface WaitingRunInfo {
-  issueId: string;
-  runId: string;
-  checkpointId: string;
-  question: string;       // What the agent asked
-  askedAt: number;
-  timeoutMs: number;      // When to mark as stalled
-}
-```
+export function prepareSkillMounts(config: SkillMountConfig): SkillMounts {
+  const binds: string[] = [];
+  const env: Record<string, string> = {};
 
-### Execution Locks via SQLite
-
-Replace the in-memory `claimed` Set with SQLite-backed atomic claims using `BEGIN IMMEDIATE`:
-
-```typescript
-// src/orchestrator/locks.ts
-export function atomicClaim(db: DB, issueId: string, workerId: string): boolean {
-  return db.transaction(() => {
-    const existing = db.select().from(runs)
-      .where(and(eq(runs.issueId, issueId), inArray(runs.status, ['running', 'paused', 'waiting_for_input'])))
-      .get();
-    if (existing) return false;
-    // Insert new run record
-    db.insert(runs).values({ id: newRunId(), issueId, status: 'running', ... }).run();
-    return true;
-  })();
-}
-```
-
-### Crash Recovery
-
-**Modified file:** `src/orchestrator/index.ts` -- the `startupRecovery()` method expands:
-
-```typescript
-private async startupRecovery(): Promise<void> {
-  // Existing: clean terminal workspaces (unchanged)
-
-  // NEW: Recover interrupted runs from DB
-  const interruptedRuns = db.select().from(runs)
-    .where(eq(runs.status, 'running'))
-    .all();
-
-  for (const run of interruptedRuns) {
-    if (run.checkpointData) {
-      // Has checkpoint: mark as checkpointed, scheduler will resume
-      db.update(runs).set({ status: 'checkpointed' }).where(eq(runs.id, run.id)).run();
-    } else {
-      // No checkpoint: mark as failed with crash reason
-      db.update(runs).set({ status: 'failed', completedAt: now() }).where(eq(runs.id, run.id)).run();
-      this.recorder.emit({ runId: run.id, type: 'failed', data: { reason: 'daemon_crash_recovery' } });
+  // 1. Mount personal skills from ~/.claude/skills/
+  if (config.mountPersonal) {
+    const personalSkills = resolve(homedir(), ".claude/skills");
+    if (existsSync(personalSkills)) {
+      binds.push(`${personalSkills}:/home/node/.claude/skills:ro`);
+    }
+    // Also mount personal CLAUDE.md
+    const personalClaudeMd = resolve(homedir(), ".claude/CLAUDE.md");
+    if (existsSync(personalClaudeMd)) {
+      binds.push(`${personalClaudeMd}:/home/node/.claude/CLAUDE.md:ro`);
     }
   }
 
-  // Rebuild in-memory state from DB
-  this.state = rebuildStateFromDb(db);
+  // 2. Mount external skill sources (GSD, team packs, etc.)
+  for (const source of config.sources) {
+    const expanded = source.replace(/^~/, homedir());
+    const absPath = resolve(expanded);
+    if (!existsSync(absPath)) continue;
+    const name = basename(absPath);
+    binds.push(`${absPath}:/home/node/.claude/additional/${name}:ro`);
+  }
+
+  // 3. Mount additional CLAUDE.md files
+  //    These are separate from the personal one -- for workflow-specific context
+  for (let i = 0; i < config.claudeMd.length; i++) {
+    const source = config.claudeMd[i].replace(/^~/, homedir());
+    const absPath = resolve(source);
+    if (!existsSync(absPath)) continue;
+    // Mount each with a unique name to avoid conflicts
+    binds.push(`${absPath}:/home/node/.claude/additional/claude-md-${i}/CLAUDE.md:ro`);
+  }
+
+  // 4. Enable additional directory CLAUDE.md loading
+  if (config.sources.length > 0 || config.claudeMd.length > 0) {
+    env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = "1";
+  }
+
+  return { binds, env };
 }
 ```
 
-### Checkpoint/Resume Flow
+#### Integration Point: prepareExecution
 
-```
-Agent working on issue #42
-  → Step boundary reached (e.g., after validation pass)
-  → Checkpoint: serialize { prompt history, workspace state hash, step index, context }
-  → INSERT INTO state_snapshots (run_id, data, created_at)
-  → If daemon crashes...
-  → On restart: find checkpointed runs
-  → Restore workspace (already persisted on disk)
-  → Rebuild agent context from checkpoint + audit trail events
-  → Resume agent from last step
-```
-
----
-
-## Integration Point 5: Governance/Autonomy Extending WORKFLOW.md Contract
-
-### What Changes in WORKFLOW.md
-
-**Modified file:** `src/workflow/types.ts` -- `WorkflowFileConfig` gains:
+In `prepareExecution()` (`src/orchestration/single.ts`), after auth mounts and before container creation:
 
 ```typescript
-export interface WorkflowFileConfig {
-  // ... existing fields ...
+// After credential mounts...
+if (plan.skills) {
+  const skillMounts = prepareSkillMounts(plan.skills);
+  binds.push(...skillMounts.binds);
+  for (const [k, v] of Object.entries(skillMounts.env)) {
+    agentEnv.push(`${k}=${v}`);
+  }
+}
+```
 
-  // v2.0 additions:
-  autonomy?: 'full' | 'semi' | 'interactive' | 'supervised';
-  budget_cap?: number;    // Max cost in dollars per run
-  triggers?: {
-    github_labels?: string[];
-    notion_status?: string;
+Same integration needed in `buildOrchestratedRunPlan()` in `worker.ts` for orchestrated runs.
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `src/container/skills.ts` | `prepareSkillMounts()` -- resolve paths, create bind mount specs |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `src/config/schema.ts` | Add `SkillsConfigSchema` to ConfigSchema |
+| `src/workflow/types.ts` | Add `skills?: SkillMountConfig` to RunPlan and WorkflowFileConfig |
+| `src/orchestration/single.ts` | Call `prepareSkillMounts()` in `prepareExecution()` |
+| `src/orchestrator/worker.ts` | Pass skills config through `buildOrchestratedRunPlan()` |
+
+
+## Feature 3: Claude Code Agent Teams Inside Containers
+
+### Current State
+
+- Agent invocation: `invoke.ts` writes prompt to temp file, runs `sh -c "cat file | claude -p ..."` via `execInContainer`
+- `claudeCodeAdapter.buildShellCommand()` builds the CLI command string
+- Agent teams are experimental, require `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var
+- Teams need Claude Code v2.1.32+ and Opus 4.6+ model
+- Teams work via: shared task list at `~/.claude/tasks/`, team config at `~/.claude/teams/`, mailbox messaging
+- One lead session orchestrates multiple teammate sessions (separate Claude Code processes)
+- Teammates load CLAUDE.md and skills from working directory automatically
+- In-process mode works in any terminal (no tmux needed)
+- Teams handle their own coordination: task assignment, claiming, dependencies, messaging
+
+### Integration Design
+
+**Approach: Agent teams are a prompt-level and env-level concern, not an architectural change.**
+
+Critical insight: Claude Code handles ALL team coordination internally. forgectl just needs to:
+1. Set the env var to enable teams
+2. Ensure model is compatible (Opus 4.6+)
+3. Craft the prompt to instruct team creation with appropriate structure
+4. Scale container resources for multiple Claude instances
+5. Increase timeout (teams take longer than single agents)
+
+Agent teams are NOT a new orchestration mode. They operate within a single `invokeAgent` call. Claude Code itself spawns and manages sub-processes inside the container.
+
+#### Config Schema Addition
+
+```typescript
+// In agent config within schema.ts
+agent: z.object({
+  // ... existing fields ...
+  team: z.object({
+    enabled: z.boolean().default(false),
+    max_teammates: z.number().int().min(1).max(10).default(3),
+    teammate_model: z.string().optional(),
+  }).default({}),
+})
+```
+
+#### WORKFLOW.md Extension
+
+```yaml
+---
+agent:
+  type: claude-code
+  model: claude-opus-4-6
+  team:
+    enabled: true
+    max_teammates: 4
+    teammate_model: claude-sonnet-4-20250514
+---
+```
+
+#### Team Module
+
+```typescript
+// src/agent/teams.ts
+export interface TeamConfig {
+  enabled: boolean;
+  maxTeammates: number;
+  teammateModel?: string;
+}
+
+export function buildTeamEnv(config: TeamConfig): string[] {
+  if (!config.enabled) return [];
+  return ["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"];
+}
+
+export function buildTeamPromptPrefix(config: TeamConfig, taskPrompt: string): string {
+  if (!config.enabled) return taskPrompt;
+
+  const lines = [
+    `Create an agent team with up to ${config.maxTeammates} teammates to work on this task.`,
+    `Use in-process mode for teammates.`,
+  ];
+
+  if (config.teammateModel) {
+    lines.push(`Use ${config.teammateModel} for each teammate.`);
+  }
+
+  lines.push(
+    `Break the work into parallel tasks where possible.`,
+    `Assign non-overlapping file ownership to avoid conflicts.`,
+    `Wait for all teammates to finish before completing.`,
+    ``,
+    `Task:`,
+    taskPrompt,
+  );
+
+  return lines.join("\n");
+}
+
+export function scaleResourcesForTeam(
+  resources: { memory: string; cpus: number },
+  maxTeammates: number,
+): { memory: string; cpus: number } {
+  // Each teammate is a full Claude Code process
+  // Rough estimate: 1GB per teammate + 2GB base
+  const baseMemoryMB = parseMemoryMB(resources.memory);
+  const teamMemoryMB = Math.max(baseMemoryMB, 2048 + maxTeammates * 1024);
+  const teamCpus = Math.min(resources.cpus * 2, 8);
+  return {
+    memory: `${Math.ceil(teamMemoryMB / 1024)}g`,
+    cpus: teamCpus,
   };
 }
 ```
 
-**Modified file:** `src/config/schema.ts` -- `ConfigSchema` gains governance section:
+#### Integration in Worker
 
 ```typescript
-export const ConfigSchema = z.object({
-  // ... existing fields ...
+// In worker.ts executeWorker() or buildOrchestratedRunPlan():
+const teamConfig = resolveTeamConfig(config, workflowFile);
 
-  governance: z.object({
-    default_autonomy: z.enum(['full', 'semi', 'interactive', 'supervised']).default('semi'),
-    budget: z.object({
-      default_cap_cents: z.number().int().default(500),  // $5.00
-      period: z.enum(['monthly', 'weekly', 'per_run']).default('per_run'),
-    }).default({}),
-    auto_approve: z.object({
-      max_cost_cents: z.number().int().default(100),
-      max_files_changed: z.number().int().default(10),
-      labels: z.array(z.string()).default([]),
-    }).default({}),
-  }).default({}),
-});
-```
+if (teamConfig.enabled) {
+  // 1. Scale container resources
+  plan.container.resources = scaleResourcesForTeam(
+    plan.container.resources,
+    teamConfig.maxTeammates,
+  );
 
-### Governance Enforcement Points
+  // 2. Add team env vars
+  agentEnv.push(...buildTeamEnv(teamConfig));
 
-The governance system inserts checks at three points in the existing dispatch flow:
+  // 3. Increase timeout (teams take 2-5x longer)
+  plan.agent.timeout = Math.max(plan.agent.timeout, plan.agent.timeout * 3);
 
-```
-Candidate selected (dispatcher.ts)
-  → PRE-DISPATCH: Budget pre-flight check (governance)
-    → If over budget: reject, post comment, skip
-  → DISPATCH: executeWorker() begins
-  → IN-FLIGHT: Agent produces plan
-    → If autonomy != 'full': pause, post plan for review
-    → Wait for approval (waiting_for_input state)
-  → POST-COMPLETION: Cost recording
-    → Update budget spent, emit cost_event
-```
-
-**New middleware pattern** -- governance wraps the dispatcher, not replaces it:
-
-```typescript
-// src/governance/enforcement.ts
-export async function governedDispatch(
-  issue: TrackerIssue,
-  config: ForgectlConfig,
-  governance: GovernanceEngine,
-  originalDispatch: DispatchFn,
-): Promise<void> {
-  // 1. Budget pre-flight
-  const budgetOk = await governance.checkBudget(issue, config);
-  if (!budgetOk) {
-    await governance.rejectOverBudget(issue);
-    return;
-  }
-
-  // 2. Autonomy check — does this need pre-approval?
-  const autonomy = config.governance.default_autonomy; // or from WORKFLOW.md
-  if (autonomy === 'supervised') {
-    await governance.requestPlanApproval(issue);
-    return; // Don't dispatch yet; wait for approval webhook/reaction
-  }
-
-  // 3. Proceed with normal dispatch
-  originalDispatch(issue);
+  // 4. Wrap prompt with team instructions
+  fullPrompt = buildTeamPromptPrefix(teamConfig, fullPrompt);
 }
 ```
 
-**Modified file:** `src/orchestrator/dispatcher.ts` -- the `dispatchIssue()` function wraps with governance check before calling `executeWorkerAndHandle()`.
+### Constraints and Limitations
 
----
+- **In-process mode only**: tmux is unavailable inside containers. Force in-process mode via prompt.
+- **No session resumption**: If the container dies, team state is lost. Aligns with forgectl's one-shot model.
+- **Token cost**: Teams use 3-5x more tokens. Gate by workflow config, never automatic.
+- **Shared filesystem**: Teammates share `/workspace`. Prompt must instruct non-overlapping file ownership.
+- **No nested teams**: Teammates cannot spawn their own teams. Only the lead manages the team.
+- **Cleanup**: The lead must clean up team resources before the container exits. Include cleanup instruction in prompt.
 
-## Integration Point 6: Browser-Use as Third Agent Adapter
+### New Files
 
-### Architecture: Python Sidecar in Docker Container
+| File | Purpose |
+|------|---------|
+| `src/agent/teams.ts` | Team config types, env builder, prompt prefix builder, resource scaler |
 
-Browser-use is a Python library with no official REST API. The integration pattern is a **sidecar process** running inside the same Docker container as the agent, with a thin HTTP bridge.
+### Modified Files
 
-```
-┌─────────────────── Docker Container ───────────────────┐
-│                                                         │
-│  ┌──────────────┐     HTTP (localhost:9222)    ┌──────┐│
-│  │ browser-use  │◄────────────────────────────►│bridge││
-│  │ Python agent │     POST /task               │(Node)││
-│  │ + Playwright │     GET /status              │      ││
-│  └──────────────┘     POST /stop               └──┬───┘│
-│                                                    │    │
-│                                            stdio/exec   │
-│                                                    │    │
-└────────────────────────────────────────────────────┘    │
-                                                     │
-                                              forgectl daemon
-                                              (BrowserUseSession)
-```
+| File | Change |
+|------|--------|
+| `src/config/schema.ts` | Add team config to agent schema |
+| `src/workflow/types.ts` | Add team config to RunPlan and WorkflowFileConfig |
+| `src/orchestrator/worker.ts` | Apply team env, scale resources, wrap prompt, increase timeout |
+| `src/orchestration/single.ts` | Pass team env vars in prepareExecution |
 
-### Why Sidecar, Not External Service
-
-1. **Sandboxing:** Browser-use runs inside the container, inheriting all Docker isolation (network, filesystem, resources)
-2. **Lifecycle:** Container start/stop manages the browser-use process -- no external service to manage
-3. **Security:** The browser can't escape the container sandbox
-4. **Consistency:** Same model as Claude Code (CLI in container) and Codex (subprocess in container)
-
-### Implementation
-
-**New file:** `src/agent/browser-use.ts`
-
-```typescript
-import type Docker from 'dockerode';
-import type { AgentSession, AgentResult, InvokeOptions } from './session.js';
-
-/**
- * BrowserUseSession runs a Python browser-use agent inside the Docker container.
- * Communication via HTTP to a thin bridge server inside the container.
- */
-export class BrowserUseSession implements AgentSession {
-  private container: Docker.Container;
-  private bridgePort = 9222;
-  private alive = false;
-
-  constructor(container: Docker.Container, options: BrowserUseOptions) {
-    this.container = container;
-  }
-
-  async invoke(prompt: string, options?: InvokeOptions): Promise<AgentResult> {
-    // 1. Start bridge + browser-use if not running
-    if (!this.alive) {
-      await this.startSidecar();
-    }
-
-    // 2. POST task to bridge
-    const exec = await this.container.exec({
-      Cmd: ['curl', '-s', '-X', 'POST', `http://localhost:${this.bridgePort}/task`,
-        '-H', 'Content-Type: application/json',
-        '-d', JSON.stringify({ task: prompt, timeout: options?.timeout })],
-      AttachStdout: true, AttachStderr: true,
-    });
-
-    // 3. Poll status until complete
-    // 4. Return AgentResult
-  }
-
-  isAlive(): boolean { return this.alive; }
-  async close(): Promise<void> { /* stop sidecar */ }
-}
-```
-
-### Container Image
-
-Browser-use requires a Docker image with Python, Playwright, and Chromium. This is a **separate base image** from the default Node.js agent image:
-
-```dockerfile
-# Dockerfile.browser-use
-FROM mcr.microsoft.com/playwright/python:v1.50.0
-RUN pip install browser-use
-COPY bridge/ /opt/bridge/
-CMD ["python", "/opt/bridge/server.py"]
-```
-
-The bridge server is a minimal FastAPI/Flask app (~50 lines) that wraps browser-use's Agent class with HTTP endpoints.
-
-### Agent Registry Integration
-
-**Modified file:** `src/agent/registry.ts` -- add browser-use adapter:
-
-```typescript
-// Existing:
-const adapters: Record<string, AgentAdapter> = {
-  'claude-code': claudeCodeAdapter,
-  'codex': codexAdapter,
-};
-
-// v2.0:
-// browser-use doesn't use the AgentAdapter interface (shell command builder)
-// because it uses a sidecar HTTP pattern, not CLI invocation.
-// Instead, it's handled in createAgentSession():
-```
-
-**Modified file:** `src/agent/session.ts` -- extend `createAgentSession()`:
-
-```typescript
-export function createAgentSession(
-  agentType: string,
-  container: Docker.Container,
-  agentOptions: AgentOptions,
-  env: string[],
-  sessionOptions?: AgentSessionOptions,
-): AgentSession {
-  if (agentType === 'browser-use') {
-    return new BrowserUseSession(container, agentOptions, env);
-  }
-  if (agentType === 'codex' && sessionOptions?.useAppServer) {
-    return new AppServerSession(container, agentOptions, env, sessionOptions);
-  }
-  const adapter = getAgentAdapter(agentType);
-  return new OneShotSession(container, adapter, agentOptions, env, sessionOptions);
-}
-```
-
-**Modified file:** `src/config/schema.ts` -- extend AgentType:
-
-```typescript
-export const AgentType = z.enum(['claude-code', 'codex', 'browser-use']);
-```
-
-### When to Use Browser-Use
-
-Browser-use is for tasks that require web interaction: scraping, form filling, web research, testing web UIs. It is NOT a general-purpose coding agent. The WORKFLOW.md specifies when to use it:
-
-```yaml
----
-name: web-research
-agent: browser-use
-autonomy: semi
-validation:
-  steps:
-    - name: output-exists
-      command: test -f /workspace/output/results.json
----
-```
-
----
-
-## Data Flow Changes
-
-### v1.0 Data Flow (Current)
-```
-Tracker poll → candidates → filter → sort → dispatch → worker → agent CLI → validation → output → comment
-                                                  ↓
-                                           RunEvent emitter → SSE → dashboard
-                                                  ↓
-                                           saveRunLog() → JSON file
-```
-
-### v2.0 Data Flow (New)
-```
-Tracker poll ──────────────┐
-GitHub webhook ────────────┤
-                           ▼
-                     candidates → governance pre-flight → filter → sort → dispatch
-                                                                           ↓
-                     ┌───────────────────────────────────────── worker ─────────────┐
-                     │                                                              │
-                     │  autonomy check → [if supervised: pause, await approval]     │
-                     │  agent session (Claude/Codex/browser-use) → validation       │
-                     │  [if clarification needed: pause, ask question, wait]        │
-                     │  checkpoint at step boundaries                               │
-                     │                                                              │
-                     └──────────────────────────┬───────────────────────────────────┘
-                                                ↓
-                                         RunEvent emitter
-                                           ↓       ↓        ↓
-                                     SSE stream   Flight    Rich write-back
-                                     (existing)   Recorder  (GitHub comment /
-                                                  (→ DB)    Notion update)
-                                                    ↓
-                                              Cost recording
-                                              Budget update
-```
-
----
 
 ## Patterns to Follow
 
-### Pattern 1: Repository Pattern for Storage
+### Pattern 1: ContainerMounts for extensible bind mounting
 
-**What:** Each entity (runs, events, agents, approvals) gets a typed repository module with query/mutation functions. No raw SQL or Drizzle calls outside `src/storage/repositories/`.
+**What:** All container customization (auth, skills, team state) uses the same `{ binds, env, cleanup }` shape from `auth/mount.ts`.
 
-**When:** All database access.
-
-**Example:**
-
-```typescript
-// src/storage/repositories/runs.ts
-import { eq, desc } from 'drizzle-orm';
-import { getDb } from '../db.js';
-import { runs } from '../schema.js';
-
-export function createRun(data: NewRun): Run {
-  return getDb().insert(runs).values(data).returning().get();
-}
-
-export function getRunById(id: string): Run | undefined {
-  return getDb().select().from(runs).where(eq(runs.id, id)).get();
-}
-
-export function getRunsByIssue(issueId: string): Run[] {
-  return getDb().select().from(runs).where(eq(runs.issueId, issueId)).orderBy(desc(runs.createdAt)).all();
-}
-```
-
-### Pattern 2: Event Subscriber for Cross-Cutting Concerns
-
-**What:** New subsystems (flight recorder, cost tracking, write-back) subscribe to the existing `runEvents` EventEmitter rather than being called directly from the orchestrator.
-
-**When:** Adding observability or side-effects that shouldn't couple to the core dispatch loop.
-
-**Why:** The orchestrator stays clean. Subscribers can fail independently without blocking the main flow.
-
-### Pattern 3: Fastify Plugin Encapsulation for Route Groups
-
-**What:** Each new route group (webhooks, audit API, governance API) is a separate Fastify plugin with its own prefix and dependencies.
-
-**When:** Adding new API surface area.
+**When:** Any time new host-side resources need to be available in the container.
 
 **Example:**
-
 ```typescript
-// src/github-app/webhook.ts
-import type { FastifyInstance } from 'fastify';
-
-export async function registerGitHubAppRoutes(app: FastifyInstance, deps: WebhookDeps) {
-  app.register(async (instance) => {
-    instance.addHook('preValidation', verifyWebhookSignature(deps.webhookSecret));
-    instance.post('/webhooks/github', async (request, reply) => { /* ... */ });
-  });
+// Every mount producer returns the same shape
+export interface ContainerMounts {
+  binds: string[];
+  env: Record<string, string>;
+  cleanup: () => void;
 }
+
+// Collected in prepareExecution and merged
+const allBinds = [...workspaceBinds, ...authMounts.binds, ...skillMounts.binds];
+const allEnv = [...authEnv, ...skillEnv, ...teamEnv];
 ```
 
-### Pattern 4: Governance as Middleware Wrapper
+### Pattern 2: Enrichment at fetch time, filtering at dispatch time
 
-**What:** Governance checks wrap existing dispatch functions rather than being embedded inside them. The core orchestrator doesn't know about approvals or budgets -- it just dispatches. Governance intercepts before dispatch.
+**What:** The tracker adapter enriches TrackerIssue with dependency info. The dispatcher filters based on that enrichment. No coupling between fetch and filter logic.
 
-**When:** Adding policy enforcement without contaminating the execution engine.
+**When:** Adding new blocking/dependency relationships.
 
----
+**Example:**
+```typescript
+// Tracker: enrich
+const issue = normalizeIssue(ghIssue);
+issue.blocked_by = subIssueNumbers;  // populated from API
+
+// Dispatcher: filter (existing code, unchanged)
+const eligible = filterCandidates(candidates, state, terminalIssueIds);
+```
+
+### Pattern 3: Prompt-level orchestration for agent capabilities
+
+**What:** Rather than building complex multi-process orchestrators, delegate coordination to Claude Code itself. forgectl's role is environment setup and resource provisioning.
+
+**When:** The agent runtime already has the capability you need (e.g., agent teams, subagents).
+
+**Example:**
+```typescript
+// Don't build a team coordinator -- let Claude Code do it
+const prompt = teamConfig.enabled
+  ? buildTeamPromptPrefix(teamConfig, taskPrompt)
+  : taskPrompt;
+// Set env var, pass prompt, Claude Code handles the rest
+```
+
+### Pattern 4: Read-only mounts for injected content
+
+**What:** All injected content (skills, CLAUDE.md, external configs) mounted as `:ro`.
+
+**When:** Mounting content the agent should use but not modify.
+
+**Why:** Prevents agent from modifying skills/configs during execution, affecting future runs.
+
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Replacing In-Memory State Entirely with DB Queries
+### Anti-Pattern 1: Merging pipeline DAG with orchestrator scheduling
 
-**What:** Making every state check a database query.
+**What:** Trying to reuse `src/pipeline/dag.ts` for sub-issue dependency scheduling.
 
-**Why bad:** SQLite is fast but not free. The scheduler tick runs every 30 seconds and checks running workers, retry queues, and slot availability. Making this all DB queries adds unnecessary latency and complexity.
+**Why bad:** Pipeline DAG is for pre-defined, static pipelines with known nodes. Sub-issue dependencies are dynamic, discovered at poll time, and change as issues are created/closed. Different data models, different lifecycle.
 
-**Instead:** Keep in-memory state as the primary working set. Persist to DB at state transitions. Rebuild from DB only on startup recovery. The in-memory state is the "cache" of the persistent state.
+**Instead:** Keep the orchestrator's existing `filterCandidates` + `terminalIssueIds` pattern. It's polling-friendly and handles dynamic DAGs naturally.
 
-### Anti-Pattern 2: Synchronous Webhook Processing
+### Anti-Pattern 2: Eagerly fetching all sub-issues every tick
 
-**What:** Executing a full agent run inside a webhook handler.
+**What:** Fetching sub-issues for every issue on every poll tick.
 
-**Why bad:** GitHub expects webhook responses within 10 seconds. Agent runs take minutes.
+**Why bad:** GitHub rate limits (5000 req/hr for authenticated requests). With 50 open issues, that's 50 extra API calls per tick. At 30s poll interval, that's 6000 calls/hr -- over the limit.
 
-**Instead:** Webhook handlers enqueue work and return 202 immediately. The scheduler picks up enqueued work on the next tick.
+**Instead:** Cache sub-issue relationships with TTL matching poll interval. Only re-fetch when the candidate list changes or on cache expiry. Consider using GraphQL for batched sub-issue queries (one call for all issues).
 
-### Anti-Pattern 3: Coupling Agent Adapter Interface to CLI Pattern
+### Anti-Pattern 3: Building a custom team coordinator
 
-**What:** Forcing browser-use into the `AgentAdapter.buildShellCommand()` interface designed for Claude Code's CLI.
+**What:** Creating a forgectl-managed multi-container agent team system with message routing.
 
-**Why bad:** Browser-use is not a CLI tool. It's a Python library that needs a sidecar HTTP bridge. Forcing it into the shell command pattern creates ugly workarounds.
+**Why bad:** Claude Code's agent teams already handle task lists, mailboxes, inter-agent messaging, and coordination. Reimplementing this in forgectl would be massive effort with worse results.
 
-**Instead:** The `AgentSession` interface (invoke/isAlive/close) is the right abstraction level. Each session implementation (OneShotSession, AppServerSession, BrowserUseSession) handles its own communication pattern internally.
+**Instead:** Use Claude Code's built-in agent teams feature. forgectl enables it via env vars and crafts the prompt. The complexity lives in Claude Code, not forgectl.
 
-### Anti-Pattern 4: Monolithic Event Types
+### Anti-Pattern 4: Mounting skills read-write
 
-**What:** Using a single `RunEvent` type for everything and relying on the `data` bag.
+**What:** Mounting skill directories without `:ro` flag.
 
-**Why bad:** Makes querying specific event types difficult and loses type safety.
+**Why bad:** Agent could modify or delete skills during execution, affecting future runs.
 
-**Instead:** Keep the existing `RunEvent` structure (it's simple and works) but ensure the `type` field is well-defined in the union. Use the `data` field with documented shapes per type. Don't create a separate class hierarchy for events -- that's overengineering for an append-only log.
+**Instead:** Always mount skills as read-only. If the agent needs writable skill state, use a copy-on-write approach (copy to workspace first).
 
----
+### Anti-Pattern 5: Team mode without resource scaling
+
+**What:** Enabling agent teams without increasing container memory/CPU.
+
+**Why bad:** Each teammate is a separate Claude Code process. 3 teammates in a 4GB container will OOM.
+
+**Instead:** Auto-scale container resources when team mode is enabled. ~1GB per teammate + 2GB base.
+
 
 ## Scalability Considerations
 
-| Concern | At 10 runs/day | At 100 runs/day | At 1000 runs/day |
-|---------|----------------|------------------|-------------------|
-| SQLite write throughput | Trivial | WAL mode handles easily | Consider VACUUM schedule, may need write batching for events |
-| Event table size | ~1K events | ~10K events/month | ~100K events/month; add index on (run_id, created_at), consider periodic archival |
-| Webhook processing | Instant | Need deduplication logic | Need rate limiting, webhook queue |
-| Container concurrency | 1-3 slots | 3-5 slots | Need multi-worker (out of scope for v2) |
-| GitHub API rate limits | No concern | Watch for 5000 req/hr limit | Need installation token rotation, conditional requests |
-| Browser-use resources | ~512MB per browser | Multiple browsers strain memory | Need browser pool management |
+| Concern | Current (3 agents) | With sub-issues (10 agents) | With teams (30 sub-agents) |
+|---------|--------------------|-----------------------------|----------------------------|
+| API calls/tick | ~3 (fetch candidates) | ~13 (candidates + sub-issues) | ~13 (same, teams are internal) |
+| Memory per container | 4GB | 4GB | 8-16GB (teams need more) |
+| CPU per container | 2 cores | 2 cores | 4-8 cores (teams need more) |
+| Token cost per agent | 1x | 1x | 3-5x (teams multiply cost) |
+| Filesystem contention | Low (1 agent/workspace) | Low (1 agent/workspace) | Medium (teammates share workspace) |
+| Rate limit pressure | Low | Medium (sub-issue fetches) | Medium (same as sub-issues) |
+
 
 ## Suggested Build Order
 
-Based on the dependency graph and integration points:
+Based on dependency analysis and integration risk:
 
-```
-Phase 1: Storage Layer (src/storage/)
-  No dependencies on other v2 features.
-  All other phases depend on this.
+### Phase 1: Sub-Issues DAG (foundation, highest standalone value)
+**Rationale:** Unblocks dependency-aware orchestration immediately. The existing `blocked_by` + `filterCandidates` infrastructure just needs real data. Low risk -- extends existing patterns.
 
-Phase 2: Company & Agent Identity (src/company/, src/agent/identity.ts)
-  Depends on: Phase 1
-  Needed by: Phase 3 (attribution), Phase 5 (budget scoping)
+Build sequence:
+1. Extend TrackerIssue type with `parent_id` and `sub_issue_ids`
+2. Build `sub-issues.ts` REST API client
+3. Integrate into `github.ts` candidate fetching with caching
+4. Populate `terminalIssueIds` in scheduler tick
+5. Update webhook handler for sub-issue events
+6. Test with real GitHub sub-issues
 
-Phase 3: Flight Recorder (src/audit/)
-  Depends on: Phase 1, Phase 2
-  Low-risk: purely additive subscriber pattern
-  Needed by: Phase 4 (crash recovery from events)
+### Phase 2: Skill/Config Mounting (independent, enables Phase 3)
+**Rationale:** Independent of Phase 1. Improves agent quality immediately and is prerequisite for effective team usage (teams inherit skills).
 
-Phase 4: Durable Execution (modify src/orchestrator/)
-  Depends on: Phase 1, 2, 3
-  Highest complexity: modifies core state machine
+Build sequence:
+1. Define SkillsConfigSchema in config
+2. Build `skills.ts` mount module (ContainerMounts pattern)
+3. Wire into `prepareExecution()`
+4. Add WORKFLOW.md skills section support
+5. Add to `buildOrchestratedRunPlan()` for orchestrated runs
+6. Test with personal skills and GSD skill packs
 
-Phase 5: Governance (src/governance/, src/costs/)
-  Depends on: Phase 2, 3
-  CAN parallelize with Phase 4 (different code paths)
+### Phase 3: Agent Teams (depends on Phase 2, highest complexity)
+**Rationale:** Depends on Phase 2 (skills should be mountable before teams use them). Highest token cost and resource requirements. Most novel feature -- needs careful testing.
 
-Phase 6: GitHub App (src/github-app/)
-  Depends on: Phase 4, 5
-  Highest user-facing impact
+Build sequence:
+1. Define team config schema
+2. Build `teams.ts` (env builder, prompt prefix, resource scaler)
+3. Wire into worker (env, resources, prompt wrapping, timeout)
+4. Add container resource auto-scaling
+5. Test with simple team tasks (research, review)
+6. Test with complex team tasks (cross-layer implementation)
 
-Browser-Use Adapter: Can be built anytime after Phase 1
-  Independent of governance/durability
-  Useful for demo scenarios
-  Suggest: build alongside Phase 3 or 4 as a parallel track
-```
+**Phase ordering rationale:**
+- Phase 1 is independent and highest standalone value (enables automatic dependency scheduling)
+- Phase 2 is independent but improves Phase 3 effectiveness (teams benefit from mounted skills)
+- Phase 3 builds on Phase 2 conceptually and is highest-risk (token cost, resource scaling, experimental API)
+
 
 ## Sources
 
-- [Drizzle ORM SQLite setup](https://orm.drizzle.team/docs/get-started-sqlite) -- Official docs, HIGH confidence
-- [Drizzle SQLite column types](https://orm.drizzle.team/docs/column-types/sqlite) -- Official docs, HIGH confidence
-- [Event sourcing with relational databases](https://softwaremill.com/implementing-event-sourcing-using-a-relational-database/) -- Pattern reference, MEDIUM confidence
-- [Event sourcing with SQLite CQRS guide](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- Pattern reference, MEDIUM confidence
-- [Octokit GitHub App auth](https://github.com/octokit/auth-app.js/) -- Official library, HIGH confidence
-- [Octokit webhooks.js](https://github.com/octokit/webhooks.js/) -- Official library, HIGH confidence
-- [Octokit app.js (bundled SDK)](https://github.com/octokit/app.js/) -- Official library, HIGH confidence
-- [browser-use GitHub repository](https://github.com/browser-use/browser-use) -- Official project, HIGH confidence
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- Confirms no built-in REST API, MEDIUM confidence
-- [fastify-webhook plugin](https://github.com/smartiniOnGitHub/fastify-webhook) -- Fastify ecosystem, MEDIUM confidence
-- [@fastify/raw-body for webhook signatures](https://github.com/autotelic/fastify-webhooks) -- Fastify ecosystem, MEDIUM confidence
+- [GitHub Sub-Issues REST API Docs](https://docs.github.com/en/rest/issues/sub-issues) -- HIGH confidence (official docs)
+- [Introducing Sub-Issues Blog Post](https://github.blog/engineering/architecture-optimization/introducing-sub-issues-enhancing-issue-management-on-github/) -- HIGH confidence
+- [Sub-Issues REST API Changelog](https://github.blog/changelog/2024-12-12-github-issues-projects-close-issue-as-a-duplicate-rest-api-for-sub-issues-and-more/) -- HIGH confidence
+- [Create GitHub Issue Hierarchy Using the API](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- MEDIUM confidence
+- [Claude Code Agent Teams Official Docs](https://code.claude.com/docs/en/agent-teams) -- HIGH confidence (official docs)
+- [Claude Code Skills Official Docs](https://code.claude.com/docs/en/skills) -- HIGH confidence (official docs)
+- [Sub-Issues Public Preview Discussion](https://github.com/orgs/community/discussions/148714) -- MEDIUM confidence
+- [Evolving GitHub Issues and Projects GA](https://github.com/orgs/community/discussions/154148) -- MEDIUM confidence
