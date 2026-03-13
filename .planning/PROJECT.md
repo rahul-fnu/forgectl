@@ -43,7 +43,10 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ### Active
 
-(No active requirements — define next milestone with `/gsd:new-milestone`)
+- [ ] GitHub sub-issue hierarchy parsed into DAG dependencies for dispatch ordering
+- [ ] Custom skill/config directories bind-mounted into agent containers (GSD, CLAUDE.md, settings)
+- [ ] Agent teams enabled per workflow — lead + teammates collaborate inside containers
+- [ ] End-to-end: parent issue with sub-issues dispatched, agents use GSD + teams, results collected
 
 ### Out of Scope
 
@@ -51,11 +54,11 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Distributed multi-worker execution — single machine first, scale later
 - Multi-tenant RBAC — single-user for now
 - Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
-- Conditional/loop pipeline nodes — after core orchestrator is solid
+- Conditional/loop pipeline nodes — building in v2.1
 - Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
 - Notion App integration (database triggers, rich write-back) — deferred to v2.1
 - Mirrored task model / tracker normalization — deferred to v2.1
-- Multi-agent delegation with org hierarchy — deferred to v2.1+
+- Multi-agent delegation with org hierarchy — lead/child in v2.1, agent teams in v3.0
 - Dashboard v2 (power-user aggregate views) — deferred to v2.1+
 - Slack/Discord bot — get GitHub + Notion right first
 - Your own mobile app — GitHub and Notion apps are the UI
@@ -63,6 +66,16 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - PostgreSQL support — SQLite sufficient for single-machine
 - Per-tool budget granularity — budget per run and per agent/period is enough
 - Temporal/BullMQ external dependencies — app-level checkpointing on SQLite
+
+## Current Milestone: v3.0 E2E GitHub Integration
+
+**Goal:** Enable forgectl to leverage GitHub sub-issue hierarchies as DAG dependencies, mount custom skills (GSD) into agent containers, and run Claude Code agent teams inside containers for collaborative issue execution.
+
+**Target features:**
+- GitHub sub-issue parsing into dependency graph for dispatch ordering
+- Bind-mount custom skill directories (~/.claude/, GSD) into containers
+- Agent team mode per workflow (lead + teammates inside container)
+- End-to-end flow: hierarchical issues → dependency-aware dispatch → skilled agent teams → output collection
 
 ## Context
 
@@ -102,5 +115,9 @@ v2.0 added 6 major subsystems: persistent storage, flight recorder, durable exec
 - **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
 - **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
 
+| Agent teams inside containers | Each container runs its own team; forgectl collects output, doesn't orchestrate internally | — Pending |
+| GSD as mounted skill set | Bind-mount, not bake into image — user controls their own version | — Pending |
+| GitHub sub-issues as native deps | Leverage GitHub's sub-issue hierarchy rather than synthetic issues for code work | — Pending |
+
 ---
-*Last updated: 2026-03-12 after v2.0 milestone*
+*Last updated: 2026-03-13 after v3.0 milestone start*

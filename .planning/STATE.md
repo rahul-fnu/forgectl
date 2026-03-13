@@ -1,38 +1,43 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Durable Runtime
-status: shipped
-stopped_at: Milestone v2.0 archived
-last_updated: "2026-03-12T04:55:00.000Z"
-last_activity: 2026-03-12 -- Milestone v2.0 Durable Runtime shipped
+milestone: v3.0
+milestone_name: E2E GitHub Integration
+status: defining_requirements
+stopped_at: null
+last_updated: "2026-03-13T00:00:00.000Z"
+last_activity: 2026-03-13 -- Milestone v3.0 started
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 22
-  completed_plans: 22
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-12)
+See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Planning next milestone
+**Current focus:** Defining v3.0 E2E GitHub Integration requirements
 
 ## Current Position
 
-Milestone v2.0 Durable Runtime shipped.
-Next: `/gsd:new-milestone` to define v2.1 or v3.0.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-13 — Milestone v3.0 started
 
 ## Accumulated Context
 
 ### Decisions
 
-All v2.0 decisions archived in PROJECT.md Key Decisions table and phase SUMMARY.md files.
+- Agent teams run inside containers independently — forgectl doesn't orchestrate the team, just enables it and collects output
+- GSD mounted via bind-mount, not baked into image — user controls their own version
+- GitHub sub-issues used for code work dependencies; SyntheticIssue (v2.1) for non-coding tasks
+- v3.0 builds on top of v2.1 (assumes conditional/loop pipeline nodes and delegation schema exist)
 
 ### Pending Todos
 
@@ -40,10 +45,11 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- v3.0 depends on v2.1 schema foundation (Phase 20) for delegation tables and pipeline type extensions
+- GitHub sub-issues API is relatively new — need to verify API availability and structure
 
 ## Session Continuity
 
-Last session: 2026-03-12
-Stopped at: Milestone v2.0 archived
+Last session: 2026-03-13
+Stopped at: Defining requirements
 Resume file: None
