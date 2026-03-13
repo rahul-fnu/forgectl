@@ -490,17 +490,153 @@ describe("createDelegationManager", () => {
   });
 
   describe("synthesize", () => {
-    it("returns a placeholder string with child count", async () => {
-      const manager = createDelegationManager(makeDeps());
+    it("invokes executeWorkerFn with a synthesis prompt containing all child outcomes", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("Synthesis result text"));
+      const manager = createDelegationManager(deps);
+      const issue = makeIssue();
+      const outcomes = [
+        { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const, stdout: "done" },
+        { spec: { id: "sub-2", task: "Task 2" }, status: "failed" as const, errorMessage: "err" },
+      ];
+
+      await manager.synthesize(issue, outcomes);
+
+      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(1);
+      const callArgs = vi.mocked(deps.executeWorkerFn).mock.calls[0];
+      // The prompt (4th argument) should contain the parent issue title and child outcomes
+      const prompt = callArgs[3];
+      expect(prompt).toContain(issue.title);
+      expect(prompt).toContain("sub-1");
+      expect(prompt).toContain("sub-2");
+      expect(prompt).toContain("COMPLETED");
+      expect(prompt).toContain("FAILED");
+    });
+
+    it("returns the agent stdout as the synthesis comment text", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("## Summary\nAll done!"));
+      const manager = createDelegationManager(deps);
+      const outcomes = [
+        { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const },
+      ];
+
+      const result = await manager.synthesize(makeIssue(), outcomes);
+
+      expect(result).toBe("## Summary\nAll done!");
+    });
+
+    it("runs synthesis even when some children permanently failed (partial results included)", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("Partial synthesis"));
+      const manager = createDelegationManager(deps);
+      const outcomes = [
+        { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const, stdout: "ok" },
+        { spec: { id: "sub-2", task: "Task 2" }, status: "failed" as const, errorMessage: "boom" },
+        { spec: { id: "sub-3", task: "Task 3" }, status: "failed" as const, errorMessage: "boom2" },
+      ];
+
+      const result = await manager.synthesize(makeIssue(), outcomes);
+
+      // Should still call the agent and return something
+      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(1);
+      expect(typeof result).toBe("string");
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it("returns fallback summary when agent invocation throws", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockRejectedValue(new Error("agent crashed"));
+      const manager = createDelegationManager(deps);
+      const issue = makeIssue();
       const outcomes = [
         { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const },
         { spec: { id: "sub-2", task: "Task 2" }, status: "failed" as const },
       ];
 
-      const summary = await manager.synthesize(makeIssue(), outcomes);
+      const result = await manager.synthesize(issue, outcomes);
 
-      expect(summary).toContain("2");
-      expect(typeof summary).toBe("string");
+      // Fallback must mention issue title and success/failure counts
+      expect(result).toContain(issue.title);
+      expect(result).toContain("1");  // 1 succeeded
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it("single postComment call after synthesis (not per-child)", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn)
+        // 2 children dispatch
+        .mockResolvedValueOnce(makeWorkerResult("child 1 done"))
+        .mockResolvedValueOnce(makeWorkerResult("child 2 done"))
+        // synthesis agent invocation
+        .mockResolvedValueOnce(makeWorkerResult("Synthesis comment text"));
+
+      const manager = createDelegationManager(deps);
+      const issue = makeIssue();
+      const specs = [
+        { id: "sub-1", task: "Task 1" },
+        { id: "sub-2", task: "Task 2" },
+      ];
+
+      await manager.runDelegation("parent-run-1", issue, specs, 0, 5);
+
+      // postComment should be called exactly once (for synthesis)
+      expect(deps.tracker.postComment).toHaveBeenCalledTimes(1);
+      expect(deps.tracker.postComment).toHaveBeenCalledWith(
+        issue.id,
+        expect.any(String),
+      );
+    });
+  });
+
+  describe("buildSynthesisPrompt (via synthesize behavior)", () => {
+    it("includes parent issue title in prompt", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("ok"));
+      const manager = createDelegationManager(deps);
+      const issue = makeIssue("iss-99");
+      const outcomes = [
+        { spec: { id: "s1", task: "Do something" }, status: "completed" as const, stdout: "done" },
+      ];
+
+      await manager.synthesize(issue, outcomes);
+
+      const prompt = vi.mocked(deps.executeWorkerFn).mock.calls[0][3];
+      expect(prompt).toContain(issue.title);
+    });
+
+    it("includes per-child sections with status badge in prompt", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("ok"));
+      const manager = createDelegationManager(deps);
+      const outcomes = [
+        { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const, stdout: "output 1" },
+        { spec: { id: "sub-2", task: "Task 2" }, status: "failed" as const, errorMessage: "error output" },
+      ];
+
+      await manager.synthesize(makeIssue(), outcomes);
+
+      const prompt = vi.mocked(deps.executeWorkerFn).mock.calls[0][3];
+      expect(prompt).toContain("sub-1");
+      expect(prompt).toContain("COMPLETED");
+      expect(prompt).toContain("output 1");
+      expect(prompt).toContain("sub-2");
+      expect(prompt).toContain("FAILED");
+      expect(prompt).toContain("error output");
+    });
+
+    it("uses (no output) placeholder when child has no stdout or errorMessage", async () => {
+      const deps = makeDeps();
+      vi.mocked(deps.executeWorkerFn).mockResolvedValue(makeWorkerResult("ok"));
+      const manager = createDelegationManager(deps);
+      const outcomes = [
+        { spec: { id: "sub-1", task: "Task 1" }, status: "completed" as const },
+      ];
+
+      await manager.synthesize(makeIssue(), outcomes);
+
+      const prompt = vi.mocked(deps.executeWorkerFn).mock.calls[0][3];
+      expect(prompt).toContain("(no output)");
     });
   });
 });
