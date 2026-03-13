@@ -40,6 +40,9 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
 
+  // Version info
+  app.get("/version", async () => ({ version: "0.1.0", name: "forgectl" }));
+
   // Auth status for dashboard settings page
   app.get("/auth/status", async () => {
     const claude = await getClaudeAuth();
