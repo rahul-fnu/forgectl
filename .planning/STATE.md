@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Phase 26 context gathered
-last_updated: "2026-03-13T07:27:01.619Z"
+stopped_at: Completed 26-01-PLAN.md
+last_updated: "2026-03-13T07:53:03.279Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 0
 ---
 
@@ -51,6 +51,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion*
 | Phase 25-sub-issue-dag-dependencies P01 | 3 | 2 tasks | 4 files |
 | Phase 25-sub-issue-dag-dependencies P02 | 100 | 2 tasks | 5 files |
+| Phase 26-skill-config-bind-mounting P01 | 234 | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 25-02]: Optional injection for subIssueCache in TickDeps and WebhookDeps -- backward compat preserved, Notion adapter users unaffected
 - [Phase 25-02]: Webhook invalidation on issues.edited is best-effort -- TTL is the reliable fallback
 - [Phase 25-02]: Test isolation: use mockRejectedValueOnce not mockRejectedValue to avoid contaminating subsequent tests
+- [Phase 26-01]: WorkflowFrontMatterSchema uses .optional() not .default([]) for skills -- absent means not specified (override semantics)
+- [Phase 26-01]: CREDENTIAL_DENY_LIST uses basename matching after split('/') for recursive readdirSync path compatibility
+- [Phase 26-01]: No project logger in mount.ts -- avoids heavy dependency chain in utility module
 
 ### Pending Todos
 
@@ -77,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T07:27:01.614Z
-Stopped at: Phase 26 context gathered
-Resume file: .planning/phases/26-skill-config-bind-mounting/26-CONTEXT.md
+Last session: 2026-03-13T07:53:03.275Z
+Stopped at: Completed 26-01-PLAN.md
+Resume file: None
