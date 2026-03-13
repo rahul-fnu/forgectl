@@ -43,7 +43,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
-### 📋 v3.0 E2E GitHub Integration (Planned)
+### v3.0 E2E GitHub Integration (Planned)
 
 **Milestone Goal:** Add GitHub sub-issue DAG ordering, skill/config bind-mounting, and Claude Code agent teams to the existing orchestrator — extending existing patterns with zero new npm dependencies.
 
@@ -63,7 +63,10 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   2. Sub-issue relationships appear in TrackerIssue as populated `blocked_by` entries, not an empty set
   3. If a sub-issue DAG contains a cycle (from manual overrides), the orchestrator posts a GitHub comment identifying the cycle and skips dispatch rather than hanging
   4. The GitHub internal resource ID for each issue is stored in metadata and survives across polling cycles
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 25-01-PLAN.md — SubIssueCache and cycle detection modules (new standalone files + tests)
+- [ ] 25-02-PLAN.md — Wire into GitHub adapter, scheduler, and webhooks
 
 ### Phase 26: Skill / Config Bind-Mounting
 **Goal**: Agents inside containers can discover and use personal skills, project skills, and CLAUDE.md files without credential exposure
@@ -120,7 +123,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
-| 25. Sub-Issue DAG | v3.0 | 0/TBD | Not started | - |
+| 25. Sub-Issue DAG | v3.0 | 0/2 | Planning | - |
 | 26. Skill Mounting | v3.0 | 0/TBD | Not started | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
