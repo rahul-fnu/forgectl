@@ -50,7 +50,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 25: Sub-Issue DAG Dependencies** - Fetch GitHub sub-issues, populate blocked_by, enable dependency-aware dispatch (completed 2026-03-13)
 - [x] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely (completed 2026-03-13)
 - [x] **Phase 27: Agent Teams** - Enable Claude Code multi-agent teams with resource scaling and checkpoint exclusion (completed 2026-03-13)
-- [ ] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion
+- [x] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion (completed 2026-03-13)
 
 ## Phase Details
 
@@ -104,7 +104,7 @@ Plans:
   1. When a sub-issue completes, the parent issue receives a GitHub comment listing completed vs. remaining sub-issues
   2. When the last sub-issue reaches a terminal state, the parent issue is automatically closed with a summary comment
   3. Progress comments are updated in-place (edited, not appended) to avoid comment spam on parent issues
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 28-01-PLAN.md — Sub-issue rollup module (comment builder, marker search, upsert, terminal check)
 - [ ] 28-02-PLAN.md — Wire into dispatcher (rollup callback, forge:synthesize label, synthesizer-gated close)
@@ -135,4 +135,4 @@ Plans:
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
-| 28. Sub-Issue Advanced | 1/2 | In Progress|  | - |
+| 28. Sub-Issue Advanced | 2/2 | Complete   | 2026-03-13 | - |

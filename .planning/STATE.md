@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Completed 28-01-PLAN.md
-last_updated: "2026-03-13T23:31:53.684Z"
+stopped_at: Completed 28-02-PLAN.md
+last_updated: "2026-03-13T23:38:12.398Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 27-agent-teams P01 | 184 | 2 tasks | 8 files |
 | Phase 27-agent-teams P02 | 390 | 2 tasks | 6 files |
 | Phase 28-sub-issue-advanced-features P01 | 2 | 1 tasks | 2 files |
+| Phase 28-sub-issue-advanced-features P02 | 5 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 28-01]: RollupOctokitLike adds listComments with per_page/page params to OctokitLike pattern from comments.ts
 - [Phase 28-01]: allChildrenTerminal returns false for empty Map -- no children means nothing is done yet
 - [Phase 28-01]: Marker-based comment upsert: search by hidden HTML comment per update, no DB storage of comment IDs
+- [Phase Phase 28-02]: triggerParentRollup removes childSuccess param — noUnusedParameters enforced, always sets closed state
+- [Phase Phase 28-02]: Synthesizer-gated close replaces normal auto_close/done_label path for issues with forge:synthesize label
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T23:31:53.676Z
-Stopped at: Completed 28-01-PLAN.md
+Last session: 2026-03-13T23:38:12.392Z
+Stopped at: Completed 28-02-PLAN.md
 Resume file: None
