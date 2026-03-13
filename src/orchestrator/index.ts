@@ -6,6 +6,9 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { RepoContext } from "../github/types.js";
+import type { DelegationRepository } from "../storage/repositories/delegations.js";
+import type { DelegationManager } from "./delegation.js";
+import { recoverDelegations } from "./reconciler.js";
 import { createState, type OrchestratorState, TwoTierSlotManager, createTwoTierSlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
@@ -28,6 +31,8 @@ export interface OrchestratorOptions {
   runRepo?: RunRepository;
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
+  delegationRepo?: DelegationRepository;
+  delegationManager?: DelegationManager;
 }
 
 /**
@@ -45,6 +50,8 @@ export class Orchestrator {
   private readonly runRepo?: RunRepository;
   private readonly autonomy?: AutonomyLevel;
   private readonly autoApprove?: AutoApproveRule;
+  private readonly delegationRepo?: DelegationRepository;
+  private readonly delegationManager?: DelegationManager;
   private stopScheduler: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
@@ -60,6 +67,8 @@ export class Orchestrator {
     this.runRepo = opts.runRepo;
     this.autonomy = opts.autonomy;
     this.autoApprove = opts.autoApprove;
+    this.delegationRepo = opts.delegationRepo;
+    this.delegationManager = opts.delegationManager;
   }
 
   /**
@@ -102,6 +111,7 @@ export class Orchestrator {
 
   /**
    * Fetch terminal-state issues and clean their workspaces.
+   * Also recovers in-flight delegations from SQLite if delegation deps are present.
    */
   private async startupRecovery(): Promise<void> {
     if (!this.config.tracker) {
@@ -120,6 +130,25 @@ export class Orchestrator {
       "orchestrator",
       `Startup recovery: cleaned ${identifiers.length} terminal workspaces`,
     );
+
+    // Delegation recovery — non-fatal, best-effort
+    if (this.delegationRepo && this.delegationManager) {
+      try {
+        const result = await recoverDelegations(
+          this.delegationRepo,
+          this.delegationManager,
+          this.tracker,
+          this.logger,
+        );
+        this.logger.info(
+          "orchestrator",
+          `Delegation recovery complete: ${result.recovered} in-flight, ${result.failed} marked failed, ${result.redispatched} re-dispatched`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn("orchestrator", `Delegation recovery failed (continuing): ${msg}`);
+      }
+    }
   }
 
   /**
