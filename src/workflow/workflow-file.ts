@@ -7,9 +7,25 @@ import yaml from "js-yaml";
 /**
  * Default prompt template used when WORKFLOW.md body is empty.
  */
-export const DEFAULT_PROMPT_TEMPLATE = `Resolve the following issue: {{issue.title}}
+export const DEFAULT_PROMPT_TEMPLATE = `You are an autonomous coding agent working inside a Docker container.
+Your task is to implement the changes described in the GitHub issue below.
 
-{{issue.description}}`;
+## Issue: {{issue.title}}
+
+{{issue.description}}
+
+## Instructions
+
+1. Read the relevant source files to understand the codebase before making changes.
+2. Implement the requested changes by editing files directly.
+3. After making changes, run any available build/test commands to verify your work.
+4. If tests fail, read the error output carefully and fix the issues.
+5. Make sure your changes are minimal and focused — only change what is needed.
+6. Do NOT create new files unless the issue specifically requires it.
+7. Do NOT add unnecessary comments, docstrings, or refactoring beyond what is asked.
+
+Your working directory is the repository root. All source files are available.
+Make the changes now.`;
 
 /**
  * Zod schema for WORKFLOW.md front matter.

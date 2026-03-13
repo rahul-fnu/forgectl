@@ -139,7 +139,7 @@ export class Orchestrator {
     // Drain running workers with timeout
     if (this.state.running.size > 0) {
       const drainPromise = Promise.allSettled(
-        [...this.state.running.values()].map((w) => w.session.close()),
+        [...this.state.running.values()].map((w) => w.session?.close() ?? Promise.resolve()),
       );
 
       await Promise.race([

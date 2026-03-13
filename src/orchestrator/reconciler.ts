@@ -7,6 +7,24 @@ import { releaseIssue } from "./state.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { scheduleRetry, calculateBackoff } from "./retry.js";
 
+/** Run a promise with a timeout. Resolves even if the promise hangs. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string, logger: Logger): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      logger.warn("reconciler", `${label} timed out after ${ms}ms — continuing`);
+      resolve(undefined);
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+const CLEANUP_TIMEOUT_MS = 15_000; // 15s max for session close + container cleanup
+
 /**
  * Reconcile running workers against tracker state.
  *
@@ -57,16 +75,30 @@ export async function reconcile(
       if (terminalStates.has(currentState)) {
         // Terminal state — full cleanup including workspace
         logger.info("reconciler", `Issue ${worker.identifier} reached terminal state (${currentState}). Cleaning up.`);
-        await worker.session.close();
-        await cleanupRun(worker.cleanup);
+        await withTimeout(
+          (async () => {
+            if (worker.session) await worker.session.close();
+            await cleanupRun(worker.cleanup);
+          })(),
+          CLEANUP_TIMEOUT_MS,
+          `Cleanup for ${worker.identifier}`,
+          logger,
+        );
         await workspaceManager.removeWorkspace(worker.identifier);
         state.running.delete(issueId);
         releaseIssue(state, issueId);
       } else if (!activeStates.has(currentState)) {
         // Non-active, non-terminal — cleanup but keep workspace
         logger.info("reconciler", `Issue ${worker.identifier} in non-active state (${currentState}). Stopping worker.`);
-        await worker.session.close();
-        await cleanupRun(worker.cleanup);
+        await withTimeout(
+          (async () => {
+            if (worker.session) await worker.session.close();
+            await cleanupRun(worker.cleanup);
+          })(),
+          CLEANUP_TIMEOUT_MS,
+          `Cleanup for ${worker.identifier}`,
+          logger,
+        );
         state.running.delete(issueId);
         releaseIssue(state, issueId);
       } else {
@@ -90,8 +122,15 @@ export async function reconcile(
       );
 
       try {
-        await worker.session.close();
-        await cleanupRun(worker.cleanup);
+        await withTimeout(
+          (async () => {
+            if (worker.session) await worker.session.close();
+            await cleanupRun(worker.cleanup);
+          })(),
+          CLEANUP_TIMEOUT_MS,
+          `Stall cleanup for ${worker.identifier}`,
+          logger,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error("reconciler", `Error cleaning up stalled worker ${worker.identifier}: ${msg}`);

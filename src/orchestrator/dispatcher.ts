@@ -204,7 +204,7 @@ async function executeWorkerAndHandle(
     issueId: issue.id,
     identifier: issue.identifier,
     issue,
-    session: null as never, // Session is managed inside executeWorker
+    session: null, // Session is managed inside executeWorker
     cleanup: { tempDirs: [], secretCleanups: [] },
     startedAt,
     lastActivityAt: Date.now(),
