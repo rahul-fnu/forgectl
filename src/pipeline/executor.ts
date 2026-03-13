@@ -13,7 +13,9 @@ import type {
   ResolvedContextContent,
   ResolvedFileArtifact,
 } from "./types.js";
-import { collectAncestors, collectDescendants, validateDAG, topologicalSort } from "./dag.js";
+import { collectAncestors, collectDescendants, validateDAG, topologicalSort, buildDependentsMap } from "./dag.js";
+import { evaluateCondition, ConditionSyntaxError, ConditionVariableError } from "./condition.js";
+import type { NodeStatusContext } from "./condition.js";
 import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
 import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
@@ -104,54 +106,192 @@ export class PipelineExecutor {
       });
     }
 
-    // Track in-flight promises
-    const inFlight = new Map<string, Promise<void>>();
+    // Build dependents map for ready-queue logic
+    const dependentsMap = buildDependentsMap(this.pipeline);
     const maxParallel = this.options.maxParallel ?? 3;
 
     let pipelineStatus: "running" | "completed" | "failed" = "running";
 
-    for (const nodeId of order) {
+    // Track in-flight promises
+    const inFlight = new Map<string, Promise<void>>();
+
+    // Helpers
+    const isTerminal = (status: string) =>
+      status === "completed" || status === "failed" || status === "skipped";
+
+    const isNodeReady = (nodeId: string): boolean => {
+      const state = this.nodeStates.get(nodeId);
+      if (!state) return false;
+      if (!selection.executeNodes.has(nodeId)) return false;
+      if (isTerminal(state.status)) return false;
+      if (inFlight.has(nodeId)) return false;
       const node = nodeMap.get(nodeId)!;
+      return (node.depends_on ?? []).every(dep => {
+        const depState = this.nodeStates.get(dep);
+        return depState && isTerminal(depState.status);
+      });
+    };
 
-      if (!selection.executeNodes.has(nodeId)) {
-        continue;
-      }
-
-      // Wait for dependencies to complete
-      const deps = node.depends_on ?? [];
+    const buildStatusContext = (deps: string[]): NodeStatusContext => {
+      const ctx: NodeStatusContext = {};
       for (const dep of deps) {
-        const depPromise = inFlight.get(dep);
-        if (depPromise) {
-          await depPromise;
+        const depState = this.nodeStates.get(dep);
+        if (depState) {
+          ctx[dep] = depState.status as "completed" | "failed" | "skipped";
         }
       }
+      return ctx;
+    };
 
-      const dependencyIssues = this.getDependencyIssues(deps);
-      if (dependencyIssues.length > 0) {
-        const reason = dependencyIssues.join("; ");
+    const propagateCascadeSkip = (skippedId: string): void => {
+      const stack = [skippedId];
+      while (stack.length > 0) {
+        const currentId = stack.pop()!;
+        for (const dependentId of dependentsMap.get(currentId) ?? []) {
+          if (!selection.executeNodes.has(dependentId)) continue;
+          const depState = this.nodeStates.get(dependentId);
+          if (!depState || isTerminal(depState.status)) continue;
+          // Check if this dependent would be activated as else_node — do not cascade-skip else_nodes
+          const parentNode = nodeMap.get(currentId);
+          if (parentNode?.else_node === dependentId) continue;
+          this.nodeStates.set(dependentId, {
+            nodeId: dependentId,
+            status: "skipped",
+            skipReason: `dependency ${currentId} was skipped`,
+          });
+          stack.push(dependentId);
+        }
+      }
+    };
+
+    // Check if a dependency's terminal state blocks the node from executing.
+    // Returns a skip reason string if blocked, or null if all deps are OK.
+    const getDependencyBlockReason = (deps: string[]): string | null => {
+      for (const dep of deps) {
+        const state = this.nodeStates.get(dep);
+        if (!state) continue;
+        if (state.status === "failed") {
+          return `dependency ${dep} was skipped`;
+        }
+        if (state.status === "skipped") {
+          // Hydrated checkpoints have result.success + result.output — they are OK
+          const hydratedSuccess = Boolean(state.result?.success && state.result.output);
+          if (!hydratedSuccess) {
+            return `dependency ${dep} was skipped`;
+          }
+        }
+      }
+      return null;
+    };
+
+    const processNode = async (nodeId: string): Promise<void> => {
+      const node = nodeMap.get(nodeId)!;
+      const deps = node.depends_on ?? [];
+
+      // Check for blocking dependency issues (failed or non-hydrated skipped deps)
+      const blockReason = getDependencyBlockReason(deps);
+      if (blockReason !== null) {
         this.nodeStates.set(nodeId, {
           nodeId,
           status: "skipped",
-          error: reason,
-          skipReason: reason,
+          skipReason: blockReason,
         });
-        continue;
+        propagateCascadeSkip(nodeId);
+        return;
       }
 
-      // Respect max parallel limit
-      while (inFlight.size >= maxParallel) {
-        await Promise.race(inFlight.values());
+      // Evaluate condition if present
+      if (node.condition !== undefined) {
+        const ctx = buildStatusContext(deps);
+        let condResult: boolean;
+        try {
+          condResult = evaluateCondition(node.condition, ctx);
+        } catch (err) {
+          // Fatal condition error — fail the pipeline immediately
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "failed",
+            error: errMsg,
+          });
+          pipelineStatus = "failed";
+          return;
+        }
+
+        if (!condResult) {
+          // Condition is false — skip this node
+          const skipReason = `condition false: ${node.condition}`;
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "skipped",
+            skipReason,
+          });
+
+          if (node.else_node) {
+            // Activate else_node if all its deps are terminal and it's in executeNodes
+            const elseNode = nodeMap.get(node.else_node);
+            if (elseNode && selection.executeNodes.has(node.else_node)) {
+              const elseState = this.nodeStates.get(node.else_node);
+              if (elseState && !isTerminal(elseState.status) && !inFlight.has(node.else_node)) {
+                const elseDeps = elseNode.depends_on ?? [];
+                const elseReady = elseDeps.every(dep => {
+                  const depState = this.nodeStates.get(dep);
+                  return depState && isTerminal(depState.status);
+                });
+                if (elseReady) {
+                  readyQueue.add(node.else_node);
+                }
+              }
+            }
+          } else {
+            // Cascade-skip all downstream dependents
+            propagateCascadeSkip(nodeId);
+          }
+
+          return;
+        }
       }
 
       // Execute the node
-      const promise = this.executeNode(node).then(() => {
-        inFlight.delete(nodeId);
-      });
-      inFlight.set(nodeId, promise);
+      await this.executeNode(node);
+
+      // Enqueue newly-ready dependents
+      for (const dependentId of dependentsMap.get(nodeId) ?? []) {
+        if (isNodeReady(dependentId)) {
+          readyQueue.add(dependentId);
+        }
+      }
+    };
+
+    // Seed the ready queue: all nodes in executeNodes whose deps are already terminal
+    // (handles root nodes AND nodes whose ancestors were hydrated from checkpoints)
+    const readyQueue = new Set<string>();
+    for (const nodeId of order) {
+      if (isNodeReady(nodeId)) {
+        readyQueue.add(nodeId);
+      }
     }
 
-    // Wait for all remaining in-flight nodes
-    await Promise.all(inFlight.values());
+    // Drain loop
+    while (readyQueue.size > 0 || inFlight.size > 0) {
+      for (const nodeId of [...readyQueue]) {
+        if (inFlight.size >= maxParallel) break;
+        readyQueue.delete(nodeId);
+        // Wrap processNode so inFlight cleanup happens AFTER the promise is stored
+        const promise = processNode(nodeId).then(() => {
+          inFlight.delete(nodeId);
+        });
+        inFlight.set(nodeId, promise);
+      }
+      if (inFlight.size > 0) await Promise.race(inFlight.values());
+      // If pipeline failed due to fatal condition error, stop processing
+      if (pipelineStatus === "failed") break;
+    }
+
+    // Wait for any remaining in-flight nodes (if we broke early due to failure)
+    if (inFlight.size > 0) {
+      await Promise.allSettled(inFlight.values());
+    }
 
     // Determine overall status
     const allStatuses = [...this.nodeStates.values()].map(s => s.status);

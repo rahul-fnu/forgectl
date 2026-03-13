@@ -108,7 +108,9 @@ describe("PipelineExecutor", () => {
     expect(executeRun).toHaveBeenCalledTimes(1); // Only a was executed
     expect(result.nodes.get("b")!.status).toBe("skipped");
     expect(result.nodes.get("c")!.status).toBe("skipped");
-    expect(result.nodes.get("c")!.skipReason).toContain("skipped without hydrated output");
+    // Ready-queue: b is skipped because dep a failed; c is cascade-skipped because b was skipped
+    expect(result.nodes.get("b")!.skipReason).toContain("dependency a was skipped");
+    expect(result.nodes.get("c")!.skipReason).toContain("dependency b was skipped");
   });
 
   it("fan-in waits for all upstream nodes", async () => {
@@ -242,5 +244,125 @@ describe("PipelineExecutor", () => {
 
     const call = vi.mocked(executeRun).mock.calls[0][0];
     expect(call.workflow.name).toBe("research");
+  });
+
+  // ── Conditional execution tests ────────────────────────────────────────────
+
+  it("condition true: node executes normally", async () => {
+    // a completes, then b has condition `a == "completed"` → true → b runs
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: 'a == "completed"' },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("a")!.status).toBe("completed");
+    expect(result.nodes.get("b")!.status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("condition false: node is skipped with correct skipReason", async () => {
+    // a completes, but b requires a to have failed — condition is false
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: 'a == "failed"' },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.nodes.get("a")!.status).toBe("completed");
+    expect(result.nodes.get("b")!.status).toBe("skipped");
+    expect(result.nodes.get("b")!.skipReason).toContain('a == "failed"');
+    expect(executeRun).toHaveBeenCalledTimes(1); // only a
+  });
+
+  it("condition false + else_node: conditional node skipped, else_node executes", async () => {
+    // a completes; b has condition `a == "failed"` (false) and else_node "c"; c should run
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: 'a == "failed"', else_node: "c" },
+      { id: "c", task: "do c" },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.nodes.get("a")!.status).toBe("completed");
+    expect(result.nodes.get("b")!.status).toBe("skipped");
+    expect(result.nodes.get("b")!.skipReason).toContain("condition false");
+    expect(result.nodes.get("c")!.status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(2); // a and c
+  });
+
+  it("cascade skip: false condition propagates to all downstream dependents", async () => {
+    // a completes; b has false condition and no else_node; c depends on b → both b and c skipped
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: 'a == "failed"' },
+      { id: "c", task: "do c", depends_on: ["b"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.nodes.get("a")!.status).toBe("completed");
+    expect(result.nodes.get("b")!.status).toBe("skipped");
+    expect(result.nodes.get("c")!.status).toBe("skipped");
+    expect(result.nodes.get("c")!.skipReason).toContain("dependency b was skipped");
+    expect(executeRun).toHaveBeenCalledTimes(1); // only a
+  });
+
+  it("unknown variable in condition: pipeline fails immediately (COND-06)", async () => {
+    // b references 'unknown_node' which is not in context → ConditionVariableError → pipeline fails
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"], condition: 'unknown_node == "completed"' },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("failed");
+    expect(result.nodes.get("b")!.status).toBe("failed");
+    expect(result.nodes.get("b")!.error).toMatch(/unknown|unknown_node/i);
+    expect(executeRun).toHaveBeenCalledTimes(1); // only a ran
+  });
+
+  it("checkpoint-hydrated skips do not trigger cascade skip", async () => {
+    // a is hydrated from checkpoint (status=skipped + hydratedFromCheckpoint + result.success)
+    // b depends on a and has no condition — b should execute (NOT be cascade-skipped)
+    vi.mocked(loadCheckpoint).mockImplementation(async (runId, nodeId) => {
+      if (runId === "prior-run" && nodeId === "a") {
+        return {
+          nodeId: "a",
+          pipelineRunId: "prior-run",
+          timestamp: "2024-01-01T00:00:00.000Z",
+          branch: "forge/a/abc",
+          commitSha: "abc123",
+        };
+      }
+      return null;
+    });
+
+    const pipeline = makePipeline([
+      { id: "a", task: "do a" },
+      { id: "b", task: "do b", depends_on: ["a"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline, {
+      fromNode: "b",
+      checkpointSourceRunId: "prior-run",
+    });
+    const result = await executor.execute();
+
+    // a was hydrated (skipped with success result), b should have run
+    expect(result.nodes.get("a")!.status).toBe("skipped");
+    expect(result.nodes.get("a")!.hydratedFromCheckpoint?.pipelineRunId).toBe("prior-run");
+    expect(result.nodes.get("b")!.status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(1); // only b
   });
 });
