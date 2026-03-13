@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
-status: defining_requirements
-stopped_at: null
+status: planning
+stopped_at: Roadmap created, ready to plan Phase 25
 last_updated: "2026-03-13T00:00:00.000Z"
-last_activity: 2026-03-13 -- Milestone v3.0 started
+last_activity: 2026-03-13 -- Milestone v3.0 roadmap created (4 phases, 16 requirements)
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,26 +18,46 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-13)
+See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Defining v3.0 E2E GitHub Integration requirements
+**Current focus:** Phase 25 -- Sub-Issue DAG Dependencies
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-13 — Milestone v3.0 started
+Phase: 25 of 28 (Sub-Issue DAG Dependencies)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
+
+Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0 (v3.0)
+- Average duration: unknown
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 25. Sub-Issue DAG | TBD | - | - |
+| 26. Skill Mounting | TBD | - | - |
+| 27. Agent Teams | TBD | - | - |
+| 28. Sub-Issue Advanced | TBD | - | - |
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
-- Agent teams run inside containers independently — forgectl doesn't orchestrate the team, just enables it and collects output
-- GSD mounted via bind-mount, not baked into image — user controls their own version
-- GitHub sub-issues used for code work dependencies; SyntheticIssue (v2.1) for non-coding tasks
-- v3.0 builds on top of v2.1 (assumes conditional/loop pipeline nodes and delegation schema exist)
+- [v3.0 planning]: Zero new npm dependencies -- all three features use existing Octokit, Dockerode, Zod
+- [v3.0 planning]: Build order -- Sub-issues first (data-only, highest standalone value), Skills second (prerequisite for Teams), Teams last (highest risk, experimental)
+- [v3.0 planning]: Agent teams are prompt+env concern, not architectural -- Claude Code handles coordination internally
+- [v3.0 planning]: Phase 28 depends on Phase 25 only (not 26 or 27) -- it is additive polish on sub-issue DAG
 
 ### Pending Todos
 
@@ -45,11 +65,11 @@ None.
 
 ### Blockers/Concerns
 
-- v3.0 depends on v2.1 schema foundation (Phase 20) for delegation tables and pipeline type extensions
-- GitHub sub-issues API is relatively new — need to verify API availability and structure
+- [Phase 27]: Agent teams is experimental Claude Code API -- feature could change. Validate in-process teammate mode works inside Docker containers during planning.
+- [Phase 25]: Verify sub-issue pagination behavior with >20 children during planning. Confirm ETag cache invalidation strategy.
 
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Defining requirements
+Stopped at: Roadmap created -- REQUIREMENTS.md, ROADMAP.md, STATE.md written
 Resume file: None

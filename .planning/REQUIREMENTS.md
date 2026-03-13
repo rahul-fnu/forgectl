@@ -1,102 +1,80 @@
-# Requirements: forgectl
+# Requirements: forgectl v3.0 — E2E GitHub Integration
 
-**Defined:** 2026-03-13
-**Core Value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back — zero human intervention.
+**Milestone:** v3.0 E2E GitHub Integration
+**Status:** Active
+**Created:** 2026-03-13
 
-## v3.0 Requirements
+## Overview
 
-Requirements for v3.0 E2E GitHub Integration milestone. Each maps to roadmap phases.
+v3.0 adds three capabilities to the existing orchestrator: GitHub sub-issue DAG dependencies for automatic work ordering, skill/config bind-mounting for customizable agent behavior inside containers, and Claude Code agent teams for intra-task parallelism.
 
-### Sub-Issue Dependencies
+Zero new npm dependencies. All features build on existing libraries (Octokit, Dockerode, Zod) and existing architectural patterns.
 
-- [ ] **SUBISSUE-01**: Orchestrator fetches sub-issues for each candidate via GitHub REST API and populates `blocked_by` with child issue numbers
-- [ ] **SUBISSUE-02**: TrackerIssue stores GitHub internal numeric `id` in metadata (required by sub-issues API)
-- [ ] **SUBISSUE-03**: Parent issue dispatches only after all sub-issue children reach terminal state
-- [ ] **SUBISSUE-04**: Sub-issue fetch results cached to avoid exceeding GitHub API rate limits (5000/hr)
-- [ ] **SUBISSUE-05**: Orchestrator posts progress rollup comment on parent issue summarizing child status
-- [ ] **SUBISSUE-06**: Parent issue auto-closed (or labeled done) when all sub-issues complete successfully
+---
 
-### Skill & Config Mounting
+## v1 Requirements
 
-- [ ] **SKILL-01**: User can bind-mount skill directories (e.g. ~/.claude/skills/, GSD install) into agent containers as read-only
-- [ ] **SKILL-02**: CLAUDE.md files (project + global) mounted into containers via `--add-dir` mechanism
-- [ ] **SKILL-03**: WORKFLOW.md supports per-workflow `skill_dirs` config specifying which directories to mount
-- [ ] **SKILL-04**: Skill mounting uses allowlist — credentials and sensitive files excluded from mounts
-- [ ] **SKILL-05**: WORKFLOW.md supports `agents` config for passing `--agents` flag with agent definitions into containers
+### Sub-Issue DAG Dependencies (SUBISSUE)
 
-### Agent Teams
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SUBISSUE-01 | Fetch GitHub sub-issues via REST API and populate `blocked_by` field on TrackerIssue | Must |
+| SUBISSUE-02 | Store GitHub internal resource ID (`id`) in TrackerIssue metadata for write operations | Must |
+| SUBISSUE-03 | Populate `terminalIssueIds` in scheduler from live sub-issue fetch with TTL cache | Must |
+| SUBISSUE-04 | Detect and report DAG cycles created by merging sub-issue hierarchy with manual overrides | Must |
+| SUBISSUE-05 | Post progress rollup comments on parent issues as sub-issues complete | Should |
+| SUBISSUE-06 | Auto-close parent issue when all sub-issues reach terminal state | Should |
 
-- [ ] **TEAM-01**: WORKFLOW.md supports `agent_team` config block (enabled, team_size, teammate_model, require_plan_approval)
-- [ ] **TEAM-02**: Container env includes `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` when team mode enabled
-- [ ] **TEAM-03**: Container memory/CPU scaled by team-size multiplier when team mode enabled (prevent OOM)
-- [ ] **TEAM-04**: Agent prompt includes team instructions (spawn teammates, assign roles) when team mode enabled
-- [ ] **TEAM-05**: Budget enforcement applies team-size multiplier to per-run cost limits
-- [ ] **TEAM-06**: Timeout scaled by team-size multiplier for team-mode runs
-- [ ] **TEAM-07**: Checkpoint/resume explicitly disabled for team-mode runs (incompatible with agent teams)
+### Skill / Config Bind-Mounting (SKILL)
 
-## Future Requirements
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SKILL-01 | Mount CLAUDE.md, skills/, and agents/ directories into containers with read-only bind mounts | Must |
+| SKILL-02 | Exclude credential files (`.credentials.json`, token files, `statsig/`) from all mounts | Must |
+| SKILL-03 | Pass `--add-dir` flag to Claude Code so agents discover mounted skill directories | Must |
+| SKILL-04 | Support workflow-specific skill selection via `skills:` section in WORKFLOW.md | Should |
+| SKILL-05 | Extend config schema (Zod) with `skills` section for per-workflow skill configuration | Must |
 
-Deferred to future release. Tracked but not in current roadmap.
+### Agent Teams (TEAM)
 
-### Sub-Issue Dependencies
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| TEAM-01 | Enable Claude Code agent teams via env vars and prompt wrapping inside containers | Must |
+| TEAM-02 | Auto-scale container memory by team size (base + 1GB per teammate) | Must |
+| TEAM-03 | Update slot manager to weight concurrent slots by team size, not run count | Must |
+| TEAM-04 | Disable checkpoint/resume for team runs (incompatible with team internal state) | Must |
+| TEAM-05 | Support `team:` section in WORKFLOW.md for team size, roles, and coordination mode | Should |
 
-- **SUBISSUE-F01**: GraphQL batch query for sub-issues across all candidates in one call (reduce API pressure)
-- **SUBISSUE-F02**: GitHub blocked-by/blocking relationship parsing (separate from sub-issue hierarchy)
-- **SUBISSUE-F03**: Sub-issue webhook events for real-time dependency updates (vs polling)
+---
 
-### Skill & Config Mounting
+## Out of Scope (v3.0)
 
-- **SKILL-F01**: Skill marketplace — discover and install community skills into containers
-- **SKILL-F02**: Per-teammate skill overrides (different skills for different team roles)
+- Cross-issue blocking/blocked-by API (poorly documented, defer to v3.1)
+- Sub-issue creation from pipeline definitions (complex two-way sync)
+- Dynamic skill generation from issue context
+- Persistent agent team sessions across crashes (experimental feature limitation)
+- Skill marketplace / package manager
+- GitHub dependency API programmatic access
 
-### Agent Teams
-
-- **TEAM-F01**: Agent team metrics — per-teammate token usage breakdown in flight recorder
-- **TEAM-F02**: Governance approval gate per team spawn (supervised mode requires approval before creating team)
-- **TEAM-F03**: Team result synthesis — structured merge of teammate outputs before write-back
-
-## Out of Scope
-
-| Feature | Reason |
-|---------|--------|
-| GraphQL client dependency | REST API sufficient for sub-issues; GraphQL adds complexity for marginal gain |
-| Mounting full ~/.claude/ directory | Security risk — exposes OAuth tokens and credentials |
-| Nested agent teams (teams within teams) | Claude Code limitation — no nested teams supported |
-| Session resumption for team runs | Claude Code limitation — agent teams incompatible with /resume |
-| Distributed multi-worker for teams | Single-machine model; each container runs its own team |
-| Custom team communication protocols | Claude Code handles internal team coordination; forgectl stays out |
-| Notion sub-task hierarchy | GitHub-first; Notion adapter can follow later |
+---
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SUBISSUE-01 | — | Pending |
-| SUBISSUE-02 | — | Pending |
-| SUBISSUE-03 | — | Pending |
-| SUBISSUE-04 | — | Pending |
-| SUBISSUE-05 | — | Pending |
-| SUBISSUE-06 | — | Pending |
-| SKILL-01 | — | Pending |
-| SKILL-02 | — | Pending |
-| SKILL-03 | — | Pending |
-| SKILL-04 | — | Pending |
-| SKILL-05 | — | Pending |
-| TEAM-01 | — | Pending |
-| TEAM-02 | — | Pending |
-| TEAM-03 | — | Pending |
-| TEAM-04 | — | Pending |
-| TEAM-05 | — | Pending |
-| TEAM-06 | — | Pending |
-| TEAM-07 | — | Pending |
-
-**Coverage:**
-- v3.0 requirements: 18 total
-- Mapped to phases: 0
-- Unmapped: 18 ⚠️
-
----
-*Requirements defined: 2026-03-13*
-*Last updated: 2026-03-13 after initial definition*
+| SUBISSUE-01 | Phase 25 | Pending |
+| SUBISSUE-02 | Phase 25 | Pending |
+| SUBISSUE-03 | Phase 25 | Pending |
+| SUBISSUE-04 | Phase 25 | Pending |
+| SUBISSUE-05 | Phase 28 | Pending |
+| SUBISSUE-06 | Phase 28 | Pending |
+| SKILL-01 | Phase 26 | Pending |
+| SKILL-02 | Phase 26 | Pending |
+| SKILL-03 | Phase 26 | Pending |
+| SKILL-04 | Phase 26 | Pending |
+| SKILL-05 | Phase 26 | Pending |
+| TEAM-01 | Phase 27 | Pending |
+| TEAM-02 | Phase 27 | Pending |
+| TEAM-03 | Phase 27 | Pending |
+| TEAM-04 | Phase 27 | Pending |
+| TEAM-05 | Phase 27 | Pending |
