@@ -51,7 +51,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 21: Conditional Pipeline Nodes** — if/else branch routing with safe expression evaluation and executor ready-queue refactor (completed 2026-03-13)
 - [x] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery (completed 2026-03-13)
 - [x] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation (completed 2026-03-13)
-- [ ] **Phase 24: Self-Correction Integration** — test-fail/fix/retest pattern composing loop nodes with progressive context and no-progress detection
+- [x] **Phase 24: Self-Correction Integration** — test-fail/fix/retest pattern composing loop nodes with progressive context and no-progress detection (completed 2026-03-13)
 
 ## Phase Details
 
@@ -130,7 +130,7 @@ Plans:
   3. Each fix iteration's prompt includes the output from all previous fix attempts in that loop, not just the most recent failure
   4. A coverage self-correction pipeline runs until actual coverage meets or exceeds the configured threshold, or exhausts `max_iterations` with a message stating "coverage target not met after N iterations"
   5. When two consecutive loop iterations produce identical test output (no-progress), the loop aborts immediately with a "no progress detected" failure rather than running the remaining iterations
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 24-01-PLAN.md — ValidationResult.lastOutput, extractCoverage utility, and self-correction test scaffold
@@ -165,4 +165,4 @@ Plans:
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 22. Loop Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 23. Multi-Agent Delegation | 3/3 | Complete    | 2026-03-13 | - |
-| 24. Self-Correction Integration | 1/2 | In Progress|  | - |
+| 24. Self-Correction Integration | 2/2 | Complete   | 2026-03-13 | - |
