@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Completed 22-01-PLAN.md
-last_updated: "2026-03-13T05:18:09.614Z"
+stopped_at: Completed 22-02-PLAN.md
+last_updated: "2026-03-13T07:02:23.507Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
   percent: 20
 ---
 
@@ -51,6 +51,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 21 P01 | 311s | 2 tasks | 4 files |
 | Phase 21 P02 | 18min | 2 tasks | 2 files |
 | Phase 22 P01 | 216 | 2 tasks | 3 files |
+| Phase 22 P02 | 5 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 22-01]: GLOBAL_MAX_ITERATIONS = 50 lives in checkpoint.ts alongside loop checkpoint infrastructure
 - [Phase 22-01]: saveLoopCheckpoint is synchronous unlike async saveCheckpoint — loop checkpoints are lightweight JSON blobs written inline during each iteration
 - [Phase 22-01]: Default max_iterations = 10 when YAML omits the field — enforced by executor in Plan 02, tested via clamping logic
+- [Phase 22]: executeLoopNode receives upstreamCtx from processNode caller — avoids duplicate context computation inside the method
+- [Phase 22]: state.status reset to loop-iterating after each executeNode() call because executeNode() overwrites it — required for correct iteration flow
+- [Phase 22]: beforeEach in executor tests re-sets executeRun default after vi.clearAllMocks() — vi.clearAllMocks() does not reset implementations, only call counts
 
 ### Pending Todos
 
@@ -86,6 +90,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T05:18:09.610Z
-Stopped at: Completed 22-01-PLAN.md
+Last session: 2026-03-13T07:02:14.744Z
+Stopped at: Completed 22-02-PLAN.md
 Resume file: None

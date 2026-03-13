@@ -49,7 +49,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 - [x] **Phase 20: Schema Foundation** — SQLite migration and PipelineNode type extensions that all v2.1 features depend on
 - [x] **Phase 21: Conditional Pipeline Nodes** — if/else branch routing with safe expression evaluation and executor ready-queue refactor (completed 2026-03-13)
-- [ ] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery
+- [x] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery (completed 2026-03-13)
 - [ ] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation
 - [ ] **Phase 24: Self-Correction Integration** — test-fail/fix/retest pattern composing loop nodes with progressive context and no-progress detection
 
@@ -96,7 +96,7 @@ Plans:
   3. After a daemon crash and restart mid-loop, pipeline execution resumes from the last completed iteration rather than restarting the entire loop from iteration 0
   4. `GET /api/v1/pipeline/:id/status` reports the current iteration count and `loop-iterating` status for any active loop node
   5. When a loop exhausts `max_iterations` without the `until` expression ever becoming true, the run fails with a message that names the loop node and reports the iteration count
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 22-01-PLAN.md — LoopState types, loop checkpoint functions, comprehensive test scaffolding
@@ -162,6 +162,6 @@ Plans:
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
-| 22. Loop Pipeline Nodes | 1/2 | In Progress|  | - |
+| 22. Loop Pipeline Nodes | 2/2 | Complete   | 2026-03-13 | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
