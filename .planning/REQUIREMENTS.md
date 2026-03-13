@@ -10,14 +10,14 @@ Requirements for v2.1 Autonomous Factory milestone. Each maps to roadmap phases.
 ### Delegation
 
 - [x] **DELEG-01**: Lead agent decomposes a complex issue into structured subtask specs (id, task, workflow, agent)
-- [ ] **DELEG-02**: Orchestrator dispatches child workers concurrently from subtask specs (via SyntheticIssue adapter)
+- [x] **DELEG-02**: Orchestrator dispatches child workers concurrently from subtask specs (via SyntheticIssue adapter)
 - [x] **DELEG-03**: Per-issue `maxChildren` budget enforced from WORKFLOW.md config
 - [x] **DELEG-04**: Delegation depth hard-capped at 2 (lead + workers, no further nesting)
-- [ ] **DELEG-05**: Parent/child run relationships persisted in SQLite (parentRunId, survives daemon restart)
+- [x] **DELEG-05**: Parent/child run relationships persisted in SQLite (parentRunId, survives daemon restart)
 - [x] **DELEG-06**: Two-tier slot pool prevents child agents from starving top-level work
-- [ ] **DELEG-07**: Child results collected and aggregated after all children complete
-- [ ] **DELEG-08**: On child failure, lead re-issues subtask with updated instructions incorporating failure context
-- [ ] **DELEG-09**: Lead agent synthesizes all child results into one coherent summary for write-back
+- [x] **DELEG-07**: Child results collected and aggregated after all children complete
+- [x] **DELEG-08**: On child failure, lead re-issues subtask with updated instructions incorporating failure context
+- [x] **DELEG-09**: Lead agent synthesizes all child results into one coherent summary for write-back
 
 ### Conditional Pipelines
 
@@ -82,14 +82,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | DELEG-01 | Phase 23 | Complete |
-| DELEG-02 | Phase 23 | Pending |
+| DELEG-02 | Phase 23 | Complete |
 | DELEG-03 | Phase 23 | Complete |
 | DELEG-04 | Phase 23 | Complete |
-| DELEG-05 | Phase 23 | Pending |
+| DELEG-05 | Phase 23 | Complete |
 | DELEG-06 | Phase 23 | Complete |
-| DELEG-07 | Phase 23 | Pending |
-| DELEG-08 | Phase 23 | Pending |
-| DELEG-09 | Phase 23 | Pending |
+| DELEG-07 | Phase 23 | Complete |
+| DELEG-08 | Phase 23 | Complete |
+| DELEG-09 | Phase 23 | Complete |
 | COND-01 | Phase 21 | Complete |
 | COND-02 | Phase 21 | Complete |
 | COND-03 | Phase 21 | Complete |
