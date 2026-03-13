@@ -1,5 +1,7 @@
 import type { TrackerAdapter, TrackerConfig, TrackerIssue } from "./types.js";
 import { resolveToken } from "./token.js";
+import { SubIssueCache } from "./sub-issue-cache.js";
+import { detectIssueCycles } from "./sub-issue-dag.js";
 
 const API_BASE = "https://api.github.com";
 const RATE_LIMIT_WARNING_THRESHOLD = 100;
@@ -50,16 +52,25 @@ function extractPriority(labels: GitHubLabel[]): string | null {
  *
  * id is set to ghIssue.number (the API-addressable issue number),
  * not ghIssue.id (GitHub's internal numeric ID).
+ *
+ * Optional subIssues param: if provided, populates blocked_by from child
+ * issue numbers (excluding PRs). Also always stores ghInternalId (SUBISSUE-02).
  */
-function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
+function normalizeIssue(ghIssue: GitHubIssue, subIssues?: GitHubIssue[]): TrackerIssue | null {
   if (ghIssue.pull_request) {
     return null;
   }
 
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = {
+    ghInternalId: ghIssue.id,
+  };
   if (ghIssue.reactions) {
     metadata.reactions = ghIssue.reactions;
   }
+
+  const blockedBy = subIssues
+    ? subIssues.filter((s) => !s.pull_request).map((s) => String(s.number))
+    : [];
 
   return {
     id: String(ghIssue.number),
@@ -73,7 +84,7 @@ function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
     url: ghIssue.html_url,
     created_at: ghIssue.created_at,
     updated_at: ghIssue.updated_at,
-    blocked_by: [],
+    blocked_by: blockedBy,
     metadata,
   };
 }
@@ -103,7 +114,7 @@ function parseIssueNumber(idOrIdentifier: string): number {
 /**
  * Create a GitHub Issues TrackerAdapter.
  */
-export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
+export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter & { subIssueCache: SubIssueCache } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
   }
@@ -123,6 +134,9 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
   let cachedIssues: TrackerIssue[] = [];
   let rateLimitRemaining = Infinity;
   let rateLimitReset = 0;
+
+  // Sub-issue TTL cache (5min default)
+  const subIssueCache = new SubIssueCache();
 
   /**
    * Perform an authenticated fetch against the GitHub API.
@@ -220,8 +234,18 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
     return { issues, response };
   }
 
-  const adapter: TrackerAdapter = {
+  /**
+   * Fetch sub-issues for a given issue number from the GitHub sub_issues endpoint.
+   */
+  async function fetchSubIssues(issueNumber: number): Promise<GitHubIssue[]> {
+    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${issueNumber}/sub_issues?per_page=100`;
+    const result = await fetchAllPages(url);
+    return result ? result.issues : [];
+  }
+
+  const adapter: TrackerAdapter & { subIssueCache: SubIssueCache } = {
     kind: "github",
+    subIssueCache,
 
     async fetchCandidateIssues(): Promise<TrackerIssue[]> {
       const params = new URLSearchParams({
@@ -259,26 +283,150 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         lastETag = etag;
       }
 
-      // Normalize and filter out PRs
+      // First pass: normalize without sub-issues (basic normalization)
+      const ghIssueMap = new Map<string, GitHubIssue>();
       const normalized: TrackerIssue[] = [];
       for (const ghIssue of result.issues) {
         const issue = normalizeIssue(ghIssue);
         if (issue) {
           normalized.push(issue);
+          ghIssueMap.set(issue.id, ghIssue);
         }
       }
 
-      // Update lastUpdatedAt for delta polling
-      if (normalized.length > 0) {
-        const maxUpdated = normalized.reduce((max, issue) =>
-          issue.updated_at > max ? issue.updated_at : max,
-          normalized[0].updated_at,
-        );
-        lastUpdatedAt = maxUpdated;
+      // Second pass: enrich with sub-issues (SUBISSUE-01)
+      // Collect all candidate issue numbers seen so far for auto-discovery dedup
+      const candidateIds = new Set<string>(normalized.map((i) => i.id));
+      const enriched: TrackerIssue[] = [];
+      const pendingEnrichment: Array<{ ghIssue: GitHubIssue; subIssues: GitHubIssue[] }> = [];
+
+      for (const issue of normalized) {
+        const ghIssue = ghIssueMap.get(issue.id)!;
+        const issueNum = Number(issue.id);
+
+        // Check cache first
+        const cached = subIssueCache.get(issue.id);
+        if (cached) {
+          // Cache hit: rebuild sub-issues from childIds/childStates (reconstruct minimal GitHubIssue[])
+          // We only need the number to populate blocked_by
+          const cachedSubIssues: GitHubIssue[] = cached.childIds.map((childId) => ({
+            id: 0, // internal id not needed for blocked_by
+            number: Number(childId),
+            title: "",
+            body: null,
+            state: cached.childStates.get(childId) ?? "open",
+            labels: [],
+            assignees: [],
+            html_url: "",
+            created_at: "",
+            updated_at: "",
+          }));
+          pendingEnrichment.push({ ghIssue, subIssues: cachedSubIssues });
+          continue;
+        }
+
+        // Cache miss: fetch if rate limit allows
+        if (rateLimitRemaining >= RATE_LIMIT_WARNING_THRESHOLD) {
+          const subIssues = await fetchSubIssues(issueNum);
+
+          // Store in cache
+          const childStates = new Map<string, string>();
+          for (const si of subIssues) {
+            if (!si.pull_request) {
+              childStates.set(String(si.number), si.state);
+            }
+          }
+          subIssueCache.set({
+            parentId: issue.id,
+            childIds: subIssues.filter((s) => !s.pull_request).map((s) => String(s.number)),
+            childStates,
+            fetchedAt: Date.now(),
+          });
+
+          pendingEnrichment.push({ ghIssue, subIssues });
+        } else {
+          // Rate limit low: graceful degradation, serve with empty sub-issues
+          console.warn(
+            `[forgectl] Rate limit low (${rateLimitRemaining} remaining), skipping sub-issue fetch for issue #${issueNum}`,
+          );
+          pendingEnrichment.push({ ghIssue, subIssues: [] });
+        }
       }
 
-      cachedIssues = normalized;
-      return normalized;
+      // Auto-discovery: add sub-issues not already in candidates
+      for (const { subIssues } of pendingEnrichment) {
+        for (const si of subIssues) {
+          if (!si.pull_request && !candidateIds.has(String(si.number))) {
+            candidateIds.add(String(si.number));
+            // Enqueue auto-discovered issue for its own enrichment
+            // Use the sub-issue data directly as a basic GitHubIssue
+            ghIssueMap.set(String(si.number), si);
+            // Fetch sub-issues for auto-discovered child (if rate allows)
+            let childSubIssues: GitHubIssue[] = [];
+            const cached = subIssueCache.get(String(si.number));
+            if (cached) {
+              childSubIssues = cached.childIds.map((childId) => ({
+                id: 0,
+                number: Number(childId),
+                title: "",
+                body: null,
+                state: cached.childStates.get(childId) ?? "open",
+                labels: [],
+                assignees: [],
+                html_url: "",
+                created_at: "",
+                updated_at: "",
+              }));
+            } else if (rateLimitRemaining >= RATE_LIMIT_WARNING_THRESHOLD) {
+              childSubIssues = await fetchSubIssues(si.number);
+              const childStates = new Map<string, string>();
+              for (const csi of childSubIssues) {
+                if (!csi.pull_request) {
+                  childStates.set(String(csi.number), csi.state);
+                }
+              }
+              subIssueCache.set({
+                parentId: String(si.number),
+                childIds: childSubIssues.filter((s) => !s.pull_request).map((s) => String(s.number)),
+                childStates,
+                fetchedAt: Date.now(),
+              });
+            }
+            const discoveredIssue = normalizeIssue(si, childSubIssues);
+            if (discoveredIssue) {
+              enriched.push(discoveredIssue);
+            }
+          }
+        }
+      }
+
+      // Re-normalize original issues with their sub-issues
+      for (const { ghIssue, subIssues } of pendingEnrichment) {
+        const enrichedIssue = normalizeIssue(ghIssue, subIssues);
+        if (enrichedIssue) {
+          enriched.push(enrichedIssue);
+        }
+      }
+
+      // Cycle detection: run on all enriched candidates (SUBISSUE-04)
+      const cycleError = detectIssueCycles(enriched.map((i) => ({ id: i.id, blocked_by: i.blocked_by })));
+      if (cycleError) {
+        console.warn(`[forgectl] Sub-issue dependency cycle detected: ${cycleError}`);
+      }
+
+      // Update lastUpdatedAt for delta polling
+      if (enriched.length > 0) {
+        const maxUpdated = enriched.reduce((max, issue) =>
+          issue.updated_at > max ? issue.updated_at : max,
+          enriched[0].updated_at,
+        );
+        if (maxUpdated) {
+          lastUpdatedAt = maxUpdated;
+        }
+      }
+
+      cachedIssues = enriched;
+      return enriched;
     },
 
     async fetchIssueStatesByIds(ids: string[]): Promise<Map<string, string>> {

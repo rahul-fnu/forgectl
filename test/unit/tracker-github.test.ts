@@ -107,6 +107,8 @@ describe("GitHub Tracker Adapter", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([makeGitHubIssue()]),
       );
+      // Sub-issues for issue #42
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues).toHaveLength(1);
@@ -142,6 +144,8 @@ describe("GitHub Tracker Adapter", () => {
           }),
         ]),
       );
+      // Sub-issues for issue #42 (PR #99 is filtered before enrichment)
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues).toHaveLength(1);
@@ -168,10 +172,14 @@ describe("GitHub Tracker Adapter", () => {
           makeGitHubIssue({ id: 789, number: 43, title: "Page 2 issue" }),
         ]),
       );
+      // Sub-issues for issue #42
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+      // Sub-issues for issue #43
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues).toHaveLength(2);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(4);
     });
 
     it("returns cached issues on 304 (ETag)", async () => {
@@ -188,11 +196,13 @@ describe("GitHub Tracker Adapter", () => {
           "x-ratelimit-reset": "1700000000",
         }),
       );
+      // Sub-issues for issue #42 on first fetch
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const first = await adapter.fetchCandidateIssues();
       expect(first).toHaveLength(1);
 
-      // Second fetch returns 304
+      // Second fetch returns 304 (no sub-issues calls needed - returns from cachedIssues)
       mockFetch.mockResolvedValueOnce(
         makeResponse(null, 304, {
           "x-ratelimit-remaining": "4997",
@@ -204,8 +214,8 @@ describe("GitHub Tracker Adapter", () => {
       expect(second).toHaveLength(1);
       expect(second[0].identifier).toBe("#42");
 
-      // Verify If-None-Match header was sent
-      const headers = mockFetch.mock.calls[1][1].headers as Record<
+      // Verify If-None-Match header was sent on the 3rd call (2nd main fetch)
+      const headers = mockFetch.mock.calls[2][1].headers as Record<
         string,
         string
       >;
@@ -218,17 +228,16 @@ describe("GitHub Tracker Adapter", () => {
       );
       const adapter = createGitHubAdapter(baseConfig);
 
-      // First fetch
-      mockFetch.mockResolvedValueOnce(
-        makeResponse([makeGitHubIssue()]),
-      );
+      // First fetch: main issues + sub-issues
+      mockFetch.mockResolvedValueOnce(makeResponse([makeGitHubIssue()]));
+      mockFetch.mockResolvedValueOnce(makeResponse([])); // sub-issues for #42
       await adapter.fetchCandidateIssues();
 
-      // Second fetch should include since
+      // Second fetch should include since — returns empty (no new issues)
       mockFetch.mockResolvedValueOnce(makeResponse([]));
       await adapter.fetchCandidateIssues();
 
-      const url = mockFetch.mock.calls[1][0] as string;
+      const url = mockFetch.mock.calls[2][0] as string;
       expect(url).toContain("since=2026-01-15T12%3A00%3A00Z");
     });
 
@@ -239,6 +248,7 @@ describe("GitHub Tracker Adapter", () => {
       const config = { ...baseConfig, labels: ["bug", "agent-ready"] };
       const adapter = createGitHubAdapter(config);
 
+      // Returns no issues, so no sub-issues calls needed
       mockFetch.mockResolvedValueOnce(makeResponse([]));
       await adapter.fetchCandidateIssues();
 
@@ -255,6 +265,8 @@ describe("GitHub Tracker Adapter", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([makeGitHubIssue({ body: null })]),
       );
+      // Sub-issues for #42
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues[0].description).toBe("");
@@ -403,6 +415,8 @@ describe("GitHub Tracker Adapter", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([makeGitHubIssue({ id: 999999, number: 7 })]),
       );
+      // Sub-issues for issue #7
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues[0].id).toBe("7");
@@ -443,6 +457,8 @@ describe("GitHub Tracker Adapter", () => {
 
       const ghIssue = makeGitHubIssue();
       mockFetch.mockResolvedValueOnce(makeResponse([ghIssue]));
+      // Sub-issues endpoint returns empty (no children)
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       const issue = issues[0];
@@ -460,7 +476,7 @@ describe("GitHub Tracker Adapter", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-15T12:00:00Z",
         blocked_by: [],
-        metadata: { reactions: { total_count: 5 } },
+        metadata: { reactions: { total_count: 5 }, ghInternalId: 123456 },
       });
     });
 
@@ -477,6 +493,8 @@ describe("GitHub Tracker Adapter", () => {
           }),
         ]),
       );
+      // Sub-issues for #42
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues[0].priority).toBe("P0");
@@ -495,9 +513,204 @@ describe("GitHub Tracker Adapter", () => {
           }),
         ]),
       );
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
 
       const issues = await adapter.fetchCandidateIssues();
       expect(issues[0].priority).toBeNull();
+    });
+  });
+
+  describe("sub-issue enrichment (SUBISSUE-01, SUBISSUE-02)", () => {
+    it("stores ghInternalId in metadata for every issue", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([makeGitHubIssue({ id: 999999, number: 42 })]),
+      );
+      // Sub-issues endpoint returns empty
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      const issues = await adapter.fetchCandidateIssues();
+      expect(issues[0].metadata.ghInternalId).toBe(999999);
+    });
+
+    it("populates blocked_by from sub-issues returned by sub_issues endpoint", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      const parent = makeGitHubIssue({ id: 1001, number: 10 });
+      const child1 = makeGitHubIssue({ id: 2001, number: 20, title: "Child 1" });
+      const child2 = makeGitHubIssue({ id: 2002, number: 21, title: "Child 2" });
+
+      // Main issues fetch
+      mockFetch.mockResolvedValueOnce(makeResponse([parent]));
+      // Sub-issues for issue #10
+      mockFetch.mockResolvedValueOnce(makeResponse([child1, child2]));
+      // Sub-issues for child #20 (auto-discovered)
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+      // Sub-issues for child #21 (auto-discovered)
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      const issues = await adapter.fetchCandidateIssues();
+
+      const parentResult = issues.find(i => i.id === "10");
+      expect(parentResult).toBeDefined();
+      expect(parentResult!.blocked_by).toContain("20");
+      expect(parentResult!.blocked_by).toContain("21");
+    });
+
+    it("produces empty blocked_by when issue has no sub-issues", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      mockFetch.mockResolvedValueOnce(makeResponse([makeGitHubIssue()]));
+      // Empty sub-issues
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      const issues = await adapter.fetchCandidateIssues();
+      expect(issues[0].blocked_by).toEqual([]);
+    });
+
+    it("uses cache on second fetch - does not re-request sub_issues endpoint", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      const parent = makeGitHubIssue({ id: 1001, number: 10 });
+      const child = makeGitHubIssue({ id: 2001, number: 20, title: "Child" });
+
+      // First fetch: main issues + sub-issues
+      mockFetch.mockResolvedValueOnce(makeResponse([parent]));
+      mockFetch.mockResolvedValueOnce(makeResponse([child]));
+      // Sub-issues for child #20
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      await adapter.fetchCandidateIssues();
+      const callsAfterFirst = mockFetch.mock.calls.length;
+
+      // Second fetch: main issues returns 304, cached issues used
+      mockFetch.mockResolvedValueOnce(
+        makeResponse(null, 304, {
+          "x-ratelimit-remaining": "4990",
+          "x-ratelimit-reset": "1700000000",
+        }),
+      );
+
+      await adapter.fetchCandidateIssues();
+      // No additional sub_issues calls should happen (304 cache hit returns early)
+      expect(mockFetch.mock.calls.length).toBe(callsAfterFirst + 1);
+    });
+
+    it("auto-discovers sub-issues as candidates", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      const parent = makeGitHubIssue({ id: 1001, number: 10 });
+      const child = makeGitHubIssue({ id: 2001, number: 20, title: "Child issue" });
+
+      // Main issues fetch returns only parent
+      mockFetch.mockResolvedValueOnce(makeResponse([parent]));
+      // Sub-issues for #10 returns child
+      mockFetch.mockResolvedValueOnce(makeResponse([child]));
+      // Sub-issues for auto-discovered child #20
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      const issues = await adapter.fetchCandidateIssues();
+
+      // Should contain both parent and child
+      const ids = issues.map(i => i.id);
+      expect(ids).toContain("10");
+      expect(ids).toContain("20");
+    });
+
+    it("skips sub-issue fetch when rate limit is low, logs warning", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      // First fetch to set rate limit low (below threshold)
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([makeGitHubIssue()], 200, {
+          "x-ratelimit-remaining": "50", // below 100 threshold
+          "x-ratelimit-reset": "1700000000",
+        }),
+      );
+      // Sub-issues call should NOT be made
+      // (If it were made, we'd need another mock)
+
+      const issues = await adapter.fetchCandidateIssues();
+      // Issue is returned but blocked_by is empty (graceful degradation)
+      expect(issues).toHaveLength(1);
+      // Only one fetch call (main issues) — no sub_issues call
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("filters out pull requests from sub-issues when populating blocked_by", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig);
+
+      const parent = makeGitHubIssue({ id: 1001, number: 10 });
+      const childIssue = makeGitHubIssue({ id: 2001, number: 20, title: "Real sub-issue" });
+      const childPR = makeGitHubIssue({ id: 2002, number: 21, title: "PR child", pull_request: { url: "..." } });
+
+      mockFetch.mockResolvedValueOnce(makeResponse([parent]));
+      mockFetch.mockResolvedValueOnce(makeResponse([childIssue, childPR]));
+      // Sub-issues for auto-discovered child #20
+      mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+      const issues = await adapter.fetchCandidateIssues();
+      const parentResult = issues.find(i => i.id === "10");
+      expect(parentResult!.blocked_by).toContain("20");
+      expect(parentResult!.blocked_by).not.toContain("21");
+    });
+
+    it("exposes subIssueCache on the adapter", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      const adapter = createGitHubAdapter(baseConfig) as any;
+      expect(adapter.subIssueCache).toBeDefined();
+      expect(typeof adapter.subIssueCache.get).toBe("function");
+      expect(typeof adapter.subIssueCache.invalidate).toBe("function");
+    });
+  });
+
+  describe("cycle detection (SUBISSUE-04)", () => {
+    it("logs warning when cycle detected in sub-issue graph", async () => {
+      const { createGitHubAdapter } = await import(
+        "../../src/tracker/github.js"
+      );
+      // Use a config that enables logging - we spy on console.warn
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const adapter = createGitHubAdapter(baseConfig);
+
+      const issueA = makeGitHubIssue({ id: 1001, number: 10, title: "A" });
+      const issueB = makeGitHubIssue({ id: 1002, number: 11, title: "B" });
+
+      // Main issues fetch returns A and B
+      mockFetch.mockResolvedValueOnce(makeResponse([issueA, issueB]));
+      // Sub-issues for #10: blocked by #11
+      mockFetch.mockResolvedValueOnce(makeResponse([issueB]));
+      // Sub-issues for auto-discovered #11: blocked by #10 (creates cycle)
+      mockFetch.mockResolvedValueOnce(makeResponse([issueA]));
+
+      await adapter.fetchCandidateIssues();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Cycle"));
+      warnSpy.mockRestore();
     });
   });
 });
