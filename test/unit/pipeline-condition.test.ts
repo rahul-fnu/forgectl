@@ -200,10 +200,11 @@ describe("validateDAG — else_node validation", () => {
   });
 
   it("detects cycle through else_node edges", () => {
-    // a -> b (else_node: a) creates a cycle a -> b -> a
+    // a depends_on b, and b has else_node: a
+    // depends_on: a -> b, else_node: b -> a — creates cycle a -> b -> a
     const pipeline = makePipeline([
-      { id: "a", task: "task a" },
-      { id: "b", task: "task b", depends_on: ["a"], else_node: "a" },
+      { id: "a", task: "task a", depends_on: ["b"] },
+      { id: "b", task: "task b", else_node: "a" },
     ]);
     const result = validateDAG(pipeline);
     expect(result.valid).toBe(false);

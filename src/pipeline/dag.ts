@@ -27,7 +27,20 @@ export function validateDAG(pipeline: PipelineDefinition): DAGValidationResult {
     }
   }
 
-  // 3. Check for cycles using DFS
+  // 2b. Validate else_node references
+  for (const node of pipeline.nodes) {
+    if (node.else_node !== undefined) {
+      if (node.else_node === node.id) {
+        errors.push(`Node "${node.id}" else_node cannot reference itself`);
+      } else if (!nodeIds.has(node.else_node)) {
+        errors.push(
+          `Node "${node.id}" else_node references unknown node "${node.else_node}"`,
+        );
+      }
+    }
+  }
+
+  // 3. Check for cycles using DFS (includes else_node edges)
   if (errors.length === 0) {
     const cycleError = detectCycle(pipeline);
     if (cycleError) {
@@ -65,6 +78,10 @@ function detectCycle(pipeline: PipelineDefinition): string | null {
       // But for cycle detection in a DAG, we track: node depends on dep
       // So we traverse: node -> dep (upstream direction)
       adj.get(node.id)?.push(dep);
+    }
+    // Include else_node as an additional adjacency edge for cycle detection
+    if (node.else_node && adj.has(node.else_node)) {
+      adj.get(node.id)?.push(node.else_node);
     }
   }
 
@@ -198,7 +215,7 @@ function buildDependencyMap(pipeline: PipelineDefinition): Map<string, string[]>
   return deps;
 }
 
-function buildDependentsMap(pipeline: PipelineDefinition): Map<string, string[]> {
+export function buildDependentsMap(pipeline: PipelineDefinition): Map<string, string[]> {
   const dependents = new Map<string, string[]>();
   for (const node of pipeline.nodes) {
     if (!dependents.has(node.id)) dependents.set(node.id, []);
