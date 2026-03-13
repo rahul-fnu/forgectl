@@ -4,7 +4,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   name: "claude-code",
 
   buildShellCommand(promptFile: string, options: AgentOptions): string {
-    let cmd = `cat "${promptFile}" | claude -p - --output-format text`;
+    let cmd = `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions`;
 
     if (options.maxTurns > 0) {
       cmd += ` --max-turns ${options.maxTurns}`;
