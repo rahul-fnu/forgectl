@@ -83,8 +83,8 @@ Plans:
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 21-01-PLAN.md — Condition evaluator (condition.ts), shorthand expansion, DAG else_node validation
-- [ ] 21-02-PLAN.md — Executor ready-queue refactor, skip propagation, dry-run condition annotations
+- [x] 21-01-PLAN.md — Condition evaluator (condition.ts), shorthand expansion, DAG else_node validation
+- [x] 21-02-PLAN.md — Executor ready-queue refactor, skip propagation, dry-run condition annotations
 
 ### Phase 22: Loop Pipeline Nodes
 **Goal**: Pipeline YAML supports loop-until iteration — loops execute up to a hard safety cap, each iteration is checkpointed for crash recovery, and loop progress is visible in the API
@@ -96,10 +96,11 @@ Plans:
   3. After a daemon crash and restart mid-loop, pipeline execution resumes from the last completed iteration rather than restarting the entire loop from iteration 0
   4. `GET /api/v1/pipeline/:id/status` reports the current iteration count and `loop-iterating` status for any active loop node
   5. When a loop exhausts `max_iterations` without the `until` expression ever becoming true, the run fails with a message that names the loop node and reports the iteration count
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 22-01: `executeLoopNode()` implementation with opaque meta-node model, iteration checkpointing, and safety cap
+- [ ] 22-01-PLAN.md — LoopState types, loop checkpoint functions, comprehensive test scaffolding
+- [ ] 22-02-PLAN.md — executeLoopNode() implementation, processNode wiring, dry-run annotation, crash recovery
 
 ### Phase 23: Multi-Agent Delegation
 **Goal**: A lead agent can decompose a complex issue into subtasks, dispatch child workers concurrently within configured slot budgets, retry failed children with updated context, and synthesize a final summary for write-back
@@ -161,6 +162,6 @@ Plans:
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
-| 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
+| 22. Loop Pipeline Nodes | v2.1 | 0/2 | Not started | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
