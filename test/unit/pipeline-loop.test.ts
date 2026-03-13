@@ -2,10 +2,34 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { NodeExecution, LoopState, LoopIterationRecord } from "../../src/pipeline/types.js";
+import type { NodeExecution, LoopState, LoopIterationRecord, PipelineDefinition } from "../../src/pipeline/types.js";
 import { ConditionVariableError } from "../../src/pipeline/condition.js";
 import { validateDAG } from "../../src/pipeline/dag.js";
-import type { PipelineDefinition } from "../../src/pipeline/types.js";
+
+// Mocks needed for PipelineExecutor tests
+vi.mock("../../src/config/loader.js", () => ({
+  loadConfig: () => ({
+    agent: { type: "codex", model: "", max_turns: 50, timeout: "30m", flags: [] },
+    container: { network: {}, resources: { memory: "4g", cpus: 2 } },
+    repo: { branch: { template: "forge/{{slug}}/{{ts}}", base: "main" }, exclude: [] },
+    orchestration: { mode: "single", review: { max_rounds: 3 } },
+    commit: { message: { prefix: "[forge]", template: "{{prefix}} {{summary}}", include_task: true }, author: { name: "forgectl", email: "forge@localhost" }, sign: false },
+    output: { dir: "./forge-output", log_dir: ".forgectl/runs" },
+  }),
+}));
+
+vi.mock("../../src/orchestration/modes.js", () => ({
+  executeRun: vi.fn().mockResolvedValue({
+    success: true,
+    output: { mode: "files", dir: "/tmp/out", files: ["result.md"], totalSize: 100 },
+    validation: { passed: true, totalAttempts: 1, stepResults: [] },
+    durationMs: 500,
+  }),
+}));
+
+vi.mock("../../src/logging/events.js", () => ({
+  emitRunEvent: vi.fn(),
+}));
 
 // --- Setup temp dir and homedir mock for checkpoint tests ---
 
@@ -414,5 +438,183 @@ describe("loop exhaustion message format", () => {
 
     expect(buildExhaustionError("loop-1", 10)).toMatchSnapshot();
     expect(buildExhaustionError("loop-1", 50)).toMatchSnapshot();
+  });
+});
+
+// ============================================================
+// 8. executeLoopNode unit tests via PipelineExecutor
+// ============================================================
+
+const { executeRun } = await import("../../src/orchestration/modes.js");
+const { PipelineExecutor } = await import("../../src/pipeline/executor.js");
+
+function makeLoopPipeline(loopNode: PipelineDefinition["nodes"][number], extraNodes?: PipelineDefinition["nodes"]): PipelineDefinition {
+  return {
+    name: "loop-test",
+    nodes: [loopNode, ...(extraNodes ?? [])],
+  };
+}
+
+describe("executeLoopNode — via PipelineExecutor", () => {
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("loop completes when until expression becomes true after 3 iterations", async () => {
+    // Fails twice, then succeeds; until = `_status == "completed"`
+    vi.mocked(executeRun)
+      .mockResolvedValueOnce({ success: false, output: undefined, validation: { passed: false, totalAttempts: 1, stepResults: [] }, durationMs: 100, error: "fail" })
+      .mockResolvedValueOnce({ success: false, output: undefined, validation: { passed: false, totalAttempts: 1, stepResults: [] }, durationMs: 100, error: "fail" })
+      .mockResolvedValue({ success: true, output: { mode: "files", dir: "/tmp/out", files: ["out.md"], totalSize: 50 }, validation: { passed: true, totalAttempts: 1, stepResults: [] }, durationMs: 100 });
+
+    const pipeline = makeLoopPipeline({
+      id: "loop-a",
+      task: "Try until success",
+      node_type: "loop",
+      loop: { until: `_status == "completed"`, max_iterations: 10 },
+    });
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("loop-a")!.status).toBe("completed");
+    expect(result.nodes.get("loop-a")!.loopState!.iterations).toHaveLength(3);
+    expect(result.nodes.get("loop-a")!.loopState!.iterations[0].status).toBe("failed");
+    expect(result.nodes.get("loop-a")!.loopState!.iterations[2].status).toBe("completed");
+  });
+
+  it("loop exhausts max_iterations with correct error message", async () => {
+    vi.mocked(executeRun).mockResolvedValue({
+      success: false,
+      output: undefined,
+      validation: { passed: false, totalAttempts: 1, stepResults: [] },
+      durationMs: 100,
+      error: "always fails",
+    });
+
+    const pipeline = makeLoopPipeline({
+      id: "my-loop",
+      task: "Will exhaust",
+      node_type: "loop",
+      loop: { until: `_status == "completed"`, max_iterations: 3 },
+    });
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("failed");
+    expect(result.nodes.get("my-loop")!.status).toBe("failed");
+    expect(result.nodes.get("my-loop")!.error).toContain('"my-loop"');
+    expect(result.nodes.get("my-loop")!.error).toContain("exhausted max_iterations (3)");
+    expect(executeRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("body failure is NOT loop termination — iteration continues", async () => {
+    // First call fails, second succeeds
+    vi.mocked(executeRun)
+      .mockResolvedValueOnce({ success: false, output: undefined, validation: { passed: false, totalAttempts: 1, stepResults: [] }, durationMs: 100, error: "fail" })
+      .mockResolvedValue({ success: true, output: { mode: "files", dir: "/tmp/out", files: ["out.md"], totalSize: 50 }, validation: { passed: true, totalAttempts: 1, stepResults: [] }, durationMs: 100 });
+
+    const pipeline = makeLoopPipeline({
+      id: "retry",
+      task: "Retry body",
+      node_type: "loop",
+      loop: { until: `_status == "completed"`, max_iterations: 5 },
+    });
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    // Loop should complete after iteration 2 succeeds
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("retry")!.status).toBe("completed");
+    // Both iterations recorded
+    expect(result.nodes.get("retry")!.loopState!.iterations[0].status).toBe("failed");
+    expect(result.nodes.get("retry")!.loopState!.iterations[1].status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("progressive context files accumulate across iterations", async () => {
+    // Track the context files passed to each call via plan.context.files
+    const contextFilesSeen: string[][] = [];
+    vi.mocked(executeRun).mockImplementation(async (plan) => {
+      // plan.context is { system, files: string[], inject }
+      const ctxFiles = (plan.context as { files?: string[] }).files ?? [];
+      contextFilesSeen.push([...ctxFiles]);
+      return {
+        success: true,
+        output: { mode: "files", dir: "/tmp/out", files: ["out.md"], totalSize: 50 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [] },
+        durationMs: 100,
+      };
+    });
+
+    // Use _iteration == 3 to force 3 iterations before completing
+    const pipeline = makeLoopPipeline({
+      id: "prog-loop",
+      task: "Build progressively",
+      node_type: "loop",
+      loop: { until: `_iteration == 3`, max_iterations: 10 },
+    });
+
+    const executor = new PipelineExecutor(pipeline);
+    await executor.execute();
+
+    // 3 iterations called
+    expect(contextFilesSeen).toHaveLength(3);
+    // First iteration has no prior context files from loop (loop-ctx files)
+    expect(contextFilesSeen[0].filter(f => f.includes("iteration")).length).toBe(0);
+    // Second iteration has 1 prior iteration context file
+    expect(contextFilesSeen[1].filter(f => f.includes("iteration")).length).toBe(1);
+    // Third iteration has 2 prior iteration context files
+    expect(contextFilesSeen[2].filter(f => f.includes("iteration")).length).toBe(2);
+  });
+
+  it("crash recovery: resumes from lastCompletedIteration + 1", async () => {
+    // The executor will call loadLoopCheckpoint when checkpointSourceRunId is set.
+    // We need to use a fresh approach: intercept at the checkpoint module level.
+    // Since the homedir mock redirects to testDir, we can write a real checkpoint.
+    const loopState: LoopState = {
+      currentIteration: 2,
+      maxIterations: 5,
+      iterations: [
+        { iteration: 1, status: "completed", startedAt: "2026-01-01T00:00:00Z", completedAt: "2026-01-01T00:01:00Z" },
+        { iteration: 2, status: "failed", startedAt: "2026-01-01T00:01:00Z", completedAt: "2026-01-01T00:02:00Z" },
+      ],
+    };
+    // Save a real loop checkpoint in the testDir-backed checkpoint store
+    saveLoopCheckpoint("crashed-run", "loop-b", 2, loopState);
+
+    vi.mocked(executeRun).mockResolvedValue({
+      success: true,
+      output: { mode: "files", dir: "/tmp/out", files: ["out.md"], totalSize: 50 },
+      validation: { passed: true, totalAttempts: 1, stepResults: [] },
+      durationMs: 100,
+    });
+
+    const pipeline = makeLoopPipeline({
+      id: "loop-b",
+      task: "Resume from crash",
+      node_type: "loop",
+      loop: { until: `_status == "completed"`, max_iterations: 5 },
+    });
+
+    const executor = new PipelineExecutor(pipeline, { checkpointSourceRunId: "crashed-run" });
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("loop-b")!.status).toBe("completed");
+    // Should have resumed from iteration 3 (lastCompleted=2, so start=3)
+    // Plus the 2 recovered iterations = total 3 in history
+    const iterations = result.nodes.get("loop-b")!.loopState!.iterations!;
+    expect(iterations.length).toBeGreaterThanOrEqual(3); // 2 from recovery + 1 new
+    // executeRun was called only for iteration 3 (resumed from 3)
+    expect(executeRun).toHaveBeenCalledTimes(1);
   });
 });

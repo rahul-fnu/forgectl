@@ -22,7 +22,8 @@ import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
 import { Logger } from "../logging/logger.js";
 import { emitRunEvent } from "../logging/events.js";
-import { loadCheckpoint, saveCheckpoint } from "./checkpoint.js";
+import { loadCheckpoint, saveCheckpoint, saveLoopCheckpoint, loadLoopCheckpoint, GLOBAL_MAX_ITERATIONS } from "./checkpoint.js";
+import type { LoopIterationRecord } from "./types.js";
 import type { OutputResult } from "../output/types.js";
 
 export interface PipelineExecutorOptions {
@@ -252,6 +253,18 @@ export class PipelineExecutor {
 
           return;
         }
+      }
+
+      // Loop node: delegate to executeLoopNode
+      if (node.loop !== undefined) {
+        await this.executeLoopNode(node, buildStatusContext(deps));
+        // Enqueue newly-ready dependents (same as after executeNode)
+        for (const dependentId of dependentsMap.get(nodeId) ?? []) {
+          if (isNodeReady(dependentId)) {
+            readyQueue.add(dependentId);
+          }
+        }
+        return;
       }
 
       // Execute the node
@@ -604,6 +617,146 @@ export class PipelineExecutor {
     this.nodeStates.set(node.id, state);
   }
 
+  private async executeLoopNode(node: PipelineNode, upstreamCtx: Record<string, string>): Promise<void> {
+    // a. Safety cap clamping
+    const configuredMax = node.loop!.max_iterations ?? 10;
+    const maxIterations = Math.min(configuredMax, GLOBAL_MAX_ITERATIONS);
+    if (configuredMax > GLOBAL_MAX_ITERATIONS) {
+      const logger = new Logger(this.options.verbose ?? false);
+      logger.warn("loop", `Loop "${node.id}": max_iterations ${configuredMax} clamped to ${GLOBAL_MAX_ITERATIONS}`);
+    }
+
+    // b. Initialize loopState on nodeStates
+    const state: NodeExecution = {
+      nodeId: node.id,
+      status: "loop-iterating",
+      startedAt: new Date().toISOString(),
+      loopState: {
+        currentIteration: 0,
+        maxIterations,
+        iterations: [],
+      },
+    };
+    this.nodeStates.set(node.id, state);
+
+    // d. Progressive context setup (temp dir for iteration output files)
+    const loopTempDir = mkdtempSync(join(tmpdir(), "forgectl-loop-ctx-"));
+    const progressiveContext: string[] = [];
+
+    try {
+      // c. Crash recovery check (LOOP-05)
+      let startIteration = 1;
+      if (this.options.checkpointSourceRunId) {
+        const lc = loadLoopCheckpoint(this.options.checkpointSourceRunId, node.id);
+        if (lc) {
+          startIteration = lc.lastCompletedIteration + 1;
+          state.loopState!.iterations = lc.loopState.iterations;
+          // Reconstruct progressive context file paths from iteration history
+          for (const iterRecord of lc.loopState.iterations) {
+            const iterFile = join(loopTempDir, `iteration-${String(iterRecord.iteration).padStart(2, "0")}-output.md`);
+            // Write a placeholder so the file exists for context passing
+            writeFileSync(iterFile, `# Iteration ${iterRecord.iteration} (recovered)\n\nStatus: ${iterRecord.status}\n`);
+            progressiveContext.push(iterFile);
+          }
+        }
+      }
+
+      // e. Iteration loop
+      for (let i = startIteration; i <= maxIterations; i++) {
+        state.loopState!.currentIteration = i;
+        const iterStartedAt = new Date().toISOString();
+
+        // Build node clone with progressive context
+        const iterationNode: PipelineNode = {
+          ...node,
+          context: [...(node.context ?? []), ...progressiveContext],
+        };
+
+        // Run the iteration body
+        await this.executeNode(iterationNode);
+
+        // Read the result from nodeStates (executeNode updates it)
+        const iterState = this.nodeStates.get(node.id)!;
+        const iterStatus: "completed" | "failed" = iterState.status === "completed" ? "completed" : "failed";
+        const iterCompletedAt = new Date().toISOString();
+
+        // IMPORTANT: Reset status back to loop-iterating for next iteration
+        state.status = "loop-iterating";
+        state.loopState!.currentIteration = i;
+
+        // Record iteration history
+        const iterRecord: LoopIterationRecord = {
+          iteration: i,
+          status: iterStatus,
+          startedAt: iterStartedAt,
+          completedAt: iterCompletedAt,
+        };
+        state.loopState!.iterations.push(iterRecord);
+        this.nodeStates.set(node.id, state);
+
+        // Write iteration output to progressive context temp dir
+        const iterOutputFile = join(loopTempDir, `iteration-${String(i).padStart(2, "0")}-output.md`);
+        const iterOutputContent = [
+          `# Iteration ${i} Output`,
+          ``,
+          `**Status:** ${iterStatus}`,
+          `**Started:** ${iterStartedAt}`,
+          `**Completed:** ${iterCompletedAt}`,
+          ``,
+        ].join("\n");
+        writeFileSync(iterOutputFile, iterOutputContent, "utf-8");
+        progressiveContext.push(iterOutputFile);
+
+        // Save per-iteration loop checkpoint
+        saveLoopCheckpoint(this.pipelineRunId, node.id, i, state.loopState!);
+
+        // Also save a regular checkpoint for downstream hydration if iteration succeeded
+        if (iterStatus === "completed" && iterState.result) {
+          const checkpoint = await saveCheckpoint(this.pipelineRunId, node.id, iterState.result);
+          state.checkpoint = checkpoint;
+        }
+
+        // Evaluate `until` expression
+        const untilCtx = {
+          ...upstreamCtx,
+          _status: iterStatus,
+          _iteration: i,
+          _max_iterations: maxIterations,
+          _first_iteration: i === 1 ? 1 : 0,
+        } as unknown as Parameters<typeof evaluateCondition>[1];
+
+        let untilResult: boolean;
+        try {
+          untilResult = evaluateCondition(node.loop!.until, untilCtx);
+        } catch (err) {
+          // Fatal until expression error — consistent with COND-06
+          state.status = "failed";
+          state.error = err instanceof Error ? err.message : String(err);
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+
+        if (untilResult) {
+          // Loop completed successfully
+          state.status = "completed";
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+      }
+
+      // f. Loop exhaustion — until never became true
+      state.status = "failed";
+      state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true`;
+      state.completedAt = new Date().toISOString();
+      this.nodeStates.set(node.id, state);
+    } finally {
+      // g. Cleanup temp dir
+      rmSync(loopTempDir, { recursive: true, force: true });
+    }
+  }
+
   private materializeContextContent(
     nodeId: string,
     contextContent: ResolvedContextContent[],
@@ -725,6 +878,11 @@ export class PipelineExecutor {
       if (annotation) {
         const color = annotation.outcome === "RUN" ? chalk.green : chalk.yellow;
         line += `  ${color(annotation.outcome)} (${annotation.detail})`;
+      }
+      if (node.loop !== undefined) {
+        const loopMax = Math.min(node.loop.max_iterations ?? 10, GLOBAL_MAX_ITERATIONS);
+        const loopInfo = chalk.cyan(`LOOP(max:${loopMax}, until: ${node.loop.until})`);
+        line += `  ${loopInfo}`;
       }
       console.log(line);
       console.log(chalk.gray(`       Task: ${node.task.slice(0, 80)}${node.task.length > 80 ? "..." : ""}`));

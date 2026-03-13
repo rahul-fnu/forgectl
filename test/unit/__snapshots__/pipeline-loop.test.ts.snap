@@ -1,0 +1,5 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`loop exhaustion message format > exhaustion message format is consistent across iteration counts 1`] = `"Loop "loop-1" exhausted max_iterations (10) without "until" expression becoming true"`;
+
+exports[`loop exhaustion message format > exhaustion message format is consistent across iteration counts 2`] = `"Loop "loop-1" exhausted max_iterations (50) without "until" expression becoming true"`;

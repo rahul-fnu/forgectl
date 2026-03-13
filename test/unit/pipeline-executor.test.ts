@@ -29,11 +29,14 @@ vi.mock("../../src/logging/events.js", () => ({
 vi.mock("../../src/pipeline/checkpoint.js", () => ({
   saveCheckpoint: vi.fn().mockResolvedValue({ nodeId: "test", pipelineRunId: "p1", timestamp: "2024-01-01" }),
   loadCheckpoint: vi.fn().mockResolvedValue(null),
+  saveLoopCheckpoint: vi.fn(),
+  loadLoopCheckpoint: vi.fn().mockReturnValue(null),
+  GLOBAL_MAX_ITERATIONS: 50,
 }));
 
 import { PipelineExecutor } from "../../src/pipeline/executor.js";
 import { executeRun } from "../../src/orchestration/modes.js";
-import { loadCheckpoint } from "../../src/pipeline/checkpoint.js";
+import { loadCheckpoint, loadLoopCheckpoint } from "../../src/pipeline/checkpoint.js";
 
 function makePipeline(nodes: PipelineDefinition["nodes"], defaults?: PipelineDefinition["defaults"]): PipelineDefinition {
   return { name: "test", nodes, defaults };
@@ -43,6 +46,14 @@ describe("PipelineExecutor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(loadCheckpoint).mockResolvedValue(null);
+    vi.mocked(loadLoopCheckpoint).mockReturnValue(null);
+    // Reset executeRun to the default success response after clearAllMocks
+    vi.mocked(executeRun).mockResolvedValue({
+      success: true,
+      output: { mode: "git", branch: "forge/test/123", sha: "abc", filesChanged: 1, insertions: 10, deletions: 2 },
+      validation: { passed: true, totalAttempts: 1, stepResults: [] },
+      durationMs: 1000,
+    });
   });
 
   it("executes a linear pipeline in order", async () => {
@@ -383,6 +394,136 @@ describe("PipelineExecutor", () => {
 
     expect(result.status).toBe("failed");
     expect(executeRun).not.toHaveBeenCalled();
+  });
+
+  // ── Loop node execution tests ──────────────────────────────────────────────
+
+  it("loop node: completes when until expression becomes true after body succeeds", async () => {
+    // executeRun returns success=true → _status="completed" → until `_status == "completed"` is true → loop completes in 1 iteration
+    vi.mocked(executeRun).mockResolvedValue({
+      success: true,
+      output: { mode: "files", dir: "/tmp/out", files: ["result.md"], totalSize: 100 },
+      validation: { passed: true, totalAttempts: 1, stepResults: [] },
+      durationMs: 500,
+    });
+
+    const pipeline = makePipeline([
+      {
+        id: "retry-loop",
+        task: "Retry until success",
+        node_type: "loop",
+        loop: { until: `_status == "completed"`, max_iterations: 5 },
+      },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("retry-loop")!.status).toBe("completed");
+    expect(result.nodes.get("retry-loop")!.loopState).toBeDefined();
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations).toHaveLength(1);
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations[0].status).toBe("completed");
+  });
+
+  it("loop node: body failure is iteration result, not loop termination", async () => {
+    // First 2 calls return failure, 3rd returns success
+    vi.mocked(executeRun)
+      .mockResolvedValueOnce({
+        success: false,
+        output: undefined,
+        validation: { passed: false, totalAttempts: 1, stepResults: [] },
+        durationMs: 500,
+        error: "Agent failed",
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        output: undefined,
+        validation: { passed: false, totalAttempts: 1, stepResults: [] },
+        durationMs: 500,
+        error: "Agent failed again",
+      })
+      .mockResolvedValue({
+        success: true,
+        output: { mode: "files", dir: "/tmp/out", files: ["result.md"], totalSize: 100 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [] },
+        durationMs: 500,
+      });
+
+    const pipeline = makePipeline([
+      {
+        id: "retry-loop",
+        task: "Retry until success",
+        node_type: "loop",
+        loop: { until: `_status == "completed"`, max_iterations: 5 },
+      },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(result.nodes.get("retry-loop")!.status).toBe("completed");
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations).toHaveLength(3);
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations[0].status).toBe("failed");
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations[1].status).toBe("failed");
+    expect(result.nodes.get("retry-loop")!.loopState!.iterations[2].status).toBe("completed");
+    // executeRun was called 3 times (once per iteration)
+    expect(executeRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("loop node: exhaustion after max_iterations without until becoming true", async () => {
+    // always fails → until never true → exhaustion after max_iterations=3
+    vi.mocked(executeRun).mockResolvedValue({
+      success: false,
+      output: undefined,
+      validation: { passed: false, totalAttempts: 1, stepResults: [] },
+      durationMs: 500,
+      error: "Always fails",
+    });
+
+    const pipeline = makePipeline([
+      {
+        id: "my-loop",
+        task: "Always fail",
+        node_type: "loop",
+        loop: { until: `_status == "completed"`, max_iterations: 3 },
+      },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("failed");
+    expect(result.nodes.get("my-loop")!.status).toBe("failed");
+    expect(result.nodes.get("my-loop")!.error).toContain('Loop "my-loop" exhausted max_iterations (3)');
+    expect(result.nodes.get("my-loop")!.loopState!.iterations).toHaveLength(3);
+    expect(executeRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("dry-run: loop node annotated with LOOP(max:N, until: expr)", async () => {
+    const pipeline = makePipeline([
+      {
+        id: "retry-loop",
+        task: "Retry until done",
+        node_type: "loop",
+        loop: { until: `_status == "completed"`, max_iterations: 5 },
+      },
+    ]);
+
+    const logLines: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logLines.push(args.join(" "));
+    });
+    const executor = new PipelineExecutor(pipeline, { dryRun: true });
+    const result = await executor.execute();
+    consoleSpy.mockRestore();
+
+    expect(result.status).toBe("completed");
+    expect(executeRun).not.toHaveBeenCalled();
+    // Check that the loop annotation appeared in console output
+    const loopAnnotated = logLines.some(line => line.includes("LOOP(max:5") && line.includes(`_status == "completed"`));
+    expect(loopAnnotated).toBe(true);
   });
 
   it("checkpoint-hydrated skips do not trigger cascade skip", async () => {
