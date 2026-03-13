@@ -63,8 +63,8 @@ Zero new npm dependencies. All features build on existing libraries (Octokit, Do
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | SUBISSUE-01 | Phase 25 | Complete |
-| SUBISSUE-02 | Phase 25 | Pending |
-| SUBISSUE-03 | Phase 25 | Pending |
+| SUBISSUE-02 | Phase 25 | Complete |
+| SUBISSUE-03 | Phase 25 | Complete |
 | SUBISSUE-04 | Phase 25 | Complete |
 | SUBISSUE-05 | Phase 28 | Pending |
 | SUBISSUE-06 | Phase 28 | Pending |
