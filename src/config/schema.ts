@@ -69,6 +69,7 @@ export const WorkflowSchema = z.object({
     system: z.string().default(""),
   }).default({}),
   autonomy: AutonomyLevelEnum.default("full"),
+  skills: z.array(z.string()).default([]),
   auto_approve: AutoApproveRuleSchema,
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;

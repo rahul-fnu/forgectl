@@ -142,6 +142,7 @@ export function buildOrchestratedRunPlan(
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
       autonomy: "full",
+      skills: [],
     },
     agent: {
       type: agentConfig.type,

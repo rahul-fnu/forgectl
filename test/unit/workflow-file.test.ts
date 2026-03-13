@@ -151,6 +151,25 @@ describe("WorkflowFrontMatterSchema", () => {
     expect(result.validation?.steps[1].retries).toBe(5);
     expect(result.validation?.on_failure).toBe("output-wip");
   });
+
+  it("accepts skills array in front matter", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      skills: ["code-review", "testing"],
+    });
+    expect(result.skills).toEqual(["code-review", "testing"]);
+  });
+
+  it("returns undefined for skills when not specified", () => {
+    const result = WorkflowFrontMatterSchema.parse({});
+    expect(result.skills).toBeUndefined();
+  });
+
+  it("strict() does NOT reject skills key", () => {
+    // This is the key correctness check — skills must be in schema before .strict()
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ skills: ["a", "b"] }),
+    ).not.toThrow(ZodError);
+  });
 });
 
 describe("loadWorkflowFile", () => {

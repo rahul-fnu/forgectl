@@ -48,6 +48,7 @@ export interface WorkflowFileConfig {
     on_failure: "abandon" | "output-wip" | "pause";
   };
   autonomy?: "full" | "interactive" | "semi" | "supervised";
+  skills?: string[];
   auto_approve?: {
     label?: string;
     workflow_pattern?: string;

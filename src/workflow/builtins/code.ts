@@ -36,4 +36,5 @@ If acceptable, respond with exactly: LGTM
 If issues exist, list them numbered. Only flag real problems, not style preferences.`,
   },
   autonomy: "full",
+  skills: [],
 };

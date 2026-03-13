@@ -38,4 +38,5 @@ If acceptable, respond with: LGTM
 If issues exist, list them numbered.`,
   },
   autonomy: "full",
+  skills: [],
 };

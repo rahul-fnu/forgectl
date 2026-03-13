@@ -94,6 +94,7 @@ export const WorkflowFrontMatterSchema = z
         on_failure: FailureAction.default("abandon"),
       })
       .optional(),
+    skills: z.array(z.string()).optional(),
   })
   .strict();
 

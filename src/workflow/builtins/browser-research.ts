@@ -41,4 +41,5 @@ If acceptable, respond with: APPROVED
 If issues exist, list them numbered.`,
   },
   autonomy: "full",
+  skills: [],
 };

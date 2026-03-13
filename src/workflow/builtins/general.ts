@@ -16,4 +16,5 @@ Complete the task as instructed.`,
   output: { mode: "files", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },
   autonomy: "full",
+  skills: [],
 };
