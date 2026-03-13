@@ -38,18 +38,12 @@ created: 2026-03-13
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 27-01-01 | 01 | 1 | TEAM-05 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/workflow-file.test.ts -x` | ✅ extend | ⬜ pending |
-| 27-01-02 | 01 | 1 | TEAM-05 | unit | same | ✅ extend | ⬜ pending |
-| 27-02-01 | 02 | 1 | TEAM-01 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/agent-team-env.test.ts -x` | ❌ W0 | ⬜ pending |
-| 27-02-02 | 02 | 1 | TEAM-01 | unit | same | ❌ W0 | ⬜ pending |
-| 27-03-01 | 03 | 1 | TEAM-02 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/workflow-resolver.test.ts -x` | ✅ extend | ⬜ pending |
-| 27-03-02 | 03 | 1 | TEAM-02 | unit | same | ✅ extend | ⬜ pending |
-| 27-04-01 | 04 | 2 | TEAM-03 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/orchestrator-state.test.ts -x` | ✅ extend | ⬜ pending |
-| 27-04-02 | 04 | 2 | TEAM-03 | unit | same | ✅ extend | ⬜ pending |
-| 27-05-01 | 05 | 2 | TEAM-04 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/agent-team-checkpoint.test.ts -x` | ❌ W0 | ⬜ pending |
-| 27-05-02 | 05 | 2 | TEAM-04 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/workflow-resolver.test.ts -x` | ✅ extend | ⬜ pending |
+| 27-01-01 | 01 | 1 | TEAM-02, TEAM-05 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/workflow-file.test.ts -x` | extend | pending |
+| 27-01-02 | 01 | 1 | TEAM-02, TEAM-05 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/workflow-resolver.test.ts -x` | extend | pending |
+| 27-02-01 | 02 | 2 | TEAM-03 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/orchestrator-state.test.ts -x` | extend | pending |
+| 27-02-02 | 02 | 2 | TEAM-01, TEAM-04 | unit | `FORGECTL_SKIP_DOCKER=true npx vitest run test/unit/agent-team-env.test.ts test/unit/agent-team-checkpoint.test.ts -x` | W0 | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
