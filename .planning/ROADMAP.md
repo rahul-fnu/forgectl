@@ -77,7 +77,10 @@ Plans:
   2. Running `forgectl run` with a workflow that has a `skills:` section mounts only the listed skill directories, not the entire `~/.claude/` tree
   3. Credential files (`.credentials.json`, token files) are never present inside the container filesystem
   4. Claude Code inside the container discovers mounted skills via `--add-dir` flag and can invoke them
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 26-01-PLAN.md — Skill mount module, credential validation, schema/config extension
+- [ ] 26-02-PLAN.md — Wire into orchestration, --no-skills CLI flag, --add-dir injection
 
 ### Phase 27: Agent Teams
 **Goal**: Claude Code agent teams run inside containers on complex tasks, with container resources and slot weights automatically scaled to team size
@@ -124,6 +127,6 @@ Plans:
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
-| 26. Skill Mounting | v3.0 | 0/TBD | Not started | - |
+| 26. Skill Mounting | v3.0 | 0/2 | Planning | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
