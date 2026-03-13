@@ -202,6 +202,13 @@ export function buildOrchestratedRunPlan(
       author: config.commit.author,
       sign: config.commit.sign,
     },
+    // Team config from forgectl.yaml flows to RunPlan for env var injection and checkpoint bypass
+    ...(config.team?.size && config.team.size >= 2
+      ? {
+          team: { size: config.team.size, slotWeight: config.team.size },
+          skipCheckpoints: true,
+        }
+      : {}),
   };
 }
 

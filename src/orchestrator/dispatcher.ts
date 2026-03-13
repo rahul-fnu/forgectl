@@ -200,6 +200,7 @@ async function executeWorkerAndHandle(
 
   // Add WorkerInfo to running map
   const startedAt = Date.now();
+  const slotWeight = config.team?.size ?? 1;
   state.running.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
@@ -209,6 +210,7 @@ async function executeWorkerAndHandle(
     startedAt,
     lastActivityAt: Date.now(),
     attempt,
+    slotWeight,
   });
 
   // Record dispatch metrics and emit SSE event
