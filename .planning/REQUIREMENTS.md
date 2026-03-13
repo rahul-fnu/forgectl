@@ -9,12 +9,12 @@ Requirements for v2.1 Autonomous Factory milestone. Each maps to roadmap phases.
 
 ### Delegation
 
-- [ ] **DELEG-01**: Lead agent decomposes a complex issue into structured subtask specs (id, task, workflow, agent)
+- [x] **DELEG-01**: Lead agent decomposes a complex issue into structured subtask specs (id, task, workflow, agent)
 - [ ] **DELEG-02**: Orchestrator dispatches child workers concurrently from subtask specs (via SyntheticIssue adapter)
-- [ ] **DELEG-03**: Per-issue `maxChildren` budget enforced from WORKFLOW.md config
-- [ ] **DELEG-04**: Delegation depth hard-capped at 2 (lead + workers, no further nesting)
+- [x] **DELEG-03**: Per-issue `maxChildren` budget enforced from WORKFLOW.md config
+- [x] **DELEG-04**: Delegation depth hard-capped at 2 (lead + workers, no further nesting)
 - [ ] **DELEG-05**: Parent/child run relationships persisted in SQLite (parentRunId, survives daemon restart)
-- [ ] **DELEG-06**: Two-tier slot pool prevents child agents from starving top-level work
+- [x] **DELEG-06**: Two-tier slot pool prevents child agents from starving top-level work
 - [ ] **DELEG-07**: Child results collected and aggregated after all children complete
 - [ ] **DELEG-08**: On child failure, lead re-issues subtask with updated instructions incorporating failure context
 - [ ] **DELEG-09**: Lead agent synthesizes all child results into one coherent summary for write-back
@@ -81,12 +81,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DELEG-01 | Phase 23 | Pending |
+| DELEG-01 | Phase 23 | Complete |
 | DELEG-02 | Phase 23 | Pending |
-| DELEG-03 | Phase 23 | Pending |
-| DELEG-04 | Phase 23 | Pending |
+| DELEG-03 | Phase 23 | Complete |
+| DELEG-04 | Phase 23 | Complete |
 | DELEG-05 | Phase 23 | Pending |
-| DELEG-06 | Phase 23 | Pending |
+| DELEG-06 | Phase 23 | Complete |
 | DELEG-07 | Phase 23 | Pending |
 | DELEG-08 | Phase 23 | Pending |
 | DELEG-09 | Phase 23 | Pending |
