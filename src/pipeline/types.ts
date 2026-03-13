@@ -42,6 +42,21 @@ export interface PipelineNode {
   };
 }
 
+/** Per-iteration history record for a loop node */
+export interface LoopIterationRecord {
+  iteration: number;     // 1-based
+  status: "completed" | "failed";
+  startedAt: string;     // ISO timestamp
+  completedAt: string;   // ISO timestamp
+}
+
+/** Overall loop tracking state for a loop node execution */
+export interface LoopState {
+  currentIteration: number;   // 1-based; 0 before first iteration starts
+  maxIterations: number;       // clamped effective value (after safety cap)
+  iterations: LoopIterationRecord[];
+}
+
 /** Runtime state of a pipeline execution */
 export interface PipelineRun {
   id: string;
@@ -55,13 +70,14 @@ export interface PipelineRun {
 export interface NodeExecution {
   nodeId: string;
   runId?: string;
-  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  status: "pending" | "running" | "loop-iterating" | "completed" | "failed" | "skipped";
   startedAt?: string;
   completedAt?: string;
   result?: ExecutionResult;
   checkpoint?: CheckpointRef;
   error?: string;
   skipReason?: string;
+  loopState?: LoopState;
   hydratedFromCheckpoint?: {
     pipelineRunId: string;
     nodeId: string;
