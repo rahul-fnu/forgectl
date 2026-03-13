@@ -21,6 +21,7 @@ import {
   boardShowCommand,
 } from "./cli/board.js";
 import { inspectCommand } from "./cli/inspect.js";
+import { registerDoctorCommand } from "./cli/doctor.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -460,5 +461,8 @@ boardCardCmd
     }
     await boardCardRunsCommand(opts);
   });
+
+// forgectl doctor
+registerDoctorCommand(program);
 
 program.parse();
