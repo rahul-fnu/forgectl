@@ -78,6 +78,11 @@ export const WorkflowFrontMatterSchema = z
         on_failure: FailureAction.default("abandon"),
       })
       .optional(),
+    delegation: z
+      .object({
+        max_children: z.number().int().positive().optional(),
+      })
+      .optional(),
   })
   .strict();
 
