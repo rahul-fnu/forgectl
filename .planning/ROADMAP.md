@@ -104,7 +104,10 @@ Plans:
   1. When a sub-issue completes, the parent issue receives a GitHub comment listing completed vs. remaining sub-issues
   2. When the last sub-issue reaches a terminal state, the parent issue is automatically closed with a summary comment
   3. Progress comments are updated in-place (edited, not appended) to avoid comment spam on parent issues
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 28-01-PLAN.md — Sub-issue rollup module (comment builder, marker search, upsert, terminal check)
+- [ ] 28-02-PLAN.md — Wire into dispatcher (rollup callback, forge:synthesize label, synthesizer-gated close)
 
 ## Progress
 
@@ -132,4 +135,4 @@ Plans:
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
-| 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
+| 28. Sub-Issue Advanced | v3.0 | 0/2 | Not started | - |
