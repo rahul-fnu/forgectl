@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Phase 21 context gathered
-last_updated: "2026-03-13T03:47:57.612Z"
+stopped_at: Completed 21-01-PLAN.md
+last_updated: "2026-03-13T04:09:33.106Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
+  total_plans: 3
+  completed_plans: 2
   percent: 20
 ---
 
@@ -48,6 +48,7 @@ Progress: [██░░░░░░░░] 20%
 | 22. Loop Nodes | TBD | - | - |
 | 23. Delegation | TBD | - | - |
 | 24. Self-Correction | TBD | - | - |
+| Phase 21 P01 | 311s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,9 @@ Progress: [██░░░░░░░░] 20%
 - [20-01]: filtrex installed but not imported in any src/ file — noUnusedLocals:true would error; Phase 21 adds the import
 - [20-01]: All 5 new runs columns are nullable/defaulted — backward compat, existing INSERT calls unchanged
 - [20-01]: updateStatus() in DelegationRepository auto-sets completedAt when status is 'completed' or 'failed'
+- [Phase 21]: filtrex returns errors-as-values: must check result instanceof Error after calling compiled fn
+- [Phase 21]: expandShorthands builds new node objects — does not mutate originals (Zod frozen objects)
+- [Phase 21]: else_node cycle detection: add else_node edges to DFS adjacency map alongside depends_on edges
 
 ### Pending Todos
 
@@ -73,6 +77,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T03:47:57.609Z
-Stopped at: Phase 21 context gathered
-Resume file: .planning/phases/21-conditional-pipeline-nodes/21-CONTEXT.md
+Last session: 2026-03-13T04:09:33.101Z
+Stopped at: Completed 21-01-PLAN.md
+Resume file: None

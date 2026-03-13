@@ -80,7 +80,7 @@ Plans:
   3. Skipped nodes appear with `"status": "skipped"` in `GET /api/v1/pipeline/:id/status` and in the dashboard, distinct from nodes that were not-yet-run
   4. A malformed or unresolvable condition expression causes the pipeline run to fail immediately with a clear error message — the node is never silently skipped
   5. `forgectl pipeline run --dry-run` prints which nodes would be skipped given the current pipeline node states, without executing any nodes
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 21-01-PLAN.md — Condition evaluator (condition.ts), shorthand expansion, DAG else_node validation
@@ -160,7 +160,7 @@ Plans:
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
-| 21. Conditional Pipeline Nodes | v2.1 | 0/2 | Not started | - |
+| 21. Conditional Pipeline Nodes | 1/2 | In Progress|  | - |
 | 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
