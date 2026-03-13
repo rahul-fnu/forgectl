@@ -127,6 +127,6 @@ Plans:
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
-| 26. Skill Mounting | 2/2 | Complete   | 2026-03-13 | - |
+| 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
