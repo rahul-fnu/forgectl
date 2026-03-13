@@ -131,5 +131,5 @@ Plans:
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
-| 27. Agent Teams | 2/2 | Complete   | 2026-03-13 | - |
+| 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
