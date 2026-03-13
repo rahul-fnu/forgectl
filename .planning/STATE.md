@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Completed 26-01-PLAN.md
-last_updated: "2026-03-13T07:53:03.279Z"
+stopped_at: Completed 26-02-PLAN.md
+last_updated: "2026-03-13T07:58:17.944Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 25-sub-issue-dag-dependencies P01 | 3 | 2 tasks | 4 files |
 | Phase 25-sub-issue-dag-dependencies P02 | 100 | 2 tasks | 5 files |
 | Phase 26-skill-config-bind-mounting P01 | 234 | 2 tasks | 15 files |
+| Phase 26-skill-config-bind-mounting P02 | 480 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 26-01]: WorkflowFrontMatterSchema uses .optional() not .default([]) for skills -- absent means not specified (override semantics)
 - [Phase 26-01]: CREDENTIAL_DENY_LIST uses basename matching after split('/') for recursive readdirSync path compatibility
 - [Phase 26-01]: No project logger in mount.ts -- avoids heavy dependency chain in utility module
+- [Phase Phase 26-02]: Commander --no-skills sets opts.skills=false; CLIOptions uses skills?: boolean; resolver maps skills===false to noSkills:true in RunPlan
+- [Phase Phase 26-02]: skillAddDirFlags captured as local variable before agentOptions, then spread into flags array -- avoids mutating plan.agent.flags
 
 ### Pending Todos
 
@@ -81,6 +84,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T07:53:03.275Z
-Stopped at: Completed 26-01-PLAN.md
+Last session: 2026-03-13T07:58:17.939Z
+Stopped at: Completed 26-02-PLAN.md
 Resume file: None

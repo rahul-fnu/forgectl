@@ -70,7 +70,7 @@ Zero new npm dependencies. All features build on existing libraries (Octokit, Do
 | SUBISSUE-06 | Phase 28 | Pending |
 | SKILL-01 | Phase 26 | Complete |
 | SKILL-02 | Phase 26 | Complete |
-| SKILL-03 | Phase 26 | Pending |
+| SKILL-03 | Phase 26 | Complete |
 | SKILL-04 | Phase 26 | Complete |
 | SKILL-05 | Phase 26 | Complete |
 | TEAM-01 | Phase 27 | Pending |

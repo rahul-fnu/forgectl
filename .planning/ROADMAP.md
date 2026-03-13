@@ -48,7 +48,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 **Milestone Goal:** Add GitHub sub-issue DAG ordering, skill/config bind-mounting, and Claude Code agent teams to the existing orchestrator — extending existing patterns with zero new npm dependencies.
 
 - [x] **Phase 25: Sub-Issue DAG Dependencies** - Fetch GitHub sub-issues, populate blocked_by, enable dependency-aware dispatch (completed 2026-03-13)
-- [ ] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely
+- [x] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely (completed 2026-03-13)
 - [ ] **Phase 27: Agent Teams** - Enable Claude Code multi-agent teams with resource scaling and checkpoint exclusion
 - [ ] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion
 
@@ -77,7 +77,7 @@ Plans:
   2. Running `forgectl run` with a workflow that has a `skills:` section mounts only the listed skill directories, not the entire `~/.claude/` tree
   3. Credential files (`.credentials.json`, token files) are never present inside the container filesystem
   4. Claude Code inside the container discovers mounted skills via `--add-dir` flag and can invoke them
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 26-01-PLAN.md — Skill mount module, credential validation, schema/config extension
 - [ ] 26-02-PLAN.md — Wire into orchestration, --no-skills CLI flag, --add-dir injection
@@ -127,6 +127,6 @@ Plans:
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
-| 26. Skill Mounting | 1/2 | In Progress|  | - |
+| 26. Skill Mounting | 2/2 | Complete   | 2026-03-13 | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |
