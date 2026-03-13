@@ -43,6 +43,17 @@ export const runSnapshots = sqliteTable("run_snapshots", {
   state: text("state").notNull(), // JSON-serialized
 });
 
+export const runCosts = sqliteTable("run_costs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  agentType: text("agent_type").notNull(),
+  model: text("model"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  costUsd: text("cost_usd").notNull().default("0"), // stored as string for precision
+  timestamp: text("timestamp").notNull(),
+});
+
 export const executionLocks = sqliteTable(
   "execution_locks",
   {

@@ -36,6 +36,13 @@
       "when": 1773123776000,
       "tag": "0004_github_app_comment_id",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1773200000000,
+      "tag": "0005_run_costs_table",
+      "breakpoints": true
     }
   ]
 }
