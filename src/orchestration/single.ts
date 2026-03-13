@@ -15,6 +15,7 @@ import { createIsolatedNetwork, applyFirewall } from "../container/network.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
+import { prepareSkillMounts } from "../skills/mount.js";
 import { runValidationLoop } from "../validation/runner.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
@@ -136,20 +137,31 @@ export async function prepareExecution(
     }
   }
 
-  // 4. Create network (only for allowlist mode)
+  // 4. Skill mounts (Claude Code only)
+  let skillAddDirFlags: string[] = [];
+  if (plan.agent.type === "claude-code") {
+    const { mounts: skillMounts, addDirFlags } = prepareSkillMounts(
+      plan.workflow.skills ?? [],
+      plan.noSkills ?? false,
+    );
+    binds.push(...skillMounts.binds);
+    skillAddDirFlags = addDirFlags;
+  }
+
+  // 5. Create network (only for allowlist mode)
   if (plan.container.network.mode === "allowlist") {
     logger.info("prepare", "Creating isolated network...");
     await createIsolatedNetwork(plan.container.network.dockerNetwork);
     cleanup.networkName = plan.container.network.dockerNetwork;
   }
 
-  // 5. Create container with resolved image
+  // 6. Create container with resolved image
   logger.info("prepare", "Starting container...");
   const resolvedPlan = { ...plan, container: { ...plan.container, image: resolvedImage } };
   const container = await createContainer(resolvedPlan, binds);
   cleanup.container = container;
 
-  // 6. Apply firewall (only for allowlist mode)
+  // 7. Apply firewall (only for allowlist mode)
   if (plan.container.network.mode === "allowlist" && plan.container.network.allow) {
     logger.info("prepare", "Applying network firewall...");
     await applyFirewall(container, plan.container.network.allow);
@@ -164,7 +176,7 @@ export async function prepareExecution(
     model: plan.agent.model,
     maxTurns: plan.agent.maxTurns,
     timeout: plan.agent.timeout,
-    flags: plan.agent.flags,
+    flags: [...plan.agent.flags, ...skillAddDirFlags],
     workingDir: plan.input.mountPath,
   };
 
