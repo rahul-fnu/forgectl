@@ -50,7 +50,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 20: Schema Foundation** — SQLite migration and PipelineNode type extensions that all v2.1 features depend on
 - [x] **Phase 21: Conditional Pipeline Nodes** — if/else branch routing with safe expression evaluation and executor ready-queue refactor (completed 2026-03-13)
 - [x] **Phase 22: Loop Pipeline Nodes** — loop-until iteration with max_iterations cap, per-iteration checkpoints, and crash recovery (completed 2026-03-13)
-- [ ] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation
+- [x] **Phase 23: Multi-Agent Delegation** — lead agent decomposes issues, dispatches concurrent child workers with slot budgeting and workspace isolation (completed 2026-03-13)
 - [ ] **Phase 24: Self-Correction Integration** — test-fail/fix/retest pattern composing loop nodes with progressive context and no-progress detection
 
 ## Phase Details
@@ -163,5 +163,5 @@ Plans:
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 22. Loop Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
-| 23. Multi-Agent Delegation | 2/3 | In Progress|  | - |
+| 23. Multi-Agent Delegation | 3/3 | Complete   | 2026-03-13 | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |

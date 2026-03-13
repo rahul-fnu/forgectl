@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Completed 23-02-PLAN.md
-last_updated: "2026-03-13T08:08:57.569Z"
+stopped_at: Completed 23-03-PLAN.md
+last_updated: "2026-03-13T08:16:59.336Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
   percent: 20
 ---
 
@@ -54,6 +54,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 22 P02 | 5 | 1 tasks | 3 files |
 | Phase 23 P01 | 331s | 2 tasks | 8 files |
 | Phase 23 P02 | 720 | 2 tasks | 7 files |
+| Phase 23 P03 | 351s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,9 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 23]: SENTINEL_RE is non-greedy to guarantee first-block-only behavior
 - [Phase 23]: createDelegationManager factory: crash-safe row-before-dispatch pattern, single retry with rewriteFailedSubtask, synthesize() stub for Plan 03
 - [Phase 23]: TwoTierSlotManager now the standard: SlotManager removed from Orchestrator and TickDeps; scheduler uses availableTopLevelSlots() only
+- [Phase 23]: buildSynthesisPrompt exported as named export for independent testing
+- [Phase 23]: synthesize() always runs post-runDelegation even with partial failures; single postComment to parent issue
+- [Phase 23]: recoverDelegations: _tracker kept in signature per plan contract, marks running rows failed, re-dispatches pending rows grouped by parentRunId
 
 ### Pending Todos
 
@@ -97,6 +101,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T08:08:57.565Z
-Stopped at: Completed 23-02-PLAN.md
+Last session: 2026-03-13T08:16:59.331Z
+Stopped at: Completed 23-03-PLAN.md
 Resume file: None
