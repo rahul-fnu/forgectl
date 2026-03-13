@@ -80,11 +80,11 @@ Plans:
   3. Skipped nodes appear with `"status": "skipped"` in `GET /api/v1/pipeline/:id/status` and in the dashboard, distinct from nodes that were not-yet-run
   4. A malformed or unresolvable condition expression causes the pipeline run to fail immediately with a clear error message — the node is never silently skipped
   5. `forgectl pipeline run --dry-run` prints which nodes would be skipped given the current pipeline node states, without executing any nodes
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 21-01: `src/pipeline/condition.ts` expression evaluator and PipelineNode type dispatch in executor
-- [ ] 21-02: Executor ready-queue refactor replacing static topological sort
+- [ ] 21-01-PLAN.md — Condition evaluator (condition.ts), shorthand expansion, DAG else_node validation
+- [ ] 21-02-PLAN.md — Executor ready-queue refactor, skip propagation, dry-run condition annotations
 
 ### Phase 22: Loop Pipeline Nodes
 **Goal**: Pipeline YAML supports loop-until iteration — loops execute up to a hard safety cap, each iteration is checkpointed for crash recovery, and loop progress is visible in the API
