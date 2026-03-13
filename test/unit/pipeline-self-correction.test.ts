@@ -328,7 +328,8 @@ describe("coverage variable injection", () => {
           passed: callCount >= 3,
           totalAttempts: 1,
           stepResults: [],
-          lastOutput: "no coverage info here",
+          // Use unique output per call so no-progress detection does not fire
+          lastOutput: `no coverage info here — attempt ${callCount}`,
         },
         durationMs: 100,
         error: callCount < 3 ? "not done" : undefined,
@@ -363,20 +364,22 @@ describe("coverage variable injection", () => {
       error: "coverage too low",
     });
 
+    // Use max_iterations=1 so only one iteration runs (no consecutive pair for no-progress check)
+    // and the loop exhausts, exercising the coverage-aware exhaustion message path.
     const pipeline = makeLoopPipeline({
       id: "low-coverage-loop",
       task: "Improve coverage to 80%",
       node_type: "loop",
-      loop: { until: `_status == "completed"`, max_iterations: 2 },
+      loop: { until: `_status == "completed"`, max_iterations: 1 },
     });
 
     const executor = new PipelineExecutor(pipeline);
     const result = await executor.execute();
 
     expect(result.status).toBe("failed");
-    // In Plan 02, exhaustion message will include "final coverage: 45"
-    // For now, verify the loop exhausted as expected
     const nodeError = result.nodes.get("low-coverage-loop")!.error ?? "";
+    // Plan 02: exhaustion message includes coverage percentage
     expect(nodeError).toContain("exhausted max_iterations");
+    expect(nodeError).toContain("final coverage: 45.0%");
   });
 });

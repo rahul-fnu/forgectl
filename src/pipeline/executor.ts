@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
+import picomatch from "picomatch";
 import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +26,7 @@ import { emitRunEvent } from "../logging/events.js";
 import { loadCheckpoint, saveCheckpoint, saveLoopCheckpoint, loadLoopCheckpoint, GLOBAL_MAX_ITERATIONS } from "./checkpoint.js";
 import type { LoopIterationRecord } from "./types.js";
 import type { OutputResult } from "../output/types.js";
+import { extractCoverage } from "./coverage.js";
 
 export interface PipelineExecutorOptions {
   maxParallel?: number;
@@ -661,6 +663,12 @@ export class PipelineExecutor {
         }
       }
 
+      // CORR-02/CORR-05: Load exclude patterns and initialize no-progress hash tracking
+      const loopConfig = loadConfig();
+      const excludePatterns = loopConfig.repo?.exclude ?? [];
+      let lastOutputHash = "";
+      let lastIterOutput = "";
+
       // e. Iteration loop
       for (let i = startIteration; i <= maxIterations; i++) {
         state.loopState!.currentIteration = i;
@@ -675,10 +683,59 @@ export class PipelineExecutor {
         // Run the iteration body
         await this.executeNode(iterationNode);
 
+        // CORR-02: Test file exclusion enforcement — check before reading iterState
+        const repoPath = node.repo ?? this.pipeline.defaults?.repo ?? this.options.repo;
+        if (repoPath && excludePatterns.length > 0) {
+          const isExcluded = picomatch(excludePatterns);
+          let changedFiles: string[] = [];
+          try {
+            const diffOutput = execSync("git diff --name-only HEAD", {
+              cwd: repoPath,
+              encoding: "utf-8",
+              stdio: ["pipe", "pipe", "pipe"],
+            }).trim();
+            changedFiles = diffOutput ? diffOutput.split("\n").filter(Boolean) : [];
+          } catch {
+            // git not available or not a repo — skip check
+          }
+
+          const violations = changedFiles.filter(f => isExcluded(f));
+          if (violations.length > 0) {
+            // Revert excluded files only
+            for (const file of violations) {
+              try {
+                execSync(`git checkout HEAD -- ${JSON.stringify(file)}`, {
+                  cwd: repoPath,
+                  stdio: "pipe",
+                });
+              } catch { /* ignore revert failures */ }
+            }
+            // Mark iteration failed via nodeStates
+            const violationState = this.nodeStates.get(node.id)!;
+            violationState.status = "failed";
+            violationState.error = `Fix agent modified excluded file(s): ${violations.join(", ")}`;
+            this.nodeStates.set(node.id, violationState);
+          }
+        }
+
         // Read the result from nodeStates (executeNode updates it)
         const iterState = this.nodeStates.get(node.id)!;
         const iterStatus: "completed" | "failed" = iterState.status === "completed" ? "completed" : "failed";
         const iterCompletedAt = new Date().toISOString();
+
+        // CORR-05: No-progress detection via SHA-256 hash comparison
+        const currentOutput = iterState.result?.validation?.lastOutput ?? "";
+        const currentHash = currentOutput !== "" ? createHash("sha256").update(currentOutput).digest("hex") : "";
+
+        if (i > startIteration && currentHash !== "" && currentHash === lastOutputHash) {
+          state.status = "failed";
+          state.error = `Loop "${node.id}" aborted: no progress detected — identical test output on iterations ${i - 1} and ${i}:\n${currentOutput.slice(0, 500)}`;
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+        lastOutputHash = currentHash;
+        lastIterOutput = currentOutput;
 
         // IMPORTANT: Reset status back to loop-iterating for next iteration
         state.status = "loop-iterating";
@@ -717,12 +774,15 @@ export class PipelineExecutor {
         }
 
         // Evaluate `until` expression
+        // CORR-04: Inject _coverage from validation output
+        const coverage = extractCoverage(iterState.result?.validation?.lastOutput ?? "");
         const untilCtx = {
           ...upstreamCtx,
           _status: iterStatus,
           _iteration: i,
           _max_iterations: maxIterations,
           _first_iteration: i === 1 ? 1 : 0,
+          _coverage: coverage,
         } as unknown as Parameters<typeof evaluateCondition>[1];
 
         let untilResult: boolean;
@@ -748,7 +808,12 @@ export class PipelineExecutor {
 
       // f. Loop exhaustion — until never became true
       state.status = "failed";
-      state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true`;
+      const finalCoverage = extractCoverage(lastIterOutput);
+      if (finalCoverage >= 0) {
+        state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true (final coverage: ${finalCoverage.toFixed(1)}%)`;
+      } else {
+        state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true`;
+      }
       state.completedAt = new Date().toISOString();
       this.nodeStates.set(node.id, state);
     } finally {
