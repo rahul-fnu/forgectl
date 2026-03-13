@@ -47,7 +47,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 **Milestone Goal:** Add GitHub sub-issue DAG ordering, skill/config bind-mounting, and Claude Code agent teams to the existing orchestrator — extending existing patterns with zero new npm dependencies.
 
-- [ ] **Phase 25: Sub-Issue DAG Dependencies** - Fetch GitHub sub-issues, populate blocked_by, enable dependency-aware dispatch
+- [x] **Phase 25: Sub-Issue DAG Dependencies** - Fetch GitHub sub-issues, populate blocked_by, enable dependency-aware dispatch (completed 2026-03-13)
 - [ ] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely
 - [ ] **Phase 27: Agent Teams** - Enable Claude Code multi-agent teams with resource scaling and checkpoint exclusion
 - [ ] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion
@@ -63,7 +63,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   2. Sub-issue relationships appear in TrackerIssue as populated `blocked_by` entries, not an empty set
   3. If a sub-issue DAG contains a cycle (from manual overrides), the orchestrator posts a GitHub comment identifying the cycle and skips dispatch rather than hanging
   4. The GitHub internal resource ID for each issue is stored in metadata and survives across polling cycles
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 25-01-PLAN.md — SubIssueCache and cycle detection modules (new standalone files + tests)
 - [ ] 25-02-PLAN.md — Wire into GitHub adapter, scheduler, and webhooks
@@ -123,7 +123,7 @@ Plans:
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
-| 25. Sub-Issue DAG | 1/2 | In Progress|  | - |
+| 25. Sub-Issue DAG | 2/2 | Complete   | 2026-03-13 | - |
 | 26. Skill Mounting | v3.0 | 0/TBD | Not started | - |
 | 27. Agent Teams | v3.0 | 0/TBD | Not started | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |

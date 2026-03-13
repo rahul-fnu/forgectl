@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Completed 25-01-PLAN.md
-last_updated: "2026-03-13T05:19:27.552Z"
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-03-13T07:09:08.881Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -50,6 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 25-sub-issue-dag-dependencies P01 | 3 | 2 tasks | 4 files |
+| Phase 25-sub-issue-dag-dependencies P02 | 100 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,9 @@ Progress: [░░░░░░░░░░] 0%
 - [v3.0 planning]: Phase 28 depends on Phase 25 only (not 26 or 27) -- it is additive polish on sub-issue DAG
 - [Phase 25-01]: Standalone DFS cycle detector instead of reusing validateDAG() -- pipeline validator errors on unknown refs which are valid in issue graphs
 - [Phase 25-01]: Lazy TTL expiry on cache read and getAllEntries() -- no background timer needed
+- [Phase 25-02]: Optional injection for subIssueCache in TickDeps and WebhookDeps -- backward compat preserved, Notion adapter users unaffected
+- [Phase 25-02]: Webhook invalidation on issues.edited is best-effort -- TTL is the reliable fallback
+- [Phase 25-02]: Test isolation: use mockRejectedValueOnce not mockRejectedValue to avoid contaminating subsequent tests
 
 ### Pending Todos
 
@@ -73,6 +77,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T05:19:27.547Z
-Stopped at: Completed 25-01-PLAN.md
+Last session: 2026-03-13T07:09:08.875Z
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
