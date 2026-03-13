@@ -177,6 +177,46 @@ export function toSyntheticIssue(
  * depth cap, maxChildren budgeting, concurrent dispatch, failure retry, and
  * delegation row persistence.
  */
+// ---------------------------------------------------------------------------
+// Synthesis helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a structured synthesis prompt for the lead agent to aggregate all
+ * child outcomes into a single markdown summary.
+ */
+export function buildSynthesisPrompt(
+  parentIssue: TrackerIssue,
+  outcomes: ChildOutcome[],
+): string {
+  const lines: string[] = [
+    `You previously decomposed issue "${parentIssue.title}" into subtasks.`,
+    `All subtasks have now completed. Here are the results:`,
+    "",
+  ];
+
+  for (const outcome of outcomes) {
+    const badge = outcome.status === "completed" ? "COMPLETED" : "FAILED";
+    const output = outcome.stdout ?? outcome.errorMessage ?? "(no output)";
+    lines.push(`### Subtask ${outcome.spec.id} — ${badge}`);
+    lines.push(output);
+    lines.push("");
+  }
+
+  lines.push(
+    `Produce a structured markdown summary with: ` +
+    `1. An overall status header (all passed / partial failure / all failed) ` +
+    `2. A one-line status badge per subtask ` +
+    `3. A synthesis paragraph summarizing what was accomplished and what (if anything) needs follow-up`,
+  );
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// DelegationManager factory
+// ---------------------------------------------------------------------------
+
 export function createDelegationManager(deps: DelegationDeps): DelegationManager {
   const { delegationRepo, executeWorkerFn, slotManager, config, workspaceManager, logger } = deps;
 
@@ -323,6 +363,17 @@ export function createDelegationManager(deps: DelegationDeps): DelegationManager
         ? finalOutcomes.every((o) => o.status === "completed")
         : true;
 
+      // Synthesize all child outcomes into a single aggregate comment
+      try {
+        const synthesisComment = await this.synthesize(parentIssue, finalOutcomes);
+        await deps.tracker.postComment(parentIssue.id, synthesisComment);
+      } catch (err) {
+        logger.warn(
+          "delegation",
+          `Failed to post synthesis comment: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
       return { outcomes: finalOutcomes, allCompleted };
     },
 
@@ -361,11 +412,38 @@ export function createDelegationManager(deps: DelegationDeps): DelegationManager
     },
 
     async synthesize(
-      _parentIssue: TrackerIssue,
+      parentIssue: TrackerIssue,
       outcomes: ChildOutcome[],
     ): Promise<string> {
-      // Stub — full implementation in Plan 03
-      return `Delegation complete. ${outcomes.length} children finished.`;
+      const synthesisPromptText = buildSynthesisPrompt(parentIssue, outcomes);
+      const syntheticIssue = toSyntheticIssue(
+        { id: "synthesis", task: synthesisPromptText },
+        parentIssue,
+      );
+
+      try {
+        const result = await executeWorkerFn(
+          syntheticIssue,
+          config,
+          workspaceManager,
+          synthesisPromptText,
+          1,
+          logger,
+          undefined,
+        );
+        return result.agentResult.stdout;
+      } catch (err) {
+        const succeeded = outcomes.filter((o) => o.status === "completed").length;
+        const failed = outcomes.filter((o) => o.status === "failed").length;
+        logger.warn(
+          "delegation",
+          `Synthesis agent invocation failed: ${err instanceof Error ? err.message : String(err)}. Using fallback.`,
+        );
+        return (
+          `Delegation for '${parentIssue.title}' completed. ` +
+          `${outcomes.length} children: ${succeeded} succeeded, ${failed} failed.`
+        );
+      }
     },
   };
 }

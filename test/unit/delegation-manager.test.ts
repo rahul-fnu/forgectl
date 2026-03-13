@@ -235,8 +235,8 @@ describe("createDelegationManager", () => {
 
       await manager.runDelegation("parent-run-1", makeIssue(), specs, 0, 2);
 
-      // Only 2 children dispatched
-      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(2);
+      // Only 2 children dispatched + 1 synthesis = 3 total
+      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(3);
       expect(deps.logger.warn).toHaveBeenCalledWith(
         "delegation",
         expect.stringContaining("truncating"),
@@ -257,7 +257,8 @@ describe("createDelegationManager", () => {
 
       const outcome = await manager.runDelegation("parent-run-1", makeIssue(), specs, 0, 5);
 
-      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(3);
+      // 3 child dispatches + 1 synthesis call = 4 total
+      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(4);
       expect(outcome.outcomes).toHaveLength(3);
     });
 
@@ -351,8 +352,8 @@ describe("createDelegationManager", () => {
 
       const outcome = await manager.runDelegation("parent-run-1", makeIssue(), specs, 0, 5);
 
-      // executeWorkerFn called 3 times: original + rewrite + retry
-      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(3);
+      // executeWorkerFn called 4 times: original + rewrite + retry + synthesis
+      expect(deps.executeWorkerFn).toHaveBeenCalledTimes(4);
       expect(outcome.outcomes[0].status).toBe("completed");
     });
 
