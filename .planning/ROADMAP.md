@@ -43,7 +43,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
-### 🚧 v2.1 Autonomous Factory (In Progress)
+### v2.1 Autonomous Factory (In Progress)
 
 **Milestone Goal:** Enable forgectl to autonomously decompose complex issues into subtasks, delegate to child agents, and self-correct through conditional/loop pipeline nodes.
 
@@ -113,12 +113,12 @@ Plans:
   4. After a daemon restart mid-delegation, parent/child run relationships are recovered from SQLite and in-flight children resume or are re-dispatched correctly
   5. When a child worker fails, the lead agent is re-invoked with instructions that incorporate the child's failure output — and the re-issued child gets the updated task
   6. After all children complete, a single aggregate summary comment is written to the parent issue in the tracker (not one comment per child)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 23-01: Two-tier slot pool, child workspace isolation strategy, and DelegationManager scaffolding
-- [ ] 23-02: Manifest parsing, child dispatch wiring, `waitForChildren()`, and child failure retry
-- [ ] 23-03: Lead synthesis call, aggregate write-back, and governance inheritance for child runs
+- [ ] 23-01-PLAN.md — TwoTierSlotManager, config/schema extensions, manifest parsing, and DelegationManager types
+- [ ] 23-02-PLAN.md — DelegationManager core logic, child dispatch, failure retry, and dispatcher/orchestrator wiring
+- [ ] 23-03-PLAN.md — Lead synthesis, aggregate write-back, and daemon restart delegation recovery
 
 ### Phase 24: Self-Correction Integration
 **Goal**: Pipelines can autonomously run tests, detect failures, invoke a fix agent with full iteration history, retest, and exhaust cleanly — proving the loop node + context piping composition works end-to-end
