@@ -65,7 +65,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   3. `PipelineNode` interface and Zod schema accept `node_type`, `condition`, and `loop` fields without breaking any existing pipeline YAML
   4. `filtrex` ^3.1.0 is installed, importable from TypeScript with full type declarations, and lint/typecheck pass cleanly
   5. All 1,021 existing tests still pass after the schema and type changes
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [x] 20-01: Schema migration, PipelineNode type extensions, and filtrex installation (2026-03-13)
@@ -159,7 +159,7 @@ Plans:
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
-| 20. Schema Foundation | v2.1 | 1/1 | Complete | 2026-03-13 |
+| 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | v2.1 | 0/2 | Not started | - |
 | 22. Loop Pipeline Nodes | v2.1 | 0/1 | Not started | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
