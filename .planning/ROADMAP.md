@@ -130,10 +130,11 @@ Plans:
   3. Each fix iteration's prompt includes the output from all previous fix attempts in that loop, not just the most recent failure
   4. A coverage self-correction pipeline runs until actual coverage meets or exceeds the configured threshold, or exhausts `max_iterations` with a message stating "coverage target not met after N iterations"
   5. When two consecutive loop iterations produce identical test output (no-progress), the loop aborts immediately with a "no progress detected" failure rather than running the remaining iterations
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 24-01: Self-correction pipeline integration tests, no-progress detector, and WORKFLOW.md self-correction pattern documentation
+- [ ] 24-01-PLAN.md — ValidationResult.lastOutput, extractCoverage utility, and self-correction test scaffold
+- [ ] 24-02-PLAN.md — No-progress detection, exclusion enforcement, and coverage injection in executeLoopNode
 
 ## Progress
 
@@ -164,4 +165,4 @@ Plans:
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 22. Loop Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 23. Multi-Agent Delegation | 3/3 | Complete    | 2026-03-13 | - |
-| 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |
+| 24. Self-Correction Integration | v2.1 | 0/2 | Not started | - |
