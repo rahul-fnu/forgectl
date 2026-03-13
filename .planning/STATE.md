@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-03-13T03:00:55.005Z"
+stopped_at: Phase 21 context gathered
+last_updated: "2026-03-13T03:47:57.612Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
@@ -73,6 +73,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T02:54:00.000Z
-Stopped at: Completed 20-01-PLAN.md
-Resume file: .planning/phases/20-schema-foundation/20-01-SUMMARY.md
+Last session: 2026-03-13T03:47:57.609Z
+Stopped at: Phase 21 context gathered
+Resume file: .planning/phases/21-conditional-pipeline-nodes/21-CONTEXT.md
