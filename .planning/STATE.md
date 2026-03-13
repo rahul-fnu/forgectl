@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-03-13T04:09:33.106Z"
+stopped_at: Completed 21-02-PLAN.md
+last_updated: "2026-03-13T04:30:16.752Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
   percent: 20
 ---
 
@@ -49,6 +49,7 @@ Progress: [██░░░░░░░░] 20%
 | 23. Delegation | TBD | - | - |
 | 24. Self-Correction | TBD | - | - |
 | Phase 21 P01 | 311s | 2 tasks | 4 files |
+| Phase 21 P02 | 18min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 21]: filtrex returns errors-as-values: must check result instanceof Error after calling compiled fn
 - [Phase 21]: expandShorthands builds new node objects — does not mutate originals (Zod frozen objects)
 - [Phase 21]: else_node cycle detection: add else_node edges to DFS adjacency map alongside depends_on edges
+- [Phase 21-02]: inFlight.delete in .then() wrapper after inFlight.set — processNode without awaits completes synchronously, causing delete-before-set race in drain loop
+- [Phase 21-02]: pipeline_state object wrapper avoids TypeScript literal type narrowing for pipelineStatus in async drain loop
+- [Phase 21-02]: Dry-run happy-path: all ancestors simulated as completed for condition annotation; else_node not simulated (requires false-condition path)
 
 ### Pending Todos
 
@@ -77,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T04:09:33.101Z
-Stopped at: Completed 21-01-PLAN.md
+Last session: 2026-03-13T04:30:16.740Z
+Stopped at: Completed 21-02-PLAN.md
 Resume file: None

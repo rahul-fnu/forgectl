@@ -22,12 +22,12 @@ Requirements for v2.1 Autonomous Factory milestone. Each maps to roadmap phases.
 ### Conditional Pipelines
 
 - [x] **COND-01**: PipelineNode supports `condition` field with safe expression evaluation (filtrex)
-- [ ] **COND-02**: Executor refactored from static topological sort to ready-queue model for runtime branching
+- [x] **COND-02**: Executor refactored from static topological sort to ready-queue model for runtime branching
 - [x] **COND-03**: `else_node` field routes execution to alternate branch when condition is false
 - [x] **COND-04**: `if_failed` / `if_passed` YAML shorthand resolves to condition expressions
-- [ ] **COND-05**: Skipped nodes marked as `skipped` status (visible in pipeline status and API)
+- [x] **COND-05**: Skipped nodes marked as `skipped` status (visible in pipeline status and API)
 - [x] **COND-06**: Condition evaluation errors are fatal (no silent skipping)
-- [ ] **COND-07**: `--dry-run` shows which nodes would be skipped given hypothetical conditions
+- [x] **COND-07**: `--dry-run` shows which nodes would be skipped given hypothetical conditions
 
 ### Loop Pipelines
 
@@ -91,12 +91,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DELEG-08 | Phase 23 | Pending |
 | DELEG-09 | Phase 23 | Pending |
 | COND-01 | Phase 21 | Complete |
-| COND-02 | Phase 21 | Pending |
+| COND-02 | Phase 21 | Complete |
 | COND-03 | Phase 21 | Complete |
 | COND-04 | Phase 21 | Complete |
-| COND-05 | Phase 21 | Pending |
+| COND-05 | Phase 21 | Complete |
 | COND-06 | Phase 21 | Complete |
-| COND-07 | Phase 21 | Pending |
+| COND-07 | Phase 21 | Complete |
 | LOOP-01 | Phase 22 | Pending |
 | LOOP-02 | Phase 22 | Pending |
 | LOOP-03 | Phase 22 | Pending |
