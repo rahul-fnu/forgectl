@@ -40,5 +40,6 @@ Verify that sources are cited with URLs and claims are supported.
 If acceptable, respond with: APPROVED
 If issues exist, list them numbered.`,
   },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
 };

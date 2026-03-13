@@ -35,5 +35,6 @@ Check for: security issues, error handling, resource leaks, logic errors, test c
 If acceptable, respond with exactly: LGTM
 If issues exist, list them numbered. Only flag real problems, not style preferences.`,
   },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
 };

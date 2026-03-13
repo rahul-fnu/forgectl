@@ -37,5 +37,6 @@ Check for: unsupported claims, missing citations, logical gaps, outdated informa
 If acceptable, respond with: APPROVED
 If issues exist, list them numbered.`,
   },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
 };
