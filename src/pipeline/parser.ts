@@ -17,6 +17,16 @@ const PipelineNodeSchema = z.object({
   pipe: z.object({
     mode: z.enum(["branch", "files", "context"]),
   }).optional(),
+  node_type: z.enum(["task", "condition", "loop"]).optional(),
+  condition: z.string().optional(),
+  else_node: z.string().optional(),
+  if_failed: z.string().optional(),
+  if_passed: z.string().optional(),
+  loop: z.object({
+    until: z.string(),
+    max_iterations: z.number().int().positive().optional(),
+    body: z.array(z.string()).optional(),
+  }).optional(),
 });
 
 const PipelineDefaultsSchema = z.object({

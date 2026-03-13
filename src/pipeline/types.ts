@@ -30,6 +30,16 @@ export interface PipelineNode {
   pipe?: {
     mode: "branch" | "files" | "context";
   };
+  node_type?: "task" | "condition" | "loop";
+  condition?: string;
+  else_node?: string;
+  if_failed?: string;
+  if_passed?: string;
+  loop?: {
+    until: string;
+    max_iterations?: number;
+    body?: string[];
+  };
 }
 
 /** Runtime state of a pipeline execution */
