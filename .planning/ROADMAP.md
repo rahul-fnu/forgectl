@@ -91,7 +91,7 @@ Plans:
   2. Container memory limit increases by 1GB per teammate beyond the lead agent (e.g., a 3-person team gets base + 2GB)
   3. The slot manager counts a 3-person team run as occupying 3 slots, not 1, preventing OOM from concurrent team runs
   4. Team runs have checkpoint/resume disabled; on failure, the run restarts from scratch rather than resuming mid-team
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 27-01-PLAN.md — Schema, types, CLI flags, resolver (team config, memory scaling, skipCheckpoints)
 - [ ] 27-02-PLAN.md — Runtime wiring (env var injection, slot weights, checkpoint bypass)
@@ -131,5 +131,5 @@ Plans:
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
-| 27. Agent Teams | v3.0 | 0/2 | Planning | - |
+| 27. Agent Teams | 1/2 | In Progress|  | - |
 | 28. Sub-Issue Advanced | v3.0 | 0/TBD | Not started | - |

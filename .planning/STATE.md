@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Phase 27 context gathered
-last_updated: "2026-03-13T08:15:37.549Z"
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-03-13T15:32:48.153Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
   percent: 0
 ---
 
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 25-sub-issue-dag-dependencies P02 | 100 | 2 tasks | 5 files |
 | Phase 26-skill-config-bind-mounting P01 | 234 | 2 tasks | 15 files |
 | Phase 26-skill-config-bind-mounting P02 | 480 | 2 tasks | 5 files |
+| Phase 27-agent-teams P01 | 184 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 26-01]: No project logger in mount.ts -- avoids heavy dependency chain in utility module
 - [Phase Phase 26-02]: Commander --no-skills sets opts.skills=false; CLIOptions uses skills?: boolean; resolver maps skills===false to noSkills:true in RunPlan
 - [Phase Phase 26-02]: skillAddDirFlags captured as local variable before agentOptions, then spread into flags array -- avoids mutating plan.agent.flags
+- [Phase 27-01]: team sub-object in WorkflowFrontMatterSchema is NOT .strict() — only top-level schema uses .strict(), matching existing tracker/workspace pattern
+- [Phase 27-01]: noTeam/skipCheckpoints use || undefined pattern (same as noSkills) so absent fields are omitted from RunPlan rather than set to false
+- [Phase 27-01]: slotWeight equals teamSize initially — Plan 02 may override with config-driven values
 
 ### Pending Todos
 
@@ -84,6 +88,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T08:15:37.544Z
-Stopped at: Phase 27 context gathered
-Resume file: .planning/phases/27-agent-teams/27-CONTEXT.md
+Last session: 2026-03-13T15:32:48.148Z
+Stopped at: Completed 27-01-PLAN.md
+Resume file: None
