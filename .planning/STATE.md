@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Phase 22 context gathered
-last_updated: "2026-03-13T04:57:12.028Z"
+stopped_at: Completed 22-01-PLAN.md
+last_updated: "2026-03-13T05:18:09.614Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 5
+  completed_plans: 4
   percent: 20
 ---
 
@@ -50,6 +50,7 @@ Progress: [██░░░░░░░░] 20%
 | 24. Self-Correction | TBD | - | - |
 | Phase 21 P01 | 311s | 2 tasks | 4 files |
 | Phase 21 P02 | 18min | 2 tasks | 2 files |
+| Phase 22 P01 | 216 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,10 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 21-02]: inFlight.delete in .then() wrapper after inFlight.set — processNode without awaits completes synchronously, causing delete-before-set race in drain loop
 - [Phase 21-02]: pipeline_state object wrapper avoids TypeScript literal type narrowing for pipelineStatus in async drain loop
 - [Phase 21-02]: Dry-run happy-path: all ancestors simulated as completed for condition annotation; else_node not simulated (requires false-condition path)
+- [Phase 22-01]: loop-checkpoint.json is a separate file from checkpoint.json — loop recovery and task recovery are independent concerns
+- [Phase 22-01]: GLOBAL_MAX_ITERATIONS = 50 lives in checkpoint.ts alongside loop checkpoint infrastructure
+- [Phase 22-01]: saveLoopCheckpoint is synchronous unlike async saveCheckpoint — loop checkpoints are lightweight JSON blobs written inline during each iteration
+- [Phase 22-01]: Default max_iterations = 10 when YAML omits the field — enforced by executor in Plan 02, tested via clamping logic
 
 ### Pending Todos
 
@@ -81,6 +86,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T04:57:12.022Z
-Stopped at: Phase 22 context gathered
-Resume file: .planning/phases/22-loop-pipeline-nodes/22-CONTEXT.md
+Last session: 2026-03-13T05:18:09.610Z
+Stopped at: Completed 22-01-PLAN.md
+Resume file: None

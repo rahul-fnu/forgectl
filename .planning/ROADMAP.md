@@ -96,7 +96,7 @@ Plans:
   3. After a daemon crash and restart mid-loop, pipeline execution resumes from the last completed iteration rather than restarting the entire loop from iteration 0
   4. `GET /api/v1/pipeline/:id/status` reports the current iteration count and `loop-iterating` status for any active loop node
   5. When a loop exhausts `max_iterations` without the `until` expression ever becoming true, the run fails with a message that names the loop node and reports the iteration count
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 22-01-PLAN.md — LoopState types, loop checkpoint functions, comprehensive test scaffolding
@@ -162,6 +162,6 @@ Plans:
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
 | 20. Schema Foundation | v2.1 | Complete    | 2026-03-13 | 2026-03-13 |
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
-| 22. Loop Pipeline Nodes | v2.1 | 0/2 | Not started | - |
+| 22. Loop Pipeline Nodes | 1/2 | In Progress|  | - |
 | 23. Multi-Agent Delegation | v2.1 | 0/3 | Not started | - |
 | 24. Self-Correction Integration | v2.1 | 0/1 | Not started | - |

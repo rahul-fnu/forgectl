@@ -31,11 +31,11 @@ Requirements for v2.1 Autonomous Factory milestone. Each maps to roadmap phases.
 
 ### Loop Pipelines
 
-- [ ] **LOOP-01**: PipelineNode supports `loop` field with `until` expression and `max_iterations`
-- [ ] **LOOP-02**: Loops modeled as opaque meta-nodes (no DAG back-edges, compatible with cycle detector)
-- [ ] **LOOP-03**: Global max_iterations safety cap enforced regardless of YAML value
-- [ ] **LOOP-04**: Loop iteration counter tracked in NodeExecution and exposed via REST API
-- [ ] **LOOP-05**: Per-iteration checkpoint for crash recovery mid-loop
+- [x] **LOOP-01**: PipelineNode supports `loop` field with `until` expression and `max_iterations`
+- [x] **LOOP-02**: Loops modeled as opaque meta-nodes (no DAG back-edges, compatible with cycle detector)
+- [x] **LOOP-03**: Global max_iterations safety cap enforced regardless of YAML value
+- [x] **LOOP-04**: Loop iteration counter tracked in NodeExecution and exposed via REST API
+- [x] **LOOP-05**: Per-iteration checkpoint for crash recovery mid-loop
 
 ### Self-Correction
 
@@ -97,11 +97,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | COND-05 | Phase 21 | Complete |
 | COND-06 | Phase 21 | Complete |
 | COND-07 | Phase 21 | Complete |
-| LOOP-01 | Phase 22 | Pending |
-| LOOP-02 | Phase 22 | Pending |
-| LOOP-03 | Phase 22 | Pending |
-| LOOP-04 | Phase 22 | Pending |
-| LOOP-05 | Phase 22 | Pending |
+| LOOP-01 | Phase 22 | Complete |
+| LOOP-02 | Phase 22 | Complete |
+| LOOP-03 | Phase 22 | Complete |
+| LOOP-04 | Phase 22 | Complete |
+| LOOP-05 | Phase 22 | Complete |
 | CORR-01 | Phase 24 | Pending |
 | CORR-02 | Phase 24 | Pending |
 | CORR-03 | Phase 24 | Pending |
