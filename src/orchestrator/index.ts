@@ -6,7 +6,7 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { RepoContext } from "../github/types.js";
-import { createState, type OrchestratorState, SlotManager } from "./state.js";
+import { createState, type OrchestratorState, TwoTierSlotManager, createTwoTierSlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
@@ -36,7 +36,7 @@ export interface OrchestratorOptions {
  */
 export class Orchestrator {
   private state!: OrchestratorState;
-  private slotManager!: SlotManager;
+  private slotManager!: TwoTierSlotManager;
   private readonly tracker: TrackerAdapter;
   private readonly workspaceManager: WorkspaceManager;
   private config: ForgectlConfig;
@@ -67,7 +67,7 @@ export class Orchestrator {
    */
   async start(): Promise<void> {
     this.state = createState();
-    this.slotManager = new SlotManager(this.config.orchestrator.max_concurrent_agents);
+    this.slotManager = createTwoTierSlotManager(this.config.orchestrator);
     this.metrics = new MetricsCollector();
 
     // Run startup recovery (errors are non-fatal)
@@ -201,11 +201,21 @@ export class Orchestrator {
 
   /**
    * Returns slot utilization info for the API.
+   * Includes two-tier breakdown when delegation is enabled.
    */
-  getSlotUtilization(): { active: number; max: number } {
+  getSlotUtilization(): { active: number; max: number; topLevel?: { active: number; max: number }; children?: { active: number; max: number } } {
+    const topLevelRunning = this.slotManager.getTopLevelRunning();
+    const childRunning = this.slotManager.getChildRunning();
+    const topLevelActive = topLevelRunning.size;
+    const childActive = childRunning.size;
+    const topLevelMax = this.slotManager.availableTopLevelSlots() + topLevelActive;
+    const childMax = this.slotManager.availableChildSlots() + childActive;
+
     return {
-      active: this.state.running.size,
+      active: topLevelActive + childActive,
       max: this.slotManager.getMax(),
+      topLevel: { active: topLevelActive, max: topLevelMax },
+      children: { active: childActive, max: childMax },
     };
   }
 
@@ -252,8 +262,12 @@ export class Orchestrator {
     this.deps.promptTemplate = promptTemplate;
 
     const newMax = config.orchestrator.max_concurrent_agents;
-    if (newMax !== this.slotManager.getMax()) {
-      this.slotManager.setMax(newMax);
+    const newChildSlots = config.orchestrator.child_slots ?? 0;
+    const oldChildSlots = this.slotManager instanceof TwoTierSlotManager
+      ? (this.slotManager.availableChildSlots() + this.slotManager.getChildRunning().size)
+      : 0;
+    if (newMax !== this.slotManager.getMax() || newChildSlots !== oldChildSlots) {
+      this.slotManager = createTwoTierSlotManager(config.orchestrator);
     }
 
     this.logger.info(

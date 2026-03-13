@@ -4,7 +4,7 @@ import type { OrchestratorState } from "../../src/orchestrator/state.js";
 import type { ForgectlConfig } from "../../src/config/schema.js";
 import type { WorkspaceManager } from "../../src/workspace/manager.js";
 import type { Logger } from "../../src/logging/logger.js";
-import { createState, SlotManager } from "../../src/orchestrator/state.js";
+import { createState, TwoTierSlotManager } from "../../src/orchestrator/state.js";
 import { MetricsCollector } from "../../src/orchestrator/metrics.js";
 
 // Mock reconciler
@@ -67,7 +67,7 @@ function makeDeps(overrides: Partial<TickDeps> = {}): TickDeps {
     state: createState(),
     tracker: makeTracker(),
     workspaceManager: {} as unknown as WorkspaceManager,
-    slotManager: new SlotManager(3),
+    slotManager: new TwoTierSlotManager(3, 0),
     config: {
       orchestrator: {
         enabled: true,
@@ -152,7 +152,7 @@ describe("tick", () => {
 
   it("dispatches nothing when no slots available", async () => {
     const deps = makeDeps({
-      slotManager: new SlotManager(0),
+      slotManager: new TwoTierSlotManager(0, 0),
     });
     const issues = [makeIssue("1")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
