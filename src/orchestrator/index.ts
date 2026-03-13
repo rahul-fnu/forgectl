@@ -100,6 +100,7 @@ export class Orchestrator {
       runRepo: this.runRepo,
       autonomy: this.autonomy,
       autoApprove: this.autoApprove,
+      delegationManager: this.delegationManager,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -276,6 +277,7 @@ export class Orchestrator {
       this.metrics,
       governance,
       githubContext,
+      this.delegationManager,
     );
   }
 
