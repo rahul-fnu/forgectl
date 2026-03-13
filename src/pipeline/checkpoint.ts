@@ -1,8 +1,11 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { CheckpointRef } from "./types.js";
+import type { CheckpointRef, LoopState } from "./types.js";
 import type { ExecutionResult } from "../orchestration/single.js";
+
+/** Maximum number of loop iterations allowed, regardless of per-node configuration */
+export const GLOBAL_MAX_ITERATIONS = 50;
 
 function getCheckpointBase(): string {
   return join(homedir(), ".forgectl", "checkpoints");
@@ -96,6 +99,37 @@ export async function revertToCheckpoint(checkpoint: CheckpointRef): Promise<voi
   } else if (checkpoint.outputDir) {
     console.log(`Checkpoint output: ${checkpoint.outputDir}`);
   }
+}
+
+/** Returns the path to the loop-checkpoint.json file for a node (distinct from checkpoint.json) */
+function loopCheckpointPath(pipelineRunId: string, nodeId: string): string {
+  return join(checkpointDir(pipelineRunId, nodeId), "loop-checkpoint.json");
+}
+
+/** Save a loop checkpoint recording progress after each completed iteration */
+export function saveLoopCheckpoint(
+  pipelineRunId: string,
+  nodeId: string,
+  lastCompletedIteration: number,
+  loopState: LoopState,
+): void {
+  const dir = checkpointDir(pipelineRunId, nodeId);
+  mkdirSync(dir, { recursive: true });
+  const payload = { lastCompletedIteration, loopState };
+  writeFileSync(loopCheckpointPath(pipelineRunId, nodeId), JSON.stringify(payload, null, 2));
+}
+
+/** Load a loop checkpoint for crash recovery. Returns null if no checkpoint exists. */
+export function loadLoopCheckpoint(
+  pipelineRunId: string,
+  nodeId: string,
+): { lastCompletedIteration: number; loopState: LoopState } | null {
+  const filePath = loopCheckpointPath(pipelineRunId, nodeId);
+  if (!existsSync(filePath)) return null;
+  return JSON.parse(readFileSync(filePath, "utf-8")) as {
+    lastCompletedIteration: number;
+    loopState: LoopState;
+  };
 }
 
 function listFilesRecursive(dir: string, prefix = ""): string[] {
