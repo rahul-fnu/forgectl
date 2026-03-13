@@ -23,6 +23,7 @@ import {
 import { inspectCommand } from "./cli/inspect.js";
 import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
+import { costsCommand } from "./cli/costs.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -100,6 +101,15 @@ program
   .command("inspect <runId>")
   .description("Show the full audit trail for a run")
   .action(inspectCommand);
+
+// forgectl costs
+program
+  .command("costs")
+  .description("Show cost summary")
+  .option("--run-id <id>", "Show costs for a specific run")
+  .option("--since <duration>", "Show costs since duration (e.g. 24h, 7d)")
+  .option("--workflow <name>", "Show costs for a specific workflow")
+  .action(costsCommand);
 
 // forgectl orchestrate — start daemon with orchestration enabled
 program

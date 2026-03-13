@@ -3,6 +3,7 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createRunRepository } from "../storage/repositories/runs.js";
 import { createEventRepository } from "../storage/repositories/events.js";
+import { createCostRepository } from "../storage/repositories/costs.js";
 import type { EventRow } from "../storage/repositories/events.js";
 import type { RunRow } from "../storage/repositories/runs.js";
 
@@ -125,26 +126,35 @@ export async function inspectCommand(runId: string): Promise<void> {
     console.log(chalk.bold("\nTimeline:"));
     console.log(formatTimeline(events, run.startedAt ?? run.submittedAt));
 
-    // Cost summary
-    const costEvents = eventRepo.findByRunIdAndType(runId, "cost");
-    if (costEvents.length > 0) {
-      let totalInput = 0;
-      let totalOutput = 0;
-      for (const ce of costEvents) {
-        const d = (ce.data && typeof ce.data === "object" ? ce.data : {}) as Record<string, number>;
-        totalInput += d.input ?? 0;
-        totalOutput += d.output ?? 0;
-      }
-      const total = totalInput + totalOutput;
-      // Rough cost estimate: $3/MTok input, $15/MTok output (Claude Sonnet-like pricing)
-      const inputCost = (totalInput / 1_000_000) * 3;
-      const outputCost = (totalOutput / 1_000_000) * 15;
-      const totalCost = inputCost + outputCost;
-
+    // Cost summary — prefer run_costs table, fall back to cost events
+    const costRepo = createCostRepository(db);
+    const costSummary = costRepo.sumByRunId(runId);
+    if (costSummary.recordCount > 0) {
       console.log(chalk.bold("\nCost Summary:"));
-      console.log(`  Input:  ${totalInput.toLocaleString("en-US")} tokens (~$${inputCost.toFixed(4)})`);
-      console.log(`  Output: ${totalOutput.toLocaleString("en-US")} tokens (~$${outputCost.toFixed(4)})`);
-      console.log(`  Total:  ${total.toLocaleString("en-US")} tokens (~$${totalCost.toFixed(4)})`);
+      console.log(`  Input:  ${costSummary.totalInputTokens.toLocaleString("en-US")} tokens`);
+      console.log(`  Output: ${costSummary.totalOutputTokens.toLocaleString("en-US")} tokens`);
+      console.log(`  Total:  $${costSummary.totalCostUsd.toFixed(4)}`);
+    } else {
+      // Fall back to cost events for backward compatibility
+      const costEvents = eventRepo.findByRunIdAndType(runId, "cost");
+      if (costEvents.length > 0) {
+        let totalInput = 0;
+        let totalOutput = 0;
+        for (const ce of costEvents) {
+          const d = (ce.data && typeof ce.data === "object" ? ce.data : {}) as Record<string, number>;
+          totalInput += d.input ?? 0;
+          totalOutput += d.output ?? 0;
+        }
+        const total = totalInput + totalOutput;
+        const inputCost = (totalInput / 1_000_000) * 3;
+        const outputCost = (totalOutput / 1_000_000) * 15;
+        const totalCost = inputCost + outputCost;
+
+        console.log(chalk.bold("\nCost Summary:"));
+        console.log(`  Input:  ${totalInput.toLocaleString("en-US")} tokens (~$${inputCost.toFixed(4)})`);
+        console.log(`  Output: ${totalOutput.toLocaleString("en-US")} tokens (~$${outputCost.toFixed(4)})`);
+        console.log(`  Total:  ${total.toLocaleString("en-US")} tokens (~$${totalCost.toFixed(4)})`);
+      }
     }
 
     console.log("");

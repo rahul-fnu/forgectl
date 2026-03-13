@@ -16,6 +16,9 @@ import type { Orchestrator } from "../orchestrator/index.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { resumeRun } from "../durability/pause.js";
 import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import { getBudgetStatus } from "../agent/budget.js";
+import type { BudgetConfig } from "../agent/budget.js";
 
 interface InlineContext {
   name: string;
@@ -28,6 +31,8 @@ interface RouteServices {
   boardEngine?: BoardEngine;
   orchestrator?: Orchestrator;
   runRepo?: RunRepository;
+  costRepo?: CostRepository;
+  budgetConfig?: BudgetConfig;
 }
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
@@ -36,6 +41,8 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const boardEngine = services.boardEngine;
   const orchestrator = services.orchestrator;
   const runRepo = services.runRepo;
+  const costRepo = services.costRepo;
+  const budgetConfig = services.budgetConfig;
 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -113,6 +120,11 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     if (!run) {
       reply.code(404);
       return { error: "Run not found" };
+    }
+    // Attach budget status if cost repo is available
+    if (costRepo) {
+      const budget = getBudgetStatus(costRepo, request.params.id, budgetConfig);
+      return { ...run, budget };
     }
     return run;
   });

@@ -72,6 +72,10 @@ export const WorkflowSchema = z.object({
     enabled: z.boolean().default(true),
     ttl: duration.default("7d"),
   }).default({}),
+  budget: z.object({
+    max_cost_per_run: z.number().positive().optional(),
+    max_cost_per_day: z.number().positive().optional(),
+  }).optional(),
   autonomy: AutonomyLevelEnum.default("full"),
   auto_approve: AutoApproveRuleSchema,
 });
