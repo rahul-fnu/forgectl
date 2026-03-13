@@ -49,6 +49,7 @@ program
   .option("--verbose", "Show full agent output")
   .option("--no-cleanup", "Leave container running after run")
   .option("--dry-run", "Show run plan without executing")
+  .option("--no-skills", "Disable skill/config bind-mounting for this run")
   .action(runCommand);
 
 // forgectl auth

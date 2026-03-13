@@ -28,6 +28,8 @@ export interface CLIOptions {
   noCleanup?: boolean;
   dryRun?: boolean;
   config?: string;
+  // Commander sets skills=false when --no-skills is passed, undefined when omitted
+  skills?: boolean;
 }
 
 /**
@@ -184,5 +186,6 @@ export function resolveRunPlan(
       author: config.commit.author,
       sign: config.commit.sign,
     },
+    noSkills: options.skills === false,
   };
 }

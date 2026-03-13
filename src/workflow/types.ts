@@ -137,4 +137,5 @@ export interface RunPlan {
     review: ReviewConfig;
   };
   commit: CommitConfig;
+  noSkills?: boolean;
 }
