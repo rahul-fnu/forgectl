@@ -87,6 +87,14 @@ export async function prepareExecution(
   // 3. Prepare credentials and build direct env vars (no shell subcommands)
   const agentEnv: string[] = [];
 
+  // Warn if team config is present but agent is not claude-code
+  if (plan.team && !plan.noTeam && plan.agent.type !== "claude-code") {
+    logger.warn(
+      "prepare",
+      `Team mode is only supported for claude-code agent; ignoring team config for ${plan.agent.type}`,
+    );
+  }
+
   if (plan.agent.type === "claude-code") {
     const auth = await getClaudeAuth();
     if (!auth) throw new Error("No Claude Code credentials configured");
@@ -100,6 +108,11 @@ export async function prepareExecution(
       agentEnv.push(`${k}=${v}`);
     }
     agentEnv.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
+    // Team mode: set CLAUDE_NUM_TEAMMATES if team configured and not disabled
+    if (!plan.noTeam && plan.team && plan.team.size > 1) {
+      const teammates = plan.team.size - 1;
+      agentEnv.push(`CLAUDE_NUM_TEAMMATES=${teammates}`);
+    }
   } else if (plan.agent.type === "browser-use") {
     // Browser-use needs LLM credentials -- try Claude first (forgectl is Claude-first), fall back to OpenAI
     try {
@@ -211,7 +224,7 @@ export async function executeSingleAgent(
   try {
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
 
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
@@ -233,7 +246,7 @@ export async function executeSingleAgent(
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
     }
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
 
     // --- Phase: Validate ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "validate" } });
@@ -242,7 +255,7 @@ export async function executeSingleAgent(
     const validationResult = await runValidationLoop(
       container, plan, adapter, agentOptions, agentEnv, logger
     );
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
     // --- Phase: Collect Output ---
     if (validationResult.passed || plan.validation.onFailure === "output-wip") {
@@ -250,7 +263,7 @@ export async function executeSingleAgent(
 
       logger.info("output", `Collecting ${plan.output.mode} output...`);
       const output = await collectOutput(container, plan, logger);
-      if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "output");
+      if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "output");
 
       // --- Post-execution approval gate ---
       const autonomy = plan.workflow.autonomy ?? "full";
