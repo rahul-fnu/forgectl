@@ -95,6 +95,9 @@ export const WorkflowFrontMatterSchema = z
       })
       .optional(),
     skills: z.array(z.string()).optional(),
+    team: z.object({
+      size: z.number().int().min(2).max(5),
+    }).optional(),
   })
   .strict();
 

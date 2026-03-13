@@ -54,6 +54,9 @@ export interface WorkflowFileConfig {
     workflow_pattern?: string;
     max_cost?: number;
   };
+  team?: {
+    size?: number;
+  };
 }
 
 /**
@@ -138,4 +141,10 @@ export interface RunPlan {
   };
   commit: CommitConfig;
   noSkills?: boolean;
+  noTeam?: boolean;
+  skipCheckpoints?: boolean;
+  team?: {
+    size: number;
+    slotWeight: number;
+  };
 }

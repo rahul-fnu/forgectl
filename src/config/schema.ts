@@ -71,6 +71,9 @@ export const WorkflowSchema = z.object({
   autonomy: AutonomyLevelEnum.default("full"),
   skills: z.array(z.string()).default([]),
   auto_approve: AutoApproveRuleSchema,
+  team: z.object({
+    size: z.number().int().min(2).max(5),
+  }).optional(),
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
 
@@ -161,6 +164,10 @@ export const ConfigSchema = z.object({
   }).default({}),
 
   github_app: GitHubAppConfigSchema.optional(),
+
+  team: z.object({
+    size: z.number().int().min(2).max(5),
+  }).optional(),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

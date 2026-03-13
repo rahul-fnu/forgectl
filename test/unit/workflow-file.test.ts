@@ -170,6 +170,44 @@ describe("WorkflowFrontMatterSchema", () => {
       WorkflowFrontMatterSchema.parse({ skills: ["a", "b"] }),
     ).not.toThrow(ZodError);
   });
+
+  it("accepts team config in front matter", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 3 },
+    });
+    expect(result.team?.size).toBe(3);
+  });
+
+  it("accepts team size at min boundary (2)", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 2 },
+    });
+    expect(result.team?.size).toBe(2);
+  });
+
+  it("accepts team size at max boundary (5)", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 5 },
+    });
+    expect(result.team?.size).toBe(5);
+  });
+
+  it("rejects team size below 2", () => {
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ team: { size: 1 } }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects team size above 5", () => {
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ team: { size: 6 } }),
+    ).toThrow(ZodError);
+  });
+
+  it("accepts front matter without team (optional)", () => {
+    const result = WorkflowFrontMatterSchema.parse({});
+    expect(result.team).toBeUndefined();
+  });
 });
 
 describe("loadWorkflowFile", () => {
