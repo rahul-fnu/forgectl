@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: Phase 24 context gathered
-last_updated: "2026-03-13T23:09:22.360Z"
+stopped_at: "Phase 24-01 complete: ValidationResult.lastOutput, extractCoverage utility, test scaffold"
+last_updated: "2026-03-13T23:27:57.470Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 10
+  completed_plans: 9
   percent: 20
 ---
 
@@ -55,6 +55,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 23 P01 | 331s | 2 tasks | 8 files |
 | Phase 23 P02 | 720 | 2 tasks | 7 files |
 | Phase 23 P03 | 351s | 2 tasks | 5 files |
+| Phase 24 P01 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 23]: buildSynthesisPrompt exported as named export for independent testing
 - [Phase 23]: synthesize() always runs post-runDelegation even with partial failures; single postComment to parent issue
 - [Phase 23]: recoverDelegations: _tracker kept in signature per plan contract, marks running rows failed, re-dispatches pending rows grouped by parentRunId
+- [Phase 24-01]: lastResults tracked outside while loop so exhausted-retries path can access final pass output after break
+- [Phase 24-01]: extractCoverage returns -1 sentinel for no-match — safe for numeric comparisons in filtrex expressions (_coverage >= 80 evaluates false rather than throwing)
 
 ### Pending Todos
 
@@ -101,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T23:09:22.351Z
-Stopped at: Phase 24 context gathered
-Resume file: .planning/phases/24-self-correction-integration/24-CONTEXT.md
+Last session: 2026-03-13T23:27:57.465Z
+Stopped at: Phase 24-01 complete: ValidationResult.lastOutput, extractCoverage utility, test scaffold
+Resume file: None

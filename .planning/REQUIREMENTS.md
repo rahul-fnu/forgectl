@@ -39,11 +39,11 @@ Requirements for v2.1 Autonomous Factory milestone. Each maps to roadmap phases.
 
 ### Self-Correction
 
-- [ ] **CORR-01**: Test-fail → fix → retest pipeline pattern using loop nodes with failure output as context
+- [x] **CORR-01**: Test-fail → fix → retest pipeline pattern using loop nodes with failure output as context
 - [ ] **CORR-02**: Fix agent excluded from modifying test files via WORKFLOW.md exclude list
-- [ ] **CORR-03**: Each fix iteration includes history of all previous attempts (progressive context)
-- [ ] **CORR-04**: Coverage self-correction: loop until coverage >= threshold with structured output parsing
-- [ ] **CORR-05**: Clean exhaustion failure when max_iterations reached ("self-correction exhausted after N iterations")
+- [x] **CORR-03**: Each fix iteration includes history of all previous attempts (progressive context)
+- [x] **CORR-04**: Coverage self-correction: loop until coverage >= threshold with structured output parsing
+- [x] **CORR-05**: Clean exhaustion failure when max_iterations reached ("self-correction exhausted after N iterations")
 
 ## Future Requirements
 
@@ -102,11 +102,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOOP-03 | Phase 22 | Complete |
 | LOOP-04 | Phase 22 | Complete |
 | LOOP-05 | Phase 22 | Complete |
-| CORR-01 | Phase 24 | Pending |
+| CORR-01 | Phase 24 | Complete |
 | CORR-02 | Phase 24 | Pending |
-| CORR-03 | Phase 24 | Pending |
-| CORR-04 | Phase 24 | Pending |
-| CORR-05 | Phase 24 | Pending |
+| CORR-03 | Phase 24 | Complete |
+| CORR-04 | Phase 24 | Complete |
+| CORR-05 | Phase 24 | Complete |
 
 **Coverage:**
 - v2.1 requirements: 26 total
