@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import type { TrackerIssue, TrackerAdapter } from "../tracker/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
@@ -163,6 +164,208 @@ export function toSyntheticIssue(
       ...parentIssue.metadata,
       delegationParentId: parentIssue.id,
       delegationSpecId: spec.id,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DelegationManager factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a DelegationManager that handles the full child dispatch lifecycle:
+ * depth cap, maxChildren budgeting, concurrent dispatch, failure retry, and
+ * delegation row persistence.
+ */
+export function createDelegationManager(deps: DelegationDeps): DelegationManager {
+  const { delegationRepo, executeWorkerFn, slotManager, config, workspaceManager, logger } = deps;
+
+  /**
+   * Dispatch a single child worker and return its ChildOutcome.
+   * Inserts a delegation row with childRunId BEFORE dispatching.
+   */
+  async function dispatchChild(
+    parentRunId: string,
+    spec: SubtaskSpec,
+    parentIssue: TrackerIssue,
+  ): Promise<ChildOutcome> {
+    const childRunId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+
+    // Insert delegation row BEFORE dispatch (crash-safe)
+    const row = delegationRepo.insert({
+      parentRunId,
+      childRunId,
+      taskSpec: spec,
+      status: "pending",
+      createdAt,
+    });
+
+    const syntheticIssue = toSyntheticIssue(spec, parentIssue);
+    const prompt = spec.task;
+
+    let result: WorkerResult;
+    try {
+      result = await executeWorkerFn(
+        syntheticIssue,
+        config,
+        workspaceManager,
+        prompt,
+        1,
+        logger,
+        undefined,
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      delegationRepo.updateStatus(row.id, "failed", { errorMessage });
+      return { spec, status: "failed", errorMessage };
+    }
+
+    const isSuccess = result.agentResult.status === "completed";
+
+    if (isSuccess) {
+      delegationRepo.updateStatus(row.id, "completed", {
+        stdout: result.agentResult.stdout,
+        branch: result.branch,
+      });
+      return {
+        spec,
+        status: "completed",
+        stdout: result.agentResult.stdout,
+        branch: result.branch,
+      };
+    }
+
+    // Child failed — return failure info (retry handled in runDelegation)
+    const errorMessage = result.agentResult.stderr || result.agentResult.stdout || "child worker failed";
+    delegationRepo.updateStatus(row.id, "failed", { errorMessage });
+    return { spec, status: "failed", stdout: result.agentResult.stdout, errorMessage };
+  }
+
+  return {
+    parseDelegationManifest(stdout: string, _runId: string): SubtaskSpec[] | null {
+      return parseDelegationManifest(stdout);
+    },
+
+    async runDelegation(
+      parentRunId: string,
+      parentIssue: TrackerIssue,
+      specs: SubtaskSpec[],
+      depth: number,
+      maxChildren: number,
+    ): Promise<DelegationOutcome> {
+      // Depth cap: depth >= 1 means we are already inside a child worker
+      if (depth >= 1) {
+        logger.warn("delegation", `Delegation manifest ignored — depth cap reached (depth=${depth})`);
+        return { outcomes: [], allCompleted: true };
+      }
+
+      // Delegation disabled check
+      if (!slotManager.isDelegationEnabled()) {
+        logger.warn("delegation", "Delegation disabled — child_slots=0");
+        return { outcomes: [], allCompleted: true };
+      }
+
+      // Clamp to maxChildren
+      let truncated = specs;
+      if (specs.length > maxChildren) {
+        logger.warn(
+          "delegation",
+          `Delegation manifest has ${specs.length} subtasks but maxChildren=${maxChildren}, truncating`,
+        );
+        truncated = specs.slice(0, maxChildren);
+      }
+
+      // Dispatch all children concurrently
+      const settledResults = await Promise.allSettled(
+        truncated.map((spec) => dispatchChild(parentRunId, spec, parentIssue)),
+      );
+
+      // Collect first-pass outcomes and retry failed ones
+      const finalOutcomes: ChildOutcome[] = [];
+
+      for (const settled of settledResults) {
+        if (settled.status === "rejected") {
+          // Unexpected rejection from dispatchChild — treat as permanent failure
+          const errorMessage = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
+          // We can't identify the spec here; log and skip
+          logger.error("delegation", `Child dispatch unexpectedly rejected: ${errorMessage}`);
+          continue;
+        }
+
+        const childOutcome = settled.value;
+
+        if (childOutcome.status === "completed") {
+          finalOutcomes.push(childOutcome);
+          continue;
+        }
+
+        // Child failed — attempt a rewrite and retry once
+        const failureOutput = childOutcome.stdout ?? childOutcome.errorMessage ?? "";
+        const rewrittenSpec = await this.rewriteFailedSubtask(
+          parentIssue,
+          childOutcome.spec,
+          failureOutput,
+        );
+
+        if (rewrittenSpec === null) {
+          // No rewrite possible — permanently failed
+          finalOutcomes.push({ ...childOutcome, status: "failed" });
+          continue;
+        }
+
+        // Retry with rewritten spec
+        const retryOutcome = await dispatchChild(parentRunId, rewrittenSpec, parentIssue);
+        finalOutcomes.push(retryOutcome);
+      }
+
+      const allCompleted = finalOutcomes.length > 0
+        ? finalOutcomes.every((o) => o.status === "completed")
+        : true;
+
+      return { outcomes: finalOutcomes, allCompleted };
+    },
+
+    async rewriteFailedSubtask(
+      parentIssue: TrackerIssue,
+      failedSpec: SubtaskSpec,
+      failureOutput: string,
+    ): Promise<SubtaskSpec | null> {
+      const rewritePrompt =
+        `You previously decomposed issue '${parentIssue.title}' into subtasks. ` +
+        `Subtask '${failedSpec.id}' failed with output: ${failureOutput}. ` +
+        `Rewrite this subtask only. Output a single-item delegation manifest with the same id.`;
+
+      let result: WorkerResult;
+      try {
+        result = await executeWorkerFn(
+          parentIssue,
+          config,
+          workspaceManager,
+          rewritePrompt,
+          1,
+          logger,
+          undefined,
+        );
+      } catch {
+        return null;
+      }
+
+      const specs = parseDelegationManifest(result.agentResult.stdout);
+      if (!specs || specs.length === 0) {
+        return null;
+      }
+
+      // Return the first spec (should be the rewritten one with same id)
+      return specs[0];
+    },
+
+    async synthesize(
+      _parentIssue: TrackerIssue,
+      outcomes: ChildOutcome[],
+    ): Promise<string> {
+      // Stub — full implementation in Plan 03
+      return `Delegation complete. ${outcomes.length} children finished.`;
     },
   };
 }
