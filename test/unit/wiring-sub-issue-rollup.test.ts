@@ -140,7 +140,7 @@ describe("triggerParentRollup", () => {
     const logger = makeLogger();
     const config = makeConfig();
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     expect(buildSubIssueProgressComment).toHaveBeenCalledWith(10, expect.any(Array));
     expect(upsertRollupComment).toHaveBeenCalledWith(
@@ -161,7 +161,7 @@ describe("triggerParentRollup", () => {
     const logger = makeLogger();
     const config = makeConfig();
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     // The child state should be updated to 'closed' in the entry before the terminal check
     expect(allChildrenTerminal).toHaveBeenCalledWith(
@@ -185,7 +185,7 @@ describe("triggerParentRollup", () => {
 
     // Must not throw
     await expect(
-      triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger),
+      triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger),
     ).resolves.toBeUndefined();
 
     expect(logger.warn).toHaveBeenCalled();
@@ -202,7 +202,7 @@ describe("triggerParentRollup", () => {
 
     vi.mocked(allChildrenTerminal).mockReturnValue(true);
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     expect(tracker.updateLabels).toHaveBeenCalledWith("10", ["forge:synthesize"], []);
   });
@@ -218,7 +218,7 @@ describe("triggerParentRollup", () => {
 
     vi.mocked(allChildrenTerminal).mockReturnValue(false);
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     expect(tracker.updateLabels).not.toHaveBeenCalled();
   });
@@ -238,7 +238,7 @@ describe("triggerParentRollup", () => {
 
     // Must not throw
     await expect(
-      triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger),
+      triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger),
     ).resolves.toBeUndefined();
   });
 
@@ -251,7 +251,7 @@ describe("triggerParentRollup", () => {
     const logger = makeLogger();
     const config = makeConfig();
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     expect(upsertRollupComment).not.toHaveBeenCalled();
     expect(buildSubIssueProgressComment).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("triggerParentRollup", () => {
     const logger = makeLogger();
     const config = makeConfig({ terminal_states: ["closed", "done", "cancelled"] });
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     expect(allChildrenTerminal).toHaveBeenCalledWith(
       expect.any(Map),
@@ -284,7 +284,7 @@ describe("triggerParentRollup", () => {
     const logger = makeLogger();
     const config = makeConfig();
 
-    await triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger);
+    await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
     // Check that buildSubIssueProgressComment was called with children that have proper URLs
     const callArgs = vi.mocked(buildSubIssueProgressComment).mock.calls[0];
@@ -331,7 +331,7 @@ describe("synthesizer-gated close (synthesize label on issue)", () => {
     vi.mocked(allChildrenTerminal).mockReturnValue(true);
 
     await expect(
-      triggerParentRollup(childIssue, true, cache, tracker, githubCtx, config, logger),
+      triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger),
     ).resolves.toBeUndefined();
   });
 });

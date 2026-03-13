@@ -146,7 +146,6 @@ export function sortCandidates(issues: TrackerIssue[]): TrackerIssue[] {
  */
 export async function triggerParentRollup(
   childIssue: TrackerIssue,
-  childSuccess: boolean,
   subIssueCache: SubIssueCache,
   tracker: TrackerAdapter,
   githubContext: GitHubContext,
@@ -403,10 +402,8 @@ async function executeWorkerAndHandle(
 
     // Trigger parent rollup if this issue is a sub-issue (best-effort)
     if (subIssueCache && githubContext) {
-      const childSuccess = result.agentResult.status !== "error";
       await triggerParentRollup(
         issue,
-        childSuccess,
         subIssueCache,
         tracker,
         githubContext,
