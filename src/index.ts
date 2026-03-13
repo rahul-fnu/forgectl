@@ -21,6 +21,7 @@ import {
   boardShowCommand,
 } from "./cli/board.js";
 import { inspectCommand } from "./cli/inspect.js";
+import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 
 const program = new Command();
@@ -460,5 +461,27 @@ boardCardCmd
     }
     await boardCardRunsCommand(opts);
   });
+
+// forgectl cache
+const cacheCmd = program
+  .command("cache")
+  .description("Manage container image cache");
+
+cacheCmd
+  .command("list")
+  .description("Show cached images with workflow name, size, and age")
+  .action(cacheListCommand);
+
+cacheCmd
+  .command("clear")
+  .description("Prune cached images")
+  .option("-w, --workflow <name>", "Only clear cache for this workflow")
+  .option("--older-than <duration>", "Only clear images older than duration (e.g. 7d, 24h)")
+  .action(cacheClearCommand);
+
+cacheCmd
+  .command("prebuild <workflow>")
+  .description("Build and cache the image for a workflow without running anything")
+  .action(cachePrebuildCommand);
 
 program.parse();

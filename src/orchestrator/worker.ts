@@ -141,6 +141,7 @@ export function buildOrchestratedRunPlan(
       },
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
+      cache: { enabled: true, ttl: "7d" },
       autonomy: "full",
     },
     agent: {

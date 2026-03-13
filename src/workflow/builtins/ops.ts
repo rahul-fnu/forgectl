@@ -37,5 +37,6 @@ hardcoded secrets, missing tagging, resource naming conventions.
 If acceptable, respond with: LGTM
 If issues exist, list them numbered.`,
   },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
 };
