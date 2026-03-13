@@ -50,6 +50,8 @@ program
   .option("--no-cleanup", "Leave container running after run")
   .option("--dry-run", "Show run plan without executing")
   .option("--no-skills", "Disable skill/config bind-mounting for this run")
+  .option("--no-team", "Disable agent team mode for this run")
+  .option("--team-size <n>", "Override team size (2-5)", parseInt)
   .action(runCommand);
 
 // forgectl auth
