@@ -19,6 +19,11 @@ export interface RunRow {
   approvalContext: unknown;
   approvalAction: string | null;
   githubCommentId: number | null;
+  parentRunId: string | null;
+  role: string | null;
+  depth: number;
+  maxChildren: number | null;
+  childrenDispatched: number;
 }
 
 export interface RunInsertParams {
@@ -28,6 +33,11 @@ export interface RunInsertParams {
   options?: unknown;
   status?: string;
   submittedAt: string;
+  parentRunId?: string;
+  role?: string;
+  depth?: number;
+  maxChildren?: number;
+  childrenDispatched?: number;
 }
 
 export interface RunUpdateParams {
@@ -41,6 +51,11 @@ export interface RunUpdateParams {
   approvalContext?: unknown;
   approvalAction?: string;
   githubCommentId?: number;
+  parentRunId?: string;
+  role?: string;
+  depth?: number;
+  maxChildren?: number;
+  childrenDispatched?: number;
 }
 
 export interface RunRepository {
@@ -71,6 +86,11 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     approvalContext: raw.approvalContext ? JSON.parse(raw.approvalContext) : null,
     approvalAction: raw.approvalAction ?? null,
     githubCommentId: raw.githubCommentId ?? null,
+    parentRunId: raw.parentRunId ?? null,
+    role: raw.role ?? null,
+    depth: raw.depth ?? 0,
+    maxChildren: raw.maxChildren ?? null,
+    childrenDispatched: raw.childrenDispatched ?? 0,
   };
 }
 
@@ -84,6 +104,11 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         status: params.status ?? "queued",
         options: params.options ? JSON.stringify(params.options) : null,
         submittedAt: params.submittedAt,
+        parentRunId: params.parentRunId ?? null,
+        role: params.role ?? null,
+        depth: params.depth ?? 0,
+        maxChildren: params.maxChildren ?? null,
+        childrenDispatched: params.childrenDispatched ?? 0,
       };
       db.insert(runs).values(values).run();
       return this.findById(params.id)!;
@@ -110,6 +135,12 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         updates.approvalAction = params.approvalAction;
       if (params.githubCommentId !== undefined)
         updates.githubCommentId = params.githubCommentId;
+      if (params.parentRunId !== undefined) updates.parentRunId = params.parentRunId;
+      if (params.role !== undefined) updates.role = params.role;
+      if (params.depth !== undefined) updates.depth = params.depth;
+      if (params.maxChildren !== undefined) updates.maxChildren = params.maxChildren;
+      if (params.childrenDispatched !== undefined)
+        updates.childrenDispatched = params.childrenDispatched;
       db.update(runs).set(updates).where(eq(runs.id, id)).run();
     },
 
