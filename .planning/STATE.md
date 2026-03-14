@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Phase 30 context gathered
-last_updated: "2026-03-14T03:58:10.743Z"
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-03-14T04:19:51.083Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
   total_phases: 6
-  completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  completed_phases: 6
+  total_plans: 11
+  completed_plans: 11
   percent: 0
 ---
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 28-sub-issue-advanced-features P02 | 5 | 2 tasks | 2 files |
 | Phase 28-sub-issue-advanced-features P03 | 8 | 1 tasks | 2 files |
 | Phase 29-wire-subissuecache-composition P01 | 254 | 2 tasks | 4 files |
+| Phase 30-fix-subissuecache-singleton-polling-context P01 | 246 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,10 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 29-01]: SubIssueCache instantiated once in server.ts and shared between Orchestrator and registerWebhookHandlers — single source of truth for cache invalidation
 - [Phase 29-01]: subIssueCache optional field throughout (backward compat) — Notion adapter users and non-GitHub setups unaffected
 - [Phase 29-01]: Scheduler tick passes undefined for githubContext and deps.subIssueCache for cache — position 10/11 matches dispatcher signature
+- [Phase 30-01]: createGitHubAdapter accepts optional externalCache param — backward compat preserved, no-param callers auto-create
+- [Phase 30-01]: setGitHubContext mutates this.deps.githubContext in-place — same live-mutation pattern as applyConfig
+- [Phase 30-01]: server.ts instantiates SubIssueCache before tracker — guarantees single instance across adapter and orchestrator
+- [Phase 30-01]: githubContext gated by installation_id presence in server.ts — no crash if GitHub App configured without installation_id
 
 ### Pending Todos
 
@@ -106,6 +111,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T03:58:10.736Z
-Stopped at: Phase 30 context gathered
-Resume file: .planning/phases/30-fix-subissuecache-singleton-polling-context/30-CONTEXT.md
+Last session: 2026-03-14T04:19:51.077Z
+Stopped at: Completed 30-01-PLAN.md
+Resume file: None

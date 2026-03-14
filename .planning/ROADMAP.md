@@ -51,7 +51,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely (completed 2026-03-13)
 - [x] **Phase 27: Agent Teams** - Enable Claude Code multi-agent teams with resource scaling and checkpoint exclusion (completed 2026-03-13)
 - [x] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion (completed 2026-03-13)
-- [ ] **Phase 30: Fix SubIssueCache Singleton + Polling githubContext** - Unify dual cache instances, wire githubContext into polling path (gap closure)
+- [x] **Phase 30: Fix SubIssueCache Singleton + Polling githubContext** - Unify dual cache instances, wire githubContext into polling path (gap closure) (completed 2026-03-14)
 
 ## Phase Details
 
@@ -164,4 +164,4 @@ Plans:
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
 | 28. Sub-Issue Advanced | 3/3 | Complete    | 2026-03-14 | - |
 | 29. Wire SubIssueCache | 1/1 | Complete    | 2026-03-14 | - |
-| 30. Fix Cache Singleton + Context | 0/1 | Planned | - | - |
+| 30. Fix Cache Singleton + Context | 1/1 | Complete   | 2026-03-14 | - |
