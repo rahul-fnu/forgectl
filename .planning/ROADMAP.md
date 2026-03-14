@@ -166,4 +166,4 @@ Plans:
 | 21. Conditional Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 22. Loop Pipeline Nodes | 2/2 | Complete    | 2026-03-13 | - |
 | 23. Multi-Agent Delegation | 3/3 | Complete    | 2026-03-13 | - |
-| 24. Self-Correction Integration | 3/3 | Complete   | 2026-03-14 | - |
+| 24. Self-Correction Integration | 3/3 | Complete    | 2026-03-14 | - |
