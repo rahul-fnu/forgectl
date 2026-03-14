@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: E2E GitHub Integration
 status: planning
-stopped_at: Completed 28-03-PLAN.md
-last_updated: "2026-03-14T01:47:45.174Z"
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-03-14T03:29:32.627Z"
 last_activity: 2026-03-13 -- v3.0 roadmap created, 4 phases (25-28), 16 requirements mapped
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
   percent: 0
 ---
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 28-sub-issue-advanced-features P01 | 2 | 1 tasks | 2 files |
 | Phase 28-sub-issue-advanced-features P02 | 5 | 2 tasks | 2 files |
 | Phase 28-sub-issue-advanced-features P03 | 8 | 1 tasks | 2 files |
+| Phase 29-wire-subissuecache-composition P01 | 254 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,9 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase Phase 28-02]: Synthesizer-gated close replaces normal auto_close/done_label path for issues with forge:synthesize label
 - [Phase Phase 28-03]: handleSynthesizerOutcome is a pure refactor: identical fire-and-forget .catch() pattern extracted for testability
 - [Phase Phase 28-03]: isSynthesizerRun and isSynthesizerFailure booleans preserved in executeWorkerAndHandle to avoid noUnusedLocals violations
+- [Phase 29-01]: SubIssueCache instantiated once in server.ts and shared between Orchestrator and registerWebhookHandlers — single source of truth for cache invalidation
+- [Phase 29-01]: subIssueCache optional field throughout (backward compat) — Notion adapter users and non-GitHub setups unaffected
+- [Phase 29-01]: Scheduler tick passes undefined for githubContext and deps.subIssueCache for cache — position 10/11 matches dispatcher signature
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T01:40:06.224Z
-Stopped at: Completed 28-03-PLAN.md
+Last session: 2026-03-14T03:29:32.623Z
+Stopped at: Completed 29-01-PLAN.md
 Resume file: None

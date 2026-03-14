@@ -119,7 +119,7 @@ Plans:
   1. `Orchestrator.start()` includes `subIssueCache` in TickDeps so `terminalIssueIds` populates from live cache during scheduler ticks
   2. `Orchestrator.dispatchIssue()` passes `subIssueCache` to `dispatchIssueImpl` so `triggerParentRollup` and `handleSynthesizerOutcome` execute at runtime
   3. `server.ts` webhook registration includes `subIssueCache` in WebhookDeps so webhook-driven cache invalidation works (not just TTL fallback)
-**Plans:** 0/1 plans
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 29-01-PLAN.md — Wire subIssueCache into orchestrator index.ts and daemon server.ts
 
@@ -150,4 +150,4 @@ Plans:
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
 | 28. Sub-Issue Advanced | 3/3 | Complete    | 2026-03-14 | - |
-| 29. Wire SubIssueCache | 0/1 | Planned    | - | - |
+| 29. Wire SubIssueCache | 1/1 | Complete   | 2026-03-14 | - |

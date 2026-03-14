@@ -64,10 +64,10 @@ Zero new npm dependencies. All features build on existing libraries (Octokit, Do
 |-------------|-------|--------|
 | SUBISSUE-01 | Phase 25 | Complete |
 | SUBISSUE-02 | Phase 25 | Complete |
-| SUBISSUE-03 | Phase 29 | Pending |
-| SUBISSUE-04 | Phase 29 | Pending |
-| SUBISSUE-05 | Phase 29 | Pending |
-| SUBISSUE-06 | Phase 29 | Pending |
+| SUBISSUE-03 | Phase 29 | Complete |
+| SUBISSUE-04 | Phase 29 | Complete |
+| SUBISSUE-05 | Phase 29 | Complete |
+| SUBISSUE-06 | Phase 29 | Complete |
 | SKILL-01 | Phase 26 | Complete |
 | SKILL-02 | Phase 26 | Complete |
 | SKILL-03 | Phase 26 | Complete |
