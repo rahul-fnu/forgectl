@@ -54,6 +54,15 @@ export async function tick(deps: TickDeps): Promise<void> {
     return;
   }
 
+  // Step 1.5: Drain stale claims — release any claimed issues that aren't running.
+  // This guards against claims that weren't released due to async errors.
+  for (const claimedId of [...state.claimed]) {
+    if (!state.running.has(claimedId)) {
+      logger.info("scheduler", `Releasing stale claim on ${claimedId} (not running)`);
+      state.claimed.delete(claimedId);
+    }
+  }
+
   // Step 2: Validate config (tracker must be defined)
   if (!config.tracker) {
     logger.warn("scheduler", "No tracker configured, skipping dispatch");
@@ -85,7 +94,7 @@ export async function tick(deps: TickDeps): Promise<void> {
   const doneLabel = config.tracker?.done_label;
   const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
 
-  logger.debug("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
+  logger.info("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
 
   // Step 5: Sort candidates
   const sorted = sortCandidates(eligible);

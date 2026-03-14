@@ -516,7 +516,9 @@ async function executeWorkerAndHandle(
       // Release immediately — the issue is done (closed + done-labeled).
       // The continuation delay was designed for multi-turn re-dispatch of the
       // same issue, but completed+closed issues don't need re-dispatch.
+      logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
       releaseIssue(state, issue.id);
+      logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
     } else {
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
