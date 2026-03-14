@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
 import type { PipelineDefinition } from "../../src/pipeline/types.js";
 
 // Mocks needed for PipelineExecutor tests
@@ -48,6 +49,7 @@ vi.mock("node:os", async (importOriginal) => {
 const { extractCoverage } = await import("../../src/pipeline/coverage.js");
 const { executeRun } = await import("../../src/orchestration/modes.js");
 const { PipelineExecutor } = await import("../../src/pipeline/executor.js");
+const { checkExclusionViolations } = await import("../../src/pipeline/exclusion.js");
 
 // ============================================================
 // 1. extractCoverage unit tests
@@ -196,10 +198,87 @@ describe("no-progress detection", () => {
 });
 
 // ============================================================
-// 3. Exclusion enforcement tests
+// 3. Exclusion enforcement tests (checkExclusionViolations unit tests)
 // ============================================================
 
-describe("exclusion enforcement", () => {
+describe("exclusion enforcement (checkExclusionViolations)", () => {
+  let repoDir: string;
+
+  beforeEach(() => {
+    // Create a temp git repo with an initial commit containing test files
+    repoDir = mkdtempSync(join(tmpdir(), "exclusion-test-"));
+    execSync("git init", { cwd: repoDir, stdio: "pipe" });
+    execSync("git config user.email test@test.com", { cwd: repoDir, stdio: "pipe" });
+    execSync("git config user.name Test", { cwd: repoDir, stdio: "pipe" });
+
+    // Create directory structure and files
+    mkdirSync(join(repoDir, "test"), { recursive: true });
+    mkdirSync(join(repoDir, "src"), { recursive: true });
+    writeFileSync(join(repoDir, "test", "foo.test.ts"), "original test content");
+    writeFileSync(join(repoDir, "src", "main.ts"), "original src content");
+
+    // Commit
+    execSync("git add -A", { cwd: repoDir, stdio: "pipe" });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: "pipe" });
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it("detects and reverts excluded file modifications", () => {
+    // Simulate fix agent modifying a test file
+    writeFileSync(join(repoDir, "test", "foo.test.ts"), "agent changed the test!");
+
+    const result = checkExclusionViolations(repoDir, ["test/**", "*.test.ts"]);
+
+    expect(result.violations).toContain("test/foo.test.ts");
+    // Verify the file was reverted
+    const content = readFileSync(join(repoDir, "test", "foo.test.ts"), "utf-8");
+    expect(content).toBe("original test content");
+  });
+
+  it("allows modification of non-excluded files", () => {
+    writeFileSync(join(repoDir, "src", "main.ts"), "agent fixed the source code");
+
+    const result = checkExclusionViolations(repoDir, ["test/**", "*.test.ts"]);
+
+    expect(result.violations).toEqual([]);
+    // Verify the source file change was preserved
+    const content = readFileSync(join(repoDir, "src", "main.ts"), "utf-8");
+    expect(content).toBe("agent fixed the source code");
+  });
+
+  it("reverts only excluded files when both excluded and non-excluded are modified", () => {
+    writeFileSync(join(repoDir, "test", "foo.test.ts"), "agent changed the test!");
+    writeFileSync(join(repoDir, "src", "main.ts"), "agent fixed the source code");
+
+    const result = checkExclusionViolations(repoDir, ["test/**"]);
+
+    expect(result.violations).toContain("test/foo.test.ts");
+    // Test file reverted
+    expect(readFileSync(join(repoDir, "test", "foo.test.ts"), "utf-8")).toBe("original test content");
+    // Source file preserved
+    expect(readFileSync(join(repoDir, "src", "main.ts"), "utf-8")).toBe("agent fixed the source code");
+  });
+
+  it("returns empty violations when no files changed", () => {
+    const result = checkExclusionViolations(repoDir, ["test/**"]);
+    expect(result.violations).toEqual([]);
+  });
+
+  it("returns empty violations when excludePatterns is empty", () => {
+    writeFileSync(join(repoDir, "test", "foo.test.ts"), "changed");
+    const result = checkExclusionViolations(repoDir, []);
+    expect(result.violations).toEqual([]);
+  });
+});
+
+// ============================================================
+// 4. Exclusion enforcement integration tests (PipelineExecutor)
+// ============================================================
+
+describe("exclusion enforcement (PipelineExecutor integration)", () => {
   beforeEach(() => {
     mkdirSync(testDir, { recursive: true });
     vi.clearAllMocks();
@@ -216,12 +295,23 @@ describe("exclusion enforcement", () => {
   });
 
   it("fails iteration when fix agent modifies excluded file", async () => {
-    // Mock execSync for git diff — returns an excluded file
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
+    // Create temp git repo for this test
+    const exclusionRepoDir = mkdtempSync(join(tmpdir(), "exclusion-exec-test-"));
+    execSync("git init", { cwd: exclusionRepoDir, stdio: "pipe" });
+    execSync("git config user.email test@test.com", { cwd: exclusionRepoDir, stdio: "pipe" });
+    execSync("git config user.name Test", { cwd: exclusionRepoDir, stdio: "pipe" });
+    mkdirSync(join(exclusionRepoDir, "test"), { recursive: true });
+    writeFileSync(join(exclusionRepoDir, "test", "foo.test.ts"), "original");
+    execSync("git add -A && git commit -m init", { cwd: exclusionRepoDir, stdio: "pipe" });
+
+    // Mock executeRun to simulate agent modifying an excluded file
+    vi.mocked(executeRun).mockImplementation(async () => {
+      writeFileSync(join(exclusionRepoDir, "test", "foo.test.ts"), "agent modified test!");
       return {
-        ...actual,
-        execSync: vi.fn().mockReturnValue("test/foo.test.ts\n"),
+        success: true,
+        output: { mode: "files" as const, dir: "/tmp/out", files: ["result.md"], totalSize: 100 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [], lastOutput: "tests pass" },
+        durationMs: 100,
       };
     });
 
@@ -229,20 +319,20 @@ describe("exclusion enforcement", () => {
       id: "exclusion-loop",
       task: "Fix code without touching tests",
       node_type: "loop",
-      loop: { until: `_status == "completed"`, max_iterations: 3 },
+      repo: exclusionRepoDir,
+      loop: { until: '_status == "completed"', max_iterations: 3 },
     });
 
     const executor = new PipelineExecutor(pipeline);
     const result = await executor.execute();
 
-    // If exclusion enforcement is wired, node should fail with the exclusion error
-    if (result.nodes.get("exclusion-loop")!.status === "failed") {
-      const nodeError = result.nodes.get("exclusion-loop")!.error ?? "";
-      expect(nodeError).toContain("Fix agent modified excluded file(s): test/foo.test.ts");
-    } else {
-      // If not yet wired (Plan 01 state), this will be "completed" — Plan 02 makes it fail
-      expect(result.nodes.get("exclusion-loop")!.status).toBe("completed");
-    }
+    // Strict assertion: must fail with specific exclusion error
+    expect(result.nodes.get("exclusion-loop")!.status).toBe("failed");
+    const nodeError = result.nodes.get("exclusion-loop")!.error ?? "";
+    expect(nodeError).toContain("Fix agent modified excluded file(s)");
+    expect(nodeError).toContain("test/foo.test.ts");
+
+    rmSync(exclusionRepoDir, { recursive: true, force: true });
   });
 
   it("allows modification of non-excluded files", async () => {
@@ -258,16 +348,10 @@ describe("exclusion enforcement", () => {
 
     expect(result.nodes.get("allowed-files-loop")!.status).toBe("completed");
   });
-
-  it("reverts excluded files via git checkout when violated (placeholder)", () => {
-    // This test validates the revert behavior; actual verification is in Plan 02
-    // when execSync is properly mocked and wired into executeLoopNode
-    expect(true).toBe(true); // placeholder for Plan 02
-  });
 });
 
 // ============================================================
-// 4. Coverage variable injection tests
+// 5. Coverage variable injection tests
 // ============================================================
 
 describe("coverage variable injection", () => {

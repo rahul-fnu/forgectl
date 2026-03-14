@@ -1,6 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
-import picomatch from "picomatch";
 import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -27,6 +26,7 @@ import { loadCheckpoint, saveCheckpoint, saveLoopCheckpoint, loadLoopCheckpoint,
 import type { LoopIterationRecord } from "./types.js";
 import type { OutputResult } from "../output/types.js";
 import { extractCoverage } from "./coverage.js";
+import { checkExclusionViolations } from "./exclusion.js";
 
 export interface PipelineExecutorOptions {
   maxParallel?: number;
@@ -686,35 +686,14 @@ export class PipelineExecutor {
         // CORR-02: Test file exclusion enforcement — check before reading iterState
         const repoPath = node.repo ?? this.pipeline.defaults?.repo ?? this.options.repo;
         if (repoPath && excludePatterns.length > 0) {
-          const isExcluded = picomatch(excludePatterns);
-          let changedFiles: string[] = [];
-          try {
-            const diffOutput = execSync("git diff --name-only HEAD", {
-              cwd: repoPath,
-              encoding: "utf-8",
-              stdio: ["pipe", "pipe", "pipe"],
-            }).trim();
-            changedFiles = diffOutput ? diffOutput.split("\n").filter(Boolean) : [];
-          } catch {
-            // git not available or not a repo — skip check
-          }
-
-          const violations = changedFiles.filter(f => isExcluded(f));
+          const { violations } = checkExclusionViolations(repoPath, excludePatterns);
           if (violations.length > 0) {
-            // Revert excluded files only
-            for (const file of violations) {
-              try {
-                execSync(`git checkout HEAD -- ${JSON.stringify(file)}`, {
-                  cwd: repoPath,
-                  stdio: "pipe",
-                });
-              } catch { /* ignore revert failures */ }
-            }
-            // Mark iteration failed via nodeStates
-            const violationState = this.nodeStates.get(node.id)!;
-            violationState.status = "failed";
-            violationState.error = `Fix agent modified excluded file(s): ${violations.join(", ")}`;
-            this.nodeStates.set(node.id, violationState);
+            // Mark node failed and exit loop immediately — exclusion violation is terminal
+            state.status = "failed";
+            state.error = `Fix agent modified excluded file(s): ${violations.join(", ")}`;
+            state.completedAt = new Date().toISOString();
+            this.nodeStates.set(node.id, state);
+            return;
           }
         }
 
