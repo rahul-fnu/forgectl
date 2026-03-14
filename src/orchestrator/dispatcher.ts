@@ -201,6 +201,39 @@ export async function triggerParentRollup(
 }
 
 /**
+ * Handle the synthesizer outcome for an issue tagged with forge:synthesize.
+ *
+ * Success: closes the issue and removes the forge:synthesize label (best-effort).
+ * Failure: posts an error comment but does NOT close the issue (parent remains open).
+ *
+ * All tracker calls are fire-and-forget (.catch()), never throwing.
+ */
+export function handleSynthesizerOutcome(
+  issue: TrackerIssue,
+  outcome: "success" | "failure",
+  tracker: TrackerAdapter,
+  logger: Logger,
+): void {
+  if (outcome === "success") {
+    tracker.updateState(issue.id, "closed").catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to close synthesizer parent ${issue.identifier}: ${msg}`);
+    });
+    tracker.updateLabels(issue.id, [], ["forge:synthesize"]).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to remove forge:synthesize label for ${issue.identifier}: ${msg}`);
+    });
+  } else {
+    tracker
+      .postComment(
+        issue.id,
+        `Synthesizer run failed for ${issue.identifier}. Parent issue remains open.`,
+      )
+      .catch(() => {});
+  }
+}
+
+/**
  * Dispatch an issue: claim it, start a worker in the background,
  * and handle completion with retry logic.
  */
@@ -454,17 +487,7 @@ async function executeWorkerAndHandle(
       const isSynthesizerRun = issue.labels.includes("forge:synthesize");
 
       if (isSynthesizerRun) {
-        // Close parent (best-effort)
-        tracker.updateState(issue.id, "closed").catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("dispatcher", `Failed to close synthesizer parent ${issue.identifier}: ${msg}`);
-        });
-
-        // Remove forge:synthesize label (best-effort)
-        tracker.updateLabels(issue.id, [], ["forge:synthesize"]).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("dispatcher", `Failed to remove forge:synthesize label for ${issue.identifier}: ${msg}`);
-        });
+        handleSynthesizerOutcome(issue, "success", tracker, logger);
       } else {
         // Auto-close issue when configured
         if (config.tracker?.auto_close) {
@@ -496,12 +519,7 @@ async function executeWorkerAndHandle(
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
       if (isSynthesizerFailure) {
-        tracker
-          .postComment(
-            issue.id,
-            `Synthesizer run failed for ${issue.identifier}. Parent issue remains open.`,
-          )
-          .catch(() => {});
+        handleSynthesizerOutcome(issue, "failure", tracker, logger);
       }
       // Error — check retry budget
       const currentAttempts = (state.retryAttempts.get(issue.id) ?? 0) + 1;
