@@ -23,7 +23,7 @@ vi.mock("../../src/github/sub-issue-rollup.js", () => ({
   allChildrenTerminal: vi.fn().mockReturnValue(false),
 }));
 
-import { triggerParentRollup } from "../../src/orchestrator/dispatcher.js";
+import { triggerParentRollup, handleSynthesizerOutcome } from "../../src/orchestrator/dispatcher.js";
 import {
   upsertRollupComment,
   buildSubIssueProgressComment,
@@ -333,5 +333,40 @@ describe("synthesizer-gated close (synthesize label on issue)", () => {
     await expect(
       triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger),
     ).resolves.toBeUndefined();
+  });
+
+  it("when issue has forge:synthesize label and worker succeeds, closes parent and removes label", async () => {
+    const issue = makeIssue({ id: "10", identifier: "ISSUE-10", labels: ["forge:synthesize"] });
+    const tracker = makeTracker();
+    const logger = makeLogger();
+
+    handleSynthesizerOutcome(issue, "success", tracker, logger);
+
+    // Allow fire-and-forget promises to settle
+    await Promise.resolve();
+
+    expect(tracker.updateState).toHaveBeenCalledWith("10", "closed");
+    expect(tracker.updateLabels).toHaveBeenCalledWith("10", [], ["forge:synthesize"]);
+  });
+
+  it("when issue has forge:synthesize label and worker fails, posts error comment and does NOT close", async () => {
+    const issue = makeIssue({ id: "10", identifier: "ISSUE-10", labels: ["forge:synthesize"] });
+    const tracker = makeTracker();
+    const logger = makeLogger();
+
+    handleSynthesizerOutcome(issue, "failure", tracker, logger);
+
+    // Allow fire-and-forget promises to settle
+    await Promise.resolve();
+
+    expect(tracker.postComment).toHaveBeenCalledWith(
+      "10",
+      expect.stringContaining("failed"),
+    );
+    expect(tracker.postComment).toHaveBeenCalledWith(
+      "10",
+      expect.stringContaining("ISSUE-10"),
+    );
+    expect(tracker.updateState).not.toHaveBeenCalled();
   });
 });
