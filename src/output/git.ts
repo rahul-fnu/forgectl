@@ -36,6 +36,19 @@ export async function collectGitOutput(
 
   logger.info("output", `Creating branch: ${branch}`);
 
+  // Pre-check: verify .git exists in the container workspace
+  try {
+    await execInContainer(container, [
+      "git", "rev-parse", "--is-inside-work-tree",
+    ], { workingDir: "/workspace" });
+  } catch {
+    throw new Error(
+      `No .git directory found in container at /workspace. ` +
+      `The workspace was not initialized as a git repository. ` +
+      `Configure a workspace after_create hook to clone the repo.`,
+    );
+  }
+
   // Trust the workspace mount regardless of ownership.
   // The container runs as root but /workspace is bind-mounted from a temp dir owned
   // by the host user (e.g. uid=node), so git refuses all operations without this.

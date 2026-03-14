@@ -124,6 +124,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
         autonomy: wf?.config?.autonomy,
         autoApprove: wf?.config?.auto_approve,
         subIssueCache,
+        skills: wf?.config?.skills,
+        validationConfig: wf?.config?.validation,
       });
       await orchestrator.start();
 

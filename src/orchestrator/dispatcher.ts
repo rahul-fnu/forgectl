@@ -249,6 +249,8 @@ export function dispatchIssue(
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
   subIssueCache?: SubIssueCache,
+  skills?: string[],
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -278,6 +280,8 @@ export function dispatchIssue(
     governance,
     githubContext,
     subIssueCache,
+    skills,
+    validationConfig,
   );
 }
 
@@ -293,6 +297,8 @@ async function executeWorkerAndHandle(
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
   subIssueCache?: SubIssueCache,
+  skills?: string[],
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -424,9 +430,10 @@ async function executeWorkerAndHandle(
       attempt,
       logger,
       onActivity,
-      undefined,
+      validationConfig,
       githubDeps,
       governanceWithRunId,
+      skills,
     );
 
     // Remove from running

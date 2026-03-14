@@ -31,6 +31,10 @@ export interface TickDeps {
   subIssueCache?: SubIssueCache;
   /** Optional GitHub context for triggering parent rollup on polling-dispatched issues (SUBISSUE-05, SUBISSUE-06). */
   githubContext?: GitHubContext;
+  /** Skills from WORKFLOW.md to mount into agent containers. */
+  skills?: string[];
+  /** Validation config from WORKFLOW.md. */
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
 }
 
 /**
@@ -94,7 +98,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 8: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.subIssueCache);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.subIssueCache, deps.skills, deps.validationConfig);
   }
 }
 

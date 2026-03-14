@@ -30,6 +30,10 @@ export interface OrchestratorOptions {
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
   subIssueCache?: SubIssueCache;
+  /** Skills from WORKFLOW.md front matter (e.g. ["gsd", "get-shit-done"]). */
+  skills?: string[];
+  /** Validation config from WORKFLOW.md front matter. */
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
 }
 
 /**
@@ -48,6 +52,8 @@ export class Orchestrator {
   private readonly autonomy?: AutonomyLevel;
   private readonly autoApprove?: AutoApproveRule;
   private readonly subIssueCache?: SubIssueCache;
+  private readonly skills: string[];
+  private readonly validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private running = false;
@@ -65,6 +71,8 @@ export class Orchestrator {
     this.autonomy = opts.autonomy;
     this.autoApprove = opts.autoApprove;
     this.subIssueCache = opts.subIssueCache;
+    this.skills = opts.skills ?? [];
+    this.validationConfig = opts.validationConfig;
   }
 
   /**
@@ -98,6 +106,8 @@ export class Orchestrator {
       autoApprove: this.autoApprove,
       subIssueCache: this.subIssueCache,
       githubContext: this.githubContext,
+      skills: this.skills,
+      validationConfig: this.validationConfig,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -245,6 +255,8 @@ export class Orchestrator {
       governance,
       githubContext,
       this.subIssueCache,
+      this.skills,
+      this.validationConfig,
     );
   }
 

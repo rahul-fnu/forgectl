@@ -66,26 +66,29 @@ export function prepareSkillMounts(
   const binds: string[] = [];
   const addDirFlags: string[] = [];
   const home = homedir();
-  const skillsBase = join(home, ".claude", "skills");
-  const agentsBase = join(home, ".claude", "agents");
+
+  // Search paths: each skill name is checked under these ~/.claude/ subdirs
+  const searchDirs = ["skills", "agents", "commands"] as const;
+  const claudeBase = join(home, ".claude");
 
   for (const name of skills) {
-    // Check ~/.claude/skills/<name>
-    const skillsHostPath = join(skillsBase, name);
-    if (existsSync(skillsHostPath)) {
-      validateNoCredentials(skillsHostPath);
-      const containerPath = `/home/node/.claude/skills/${name}`;
-      binds.push(`${skillsHostPath}:${containerPath}:ro`);
-      addDirFlags.push("--add-dir");
-      addDirFlags.push(containerPath);
+    for (const subdir of searchDirs) {
+      const hostPath = join(claudeBase, subdir, name);
+      if (existsSync(hostPath)) {
+        validateNoCredentials(hostPath);
+        const containerPath = `/home/node/.claude/${subdir}/${name}`;
+        binds.push(`${hostPath}:${containerPath}:ro`);
+        addDirFlags.push("--add-dir");
+        addDirFlags.push(containerPath);
+      }
     }
 
-    // Check ~/.claude/agents/<name>
-    const agentsHostPath = join(agentsBase, name);
-    if (existsSync(agentsHostPath)) {
-      validateNoCredentials(agentsHostPath);
-      const containerPath = `/home/node/.claude/agents/${name}`;
-      binds.push(`${agentsHostPath}:${containerPath}:ro`);
+    // Also check top-level ~/.claude/<name> (e.g. ~/.claude/get-shit-done)
+    const topLevelPath = join(claudeBase, name);
+    if (existsSync(topLevelPath) && !["skills", "agents", "commands"].includes(name)) {
+      validateNoCredentials(topLevelPath);
+      const containerPath = `/home/node/.claude/${name}`;
+      binds.push(`${topLevelPath}:${containerPath}:ro`);
       addDirFlags.push("--add-dir");
       addDirFlags.push(containerPath);
     }
