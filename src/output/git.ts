@@ -176,17 +176,16 @@ export async function collectGitOutput(
       });
       logger.info("output", `Branch ${branch} pushed to remote`);
 
-      // Advance host repo's main to include this work so subsequent issues
-      // in the same shared workspace build on accumulated changes.
+      // Advance host repo's local main to include this work so subsequent
+      // issues in the same shared workspace build on accumulated changes.
+      // Only advance locally — don't push to remote, so PRs still have diffs.
       try {
-        const baseBranch = plan.commit.message.prefix ? "main" : "main"; // Always target main
-        execSync(`git checkout ${baseBranch}`, { cwd: hostRepo, stdio: "pipe" });
+        execSync(`git checkout main`, { cwd: hostRepo, stdio: "pipe" });
         execSync(`git merge "${branch}" --ff-only`, { cwd: hostRepo, stdio: "pipe" });
-        execSync(`git push origin ${baseBranch}`, { cwd: hostRepo, stdio: "pipe", env: pushEnv });
-        logger.info("output", `Main branch advanced to include ${branch}`);
+        logger.info("output", `Local main advanced to include ${branch}`);
       } catch (mergeErr) {
         const mergeMsg = mergeErr instanceof Error ? (mergeErr as any).stderr?.toString() || mergeErr.message : String(mergeErr);
-        logger.warn("output", `Could not advance main (non-fatal): ${mergeMsg}`);
+        logger.warn("output", `Could not advance local main (non-fatal): ${mergeMsg}`);
       }
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? (pushErr as any).stderr?.toString() || pushErr.message : String(pushErr);
