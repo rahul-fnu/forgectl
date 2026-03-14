@@ -8,6 +8,7 @@ import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
+import type { GitHubContext } from "./dispatcher.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 
@@ -28,6 +29,8 @@ export interface TickDeps {
   autoApprove?: AutoApproveRule;
   /** Optional sub-issue cache for populating terminalIssueIds (SUBISSUE-03). */
   subIssueCache?: SubIssueCache;
+  /** Optional GitHub context for triggering parent rollup on polling-dispatched issues (SUBISSUE-05, SUBISSUE-06). */
+  githubContext?: GitHubContext;
 }
 
 /**
@@ -91,7 +94,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 8: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, undefined, deps.subIssueCache);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.subIssueCache);
   }
 }
 

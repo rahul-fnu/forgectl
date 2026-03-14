@@ -48,6 +48,7 @@ export class Orchestrator {
   private readonly autonomy?: AutonomyLevel;
   private readonly autoApprove?: AutoApproveRule;
   private readonly subIssueCache?: SubIssueCache;
+  private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
@@ -96,6 +97,7 @@ export class Orchestrator {
       autonomy: this.autonomy,
       autoApprove: this.autoApprove,
       subIssueCache: this.subIssueCache,
+      githubContext: this.githubContext,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -266,6 +268,16 @@ export class Orchestrator {
       "orchestrator",
       `Config reloaded (max=${newMax}, poll=${config.orchestrator.poll_interval_ms}ms)`,
     );
+  }
+
+  /**
+   * Set the GitHub context for polling-dispatched issues.
+   * Enables triggerParentRollup and auto-close for issues dispatched via scheduler ticks.
+   * Call this after start() once the GitHub App is initialized.
+   */
+  setGitHubContext(ctx: GitHubContext): void {
+    this.githubContext = ctx;
+    this.deps.githubContext = ctx;
   }
 
   /**

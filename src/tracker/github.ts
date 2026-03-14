@@ -114,7 +114,7 @@ function parseIssueNumber(idOrIdentifier: string): number {
 /**
  * Create a GitHub Issues TrackerAdapter.
  */
-export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter & { subIssueCache: SubIssueCache } {
+export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
   }
@@ -135,8 +135,8 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter & { s
   let rateLimitRemaining = Infinity;
   let rateLimitReset = 0;
 
-  // Sub-issue TTL cache (5min default)
-  const subIssueCache = new SubIssueCache();
+  // Sub-issue TTL cache (5min default) — use external cache if provided (singleton pattern)
+  const subIssueCache = externalCache ?? new SubIssueCache();
 
   /**
    * Perform an authenticated fetch against the GitHub API.

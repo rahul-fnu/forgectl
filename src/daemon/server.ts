@@ -93,7 +93,11 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
   if (orchestratorEnabled && config.tracker) {
     try {
-      const tracker = createTrackerAdapter(config.tracker);
+      subIssueCache = new SubIssueCache();
+      const { createGitHubAdapter } = await import("../tracker/github.js");
+      const tracker = config.tracker.kind === "github"
+        ? createGitHubAdapter(config.tracker, subIssueCache)
+        : createTrackerAdapter(config.tracker);
       const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
       const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
 
@@ -114,7 +118,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
       const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
 
-      subIssueCache = new SubIssueCache();
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
         runRepo,
@@ -204,6 +207,19 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       });
 
       registerGitHubRoutes(app, ghAppService);
+
+      // Wire GitHub context into orchestrator for polling rollup (SUBISSUE-05, SUBISSUE-06)
+      if (orchestrator && config.tracker?.repo && config.github_app.installation_id) {
+        try {
+          const [ghOwner, ghRepo] = config.tracker.repo.split("/");
+          const installationOctokit = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
+          orchestrator.setGitHubContext({ octokit: installationOctokit, repo: { owner: ghOwner, repo: ghRepo } });
+          daemonLogger.info("daemon", "GitHub context set on orchestrator for polling rollup");
+        } catch (err) {
+          daemonLogger.warn("daemon", `Failed to set GitHub context on orchestrator (rollup disabled): ${err}`);
+        }
+      }
+
       daemonLogger.info("daemon", "GitHub App initialized, webhook route registered");
     } catch (err) {
       daemonLogger.error("daemon", `Failed to initialize GitHub App: ${err}`);
