@@ -12,16 +12,17 @@ import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { runValidationLoop } from "../validation/runner.js";
-import { collectGitOutput } from "../output/git.js";
+import { collectGitOutput, recordPreAgentSha } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
 import type { IssueContext } from "../github/types.js";
 import type { RepoContext } from "../github/types.js";
 import { updateProgressComment } from "../github/comments.js";
 import { createCheckRun, updateCheckRun, completeCheckRun, buildCheckSummary } from "../github/checks.js";
-import { updatePRDescriptionForBranch } from "../github/pr-description.js";
+import { createPRForBranch } from "../github/pr-description.js";
 import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
+import { buildPrompt } from "../context/prompt.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
@@ -49,6 +50,7 @@ export interface GitHubDeps {
       };
       pulls: {
         list(params: { owner: string; repo: string; head: string; state: string }): Promise<{ data: Array<{ number: number; body: string | null }> }>;
+        create(params: { owner: string; repo: string; title: string; body: string; head: string; base: string }): Promise<{ data: { number: number; html_url: string } }>;
         update(params: { owner: string; repo: string; pull_number: number; body: string }): Promise<unknown>;
       };
     };
@@ -139,6 +141,7 @@ export function buildOrchestratedRunPlan(
       },
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
+      cache: { enabled: true, ttl: "7d" },
       autonomy: "full",
     },
     agent: {
@@ -230,16 +233,15 @@ export async function executeWorker(
     logger.error("worker", `Before hook failed for ${issue.identifier}: ${message}`);
     const failResult: AgentResult = {
       stdout: "",
-      stderr: message,
+      stderr: `Workspace setup (before hook) failed: ${message}`,
       status: "failed",
       tokenUsage: { input: 0, output: 0, total: 0 },
       durationMs: 0,
       turnCount: 0,
     };
-    const failRunResult = toRunResult("unknown", failResult, 0);
     return {
       agentResult: failResult,
-      comment: buildGHResultComment(failRunResult),
+      comment: `**forgectl:** Workspace setup failed (before hook error, not agent failure).\n\n\`\`\`\n${message}\n\`\`\``,
     };
   }
 
@@ -280,9 +282,18 @@ export async function executeWorker(
       onActivity,
     });
 
-    // 7. Invoke agent
+    // 6.5. Record pre-agent HEAD so we can detect agent changes later
+    let preAgentSha: string | undefined;
+    try {
+      preAgentSha = await recordPreAgentSha(container);
+    } catch {
+      // Non-critical — fallback to root commit detection
+    }
+
+    // 7. Invoke agent with full prompt (includes validation step descriptions)
+    const fullPrompt = buildPrompt(plan);
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
-    agentResult = await session.invoke(plan.task);
+    agentResult = await session.invoke(fullPrompt);
 
     // Update progress: agent_executing complete
     if (githubDeps) {
@@ -337,7 +348,8 @@ export async function executeWorker(
 
     // 9. Collect git output (non-critical -- catch and log errors)
     try {
-      const gitResult = await collectGitOutput(container, plan, logger);
+      const pushToken = config.tracker?.token;
+      const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
       branch = gitResult.branch;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -381,12 +393,17 @@ export async function executeWorker(
     await session.close();
 
     logger.info("worker", `Agent finished: status=${agentResult.status}, duration=${agentResult.durationMs}ms`);
+    if (agentResult.status === "failed" && agentResult.stderr) {
+      logger.warn("worker", `Agent stderr: ${agentResult.stderr.slice(0, 1000)}`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
     logger.error("worker", `Agent execution failed for ${issue.identifier}: ${message}`);
+    if (stack) logger.debug("worker", `Stack trace: ${stack}`);
     agentResult = {
       stdout: "",
-      stderr: message,
+      stderr: `Infrastructure error (not agent): ${message}`,
       status: "failed",
       tokenUsage: { input: 0, output: 0, total: 0 },
       durationMs: 0,
@@ -425,7 +442,7 @@ export async function executeWorker(
     }
   }
 
-  // Generate PR description when branch and GitHub context available
+  // Create PR and set description when branch and GitHub context available
   if (githubDeps?.repoContext && branch) {
     try {
       const prData: PRDescriptionData = {
@@ -442,11 +459,13 @@ export async function executeWorker(
         workflow: runResult.workflow ?? "orchestrated",
         agent: runResult.agent ?? "unknown",
       };
-      await updatePRDescriptionForBranch(
+      // Create PR if it doesn't exist, then update description
+      await createPRForBranch(
         githubDeps.octokit as any,
         githubDeps.repoContext.owner,
         githubDeps.repoContext.repo,
         branch,
+        issue.title,
         prData,
       );
     } catch (err) {

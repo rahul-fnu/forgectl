@@ -15,7 +15,7 @@ export interface WorkerInfo {
   issueId: string;
   identifier: string;
   issue: TrackerIssue;
-  session: AgentSession;
+  session: AgentSession | null;
   cleanup: CleanupContext;
   startedAt: number;
   lastActivityAt: number;

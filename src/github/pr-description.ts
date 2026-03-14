@@ -15,7 +15,7 @@ export interface PRDescriptionData {
   agent: string;
 }
 
-/** Octokit-like interface for PR update and list API calls. */
+/** Octokit-like interface for PR API calls. */
 interface OctokitPulls {
   rest: {
     pulls: {
@@ -25,6 +25,14 @@ interface OctokitPulls {
         head: string;
         state: string;
       }): Promise<{ data: Array<{ number: number; body: string | null }> }>;
+      create(params: {
+        owner: string;
+        repo: string;
+        title: string;
+        body: string;
+        head: string;
+        base: string;
+      }): Promise<{ data: { number: number; html_url: string } }>;
       update(params: {
         owner: string;
         repo: string;
@@ -105,6 +113,44 @@ export async function updatePRDescription(
     pull_number: prNumber,
     body,
   });
+}
+
+/**
+ * Create a PR for a branch if one doesn't already exist.
+ * Returns the PR number if created, or undefined if a PR already exists.
+ */
+export async function createPRForBranch(
+  octokit: OctokitPulls,
+  owner: string,
+  repo: string,
+  branch: string,
+  title: string,
+  data: PRDescriptionData,
+  base = "main",
+): Promise<number | undefined> {
+  // Check if PR already exists
+  const existing = await octokit.rest.pulls.list({
+    owner,
+    repo,
+    head: `${owner}:${branch}`,
+    state: "open",
+  });
+
+  if (existing.data.length > 0) {
+    return existing.data[0].number;
+  }
+
+  const body = buildPRDescription(data);
+  const result = await octokit.rest.pulls.create({
+    owner,
+    repo,
+    title,
+    body,
+    head: branch,
+    base,
+  });
+
+  return result.data.number;
 }
 
 /**

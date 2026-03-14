@@ -24,6 +24,16 @@ export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerM
     env.ANTHROPIC_API_KEY_FILE = "/run/secrets/anthropic_api_key";
   } else if (auth.type === "oauth_session" && auth.sessionDir) {
     binds.push(`${auth.sessionDir}:/home/node/.claude:ro`);
+    // Claude Code also needs .claude.json (sibling of .claude dir) for config
+    const claudeJsonPath = join(auth.sessionDir, "..", ".claude.json");
+    if (existsSync(claudeJsonPath)) {
+      // Copy to secrets dir so it's writable (Claude Code writes to it)
+      const containerJsonPath = join(secretsDir, ".claude.json");
+      const jsonContent = readFileSync(claudeJsonPath, "utf-8");
+      writeFileSync(containerJsonPath, jsonContent, { mode: 0o600 });
+      binds.push(`${containerJsonPath}:/home/node/.claude.json`);
+    }
+    env.HOME = "/home/node";
   }
 
   return {

@@ -109,8 +109,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       const frontMatterAsConfig = wf ? mapFrontMatterToConfig(wf.config) : {};
       const mergedConfig = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, frontMatterAsConfig, {});
 
-      const promptTemplate = wf?.promptTemplate
-        ?? "Resolve the following issue: {{issue.title}}\n\n{{issue.description}}";
+      const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
+      const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
 
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,

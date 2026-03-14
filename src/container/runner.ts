@@ -23,6 +23,7 @@ export async function createContainer(
     Image: plan.container.image,
     Cmd: ["sleep", "infinity"],
     WorkingDir: plan.input.mountPath,
+    User: "node",
     HostConfig: {
       NetworkMode: networkMode,
       Memory: parseMemory(plan.container.resources.memory),

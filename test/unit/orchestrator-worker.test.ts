@@ -377,7 +377,7 @@ describe("executeWorker", () => {
     mockWorkspaceManager.runBeforeHook.mockRejectedValue(new Error("hook failed"));
     const result = await executeWorker(issue, config, mockWorkspaceManager as any, promptTemplate, 1, mockLogger as any);
     expect(result.agentResult.status).toBe("failed");
-    expect(result.comment).toContain("Failed");
+    expect(result.comment).toContain("setup failed");
   });
 
   it("calls runValidationLoop when plan has validation steps", async () => {

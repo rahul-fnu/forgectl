@@ -34,5 +34,6 @@ Check for: factual errors, unclear writing, tone inconsistency, missing sections
 If acceptable, respond with: APPROVED
 If issues exist, list them numbered.`,
   },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
 };

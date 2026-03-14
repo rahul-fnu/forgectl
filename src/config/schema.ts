@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const duration = z.string().regex(/^\d+(s|m|h)$/, "Must be a duration like 30s, 5m, 1h");
+const duration = z.string().regex(/^\d+(s|m|h|d)$/, "Must be a duration like 30s, 5m, 1h, 7d");
 
 export const AgentType = z.enum(["claude-code", "codex", "browser-use"]);
 export type AgentType = z.infer<typeof AgentType>;
@@ -68,6 +68,14 @@ export const WorkflowSchema = z.object({
     enabled: z.boolean().default(false),
     system: z.string().default(""),
   }).default({}),
+  cache: z.object({
+    enabled: z.boolean().default(true),
+    ttl: duration.default("7d"),
+  }).default({}),
+  budget: z.object({
+    max_cost_per_run: z.number().positive().optional(),
+    max_cost_per_day: z.number().positive().optional(),
+  }).optional(),
   autonomy: AutonomyLevelEnum.default("full"),
   auto_approve: AutoApproveRuleSchema,
 });

@@ -126,7 +126,7 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
 
   /**
    * Perform an authenticated fetch against the GitHub API.
-   * Reads rate limit headers and enforces limits.
+   * Reads rate limit headers, enforces limits, and retries on transient errors.
    */
   async function githubFetch(
     url: string,
@@ -139,32 +139,57 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
       ...(options.headers as Record<string, string> | undefined),
     };
 
-    const response = await fetch(url, { ...options, headers });
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS = [1000, 3000, 5000]; // ms
 
-    // Update rate limit state
-    const remaining = response.headers.get("x-ratelimit-remaining");
-    const reset = response.headers.get("x-ratelimit-reset");
-    if (remaining !== null) {
-      rateLimitRemaining = parseInt(remaining, 10);
-    }
-    if (reset !== null) {
-      rateLimitReset = parseInt(reset, 10);
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(url, { ...options, headers });
+      } catch (err) {
+        // Network error (DNS, connection refused, etc.)
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+          continue;
+        }
+        throw lastError;
+      }
+
+      // Update rate limit state
+      const remaining = response.headers.get("x-ratelimit-remaining");
+      const reset = response.headers.get("x-ratelimit-reset");
+      if (remaining !== null) {
+        rateLimitRemaining = parseInt(remaining, 10);
+      }
+      if (reset !== null) {
+        rateLimitReset = parseInt(reset, 10);
+      }
+
+      // Enforce rate limit
+      if (response.status === 403 && rateLimitRemaining === 0) {
+        const resetDate = new Date(rateLimitReset * 1000).toISOString();
+        throw new Error(
+          `GitHub rate limit exhausted. Resets at ${resetDate}`,
+        );
+      }
+
+      // Retry on 5xx server errors
+      if (response.status >= 500 && attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+        continue;
+      }
+
+      if (rateLimitRemaining < RATE_LIMIT_WARNING_THRESHOLD && rateLimitRemaining > 0) {
+        // Log warning — using console.warn since this is a library module
+      }
+
+      return response;
     }
 
-    // Enforce rate limit
-    if (response.status === 403 && rateLimitRemaining === 0) {
-      const resetDate = new Date(rateLimitReset * 1000).toISOString();
-      throw new Error(
-        `GitHub rate limit exhausted. Resets at ${resetDate}`,
-      );
-    }
-
-    if (rateLimitRemaining < RATE_LIMIT_WARNING_THRESHOLD && rateLimitRemaining > 0) {
-      // Log warning — using console.warn since this is a library module
-      // In production, the caller can configure proper logging
-    }
-
-    return response;
+    throw lastError ?? new Error(`GitHub API request failed after ${MAX_RETRIES} retries`);
   }
 
   /**
@@ -334,6 +359,20 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         const url = `${API_BASE}/repos/${owner}/${repo}/issues/${num}/labels/${encodeURIComponent(label)}`;
         await githubFetch(url, { method: "DELETE" });
       }
+    },
+
+    async createPullRequest(
+      branch: string,
+      title: string,
+      body: string,
+    ): Promise<string | undefined> {
+      const url = `${API_BASE}/repos/${owner}/${repo}/pulls`;
+      const response = await githubFetch(url, {
+        method: "POST",
+        body: JSON.stringify({ title, body, head: branch, base: "main" }),
+      });
+      const data = await response.json() as { html_url?: string };
+      return data.html_url;
     },
   };
 
