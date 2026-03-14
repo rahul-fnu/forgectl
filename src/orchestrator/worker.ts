@@ -231,7 +231,10 @@ export async function executeWorker(
   skills?: string[],
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
-  const wsInfo = await workspaceManager.ensureWorkspace(issue.identifier);
+  // Use shared workspace per repo (not per issue) so sequential issues build on prior work.
+  // Falls back to issue identifier if no repo is configured.
+  const workspaceId = config.tracker?.repo?.replace("/", "_") ?? issue.identifier;
+  const wsInfo = await workspaceManager.ensureWorkspace(workspaceId);
   const workspacePath = wsInfo.path;
 
   // 2. Run before hook

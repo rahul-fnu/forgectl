@@ -83,6 +83,15 @@ export async function collectGitOutput(
   const hasAgentCommits = logResult.stdout.trim().length > 0;
 
   // Also check for any unstaged/untracked changes the agent left behind (without committing)
+  // Use exclude patterns to avoid committing build artifacts (node_modules, target, dist)
+  const excludePatterns = plan.input.exclude ?? [];
+  if (excludePatterns.length > 0) {
+    // Ensure .gitignore contains exclude patterns before staging
+    const ignoreLines = excludePatterns.join("\n");
+    await execInContainer(container, [
+      "sh", "-c", `echo '${ignoreLines}' >> /workspace/.gitignore`,
+    ], { workingDir: "/workspace" });
+  }
   await execInContainer(container, ["git", "add", "-A"], {
     workingDir: "/workspace",
   });
@@ -166,6 +175,19 @@ export async function collectGitOutput(
         env: pushEnv,
       });
       logger.info("output", `Branch ${branch} pushed to remote`);
+
+      // Advance host repo's main to include this work so subsequent issues
+      // in the same shared workspace build on accumulated changes.
+      try {
+        const baseBranch = plan.commit.message.prefix ? "main" : "main"; // Always target main
+        execSync(`git checkout ${baseBranch}`, { cwd: hostRepo, stdio: "pipe" });
+        execSync(`git merge "${branch}" --ff-only`, { cwd: hostRepo, stdio: "pipe" });
+        execSync(`git push origin ${baseBranch}`, { cwd: hostRepo, stdio: "pipe", env: pushEnv });
+        logger.info("output", `Main branch advanced to include ${branch}`);
+      } catch (mergeErr) {
+        const mergeMsg = mergeErr instanceof Error ? (mergeErr as any).stderr?.toString() || mergeErr.message : String(mergeErr);
+        logger.warn("output", `Could not advance main (non-fatal): ${mergeMsg}`);
+      }
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? (pushErr as any).stderr?.toString() || pushErr.message : String(pushErr);
       logger.warn("output", `Failed to push branch (continuing): ${msg}`);
