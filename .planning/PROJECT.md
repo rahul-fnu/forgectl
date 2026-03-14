@@ -2,7 +2,7 @@
 
 ## What This Is
 
-forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, browser-use) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. Now a durable runtime with crash recovery, governance gates, and a GitHub App for phone-first control via slash commands, reactions, and conversational clarification.
+forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, browser-use) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. A durable runtime with crash recovery, governance gates, GitHub App for phone-first control, sub-issue dependency ordering, skill mounting, and agent teams.
 
 ## Core Value
 
@@ -40,52 +40,40 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - ✓ Conversational clarification: agent asks question, pauses, resumes on reply — v2.0
 - ✓ Check runs on PRs and auto-generated PR descriptions — v2.0
 - ✓ Browser-use agent adapter with Python sidecar for web research workflows — v2.0
+- ✓ GitHub sub-issue hierarchy parsed into DAG dependencies for dispatch ordering — v3.0
+- ✓ Custom skill/config directories bind-mounted into agent containers — v3.0
+- ✓ Agent teams enabled per workflow with memory scaling and slot weighting — v3.0
+- ✓ Sub-issue progress rollup and synthesizer-gated auto-close — v3.0
 
 ### Active
 
-- [ ] GitHub sub-issue hierarchy parsed into DAG dependencies for dispatch ordering
-- [ ] Custom skill/config directories bind-mounted into agent containers (GSD, CLAUDE.md, settings)
-- [ ] Agent teams enabled per workflow — lead + teammates collaborate inside containers
-- [ ] End-to-end: parent issue with sub-issues dispatched, agents use GSD + teams, results collected
+(None — planning next milestone)
 
 ### Out of Scope
 
-- Visual drag-and-drop workflow builder — deferred to v3, developer dashboard first
+- Visual drag-and-drop workflow builder — developer dashboard first
 - Distributed multi-worker execution — single machine first, scale later
 - Multi-tenant RBAC — single-user for now
 - Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
-- Conditional/loop pipeline nodes — building in v2.1
 - Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
-- Notion App integration (database triggers, rich write-back) — deferred to v2.1
-- Mirrored task model / tracker normalization — deferred to v2.1
-- Multi-agent delegation with org hierarchy — lead/child in v2.1, agent teams in v3.0
-- Dashboard v2 (power-user aggregate views) — deferred to v2.1+
+- Notion App integration (database triggers, rich write-back) — deferred
 - Slack/Discord bot — get GitHub + Notion right first
 - Your own mobile app — GitHub and Notion apps are the UI
 - Full CQRS / event replay for state — events are audit trail, not source of truth
 - PostgreSQL support — SQLite sufficient for single-machine
 - Per-tool budget granularity — budget per run and per agent/period is enough
 - Temporal/BullMQ external dependencies — app-level checkpointing on SQLite
-
-## Current Milestone: v3.0 E2E GitHub Integration
-
-**Goal:** Enable forgectl to leverage GitHub sub-issue hierarchies as DAG dependencies, mount custom skills (GSD) into agent containers, and run Claude Code agent teams inside containers for collaborative issue execution.
-
-**Target features:**
-- GitHub sub-issue parsing into dependency graph for dispatch ordering
-- Bind-mount custom skill directories (~/.claude/, GSD) into containers
-- Agent team mode per workflow (lead + teammates inside container)
-- End-to-end flow: hierarchical issues → dependency-aware dispatch → skilled agent teams → output collection
+- Skills/team config in orchestrated (daemon) path via WORKFLOW.md — works in CLI, needs mapFrontMatterToConfig wiring for daemon
 
 ## Context
 
-Shipped v2.0 with 14,700 LOC TypeScript (src) + 19,082 LOC tests. 1,021 tests passing across 91 test files. 19 phases, 46 plans executed across 2 milestones over 12 days.
+Shipped v3.0 with 16,662 LOC TypeScript (src) + 21,299 LOC tests. 1,162 tests passing across 101 test files. 30 phases, 57 plans executed across 3 milestones over 14 days.
 
 Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest.
 
-Key subsystems: CLI, config, container, agent (Claude Code + Codex + browser-use), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI, storage (SQLite), flight recorder, governance, github-app.
+Key subsystems: CLI, config, container, agent (Claude Code + Codex + browser-use), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI, storage (SQLite), flight recorder, governance, github-app, skills, sub-issue cache/DAG, rollup.
 
-v2.0 added 6 major subsystems: persistent storage, flight recorder, durable execution, governance/approvals, GitHub App, and browser-use integration. Four gap-closure phases (16-19) wired all subsystems into the execution lifecycle.
+v3.0 added 3 features: GitHub sub-issue DAG dependencies, skill/config bind-mounting, and agent teams. Two gap-closure phases (29, 30) fixed composition wiring for sub-issue runtime features.
 
 ## Key Decisions
 
@@ -105,7 +93,12 @@ v2.0 added 6 major subsystems: persistent storage, flight recorder, durable exec
 | Autonomy per workflow, not global | Different work needs different oversight; in WORKFLOW.md | ✓ Good — auto-approve rules add flexibility |
 | GitHub App as primary UI | Slash commands, reactions, conversations from phone | ✓ Good — full lifecycle control from GitHub |
 | HTTP sidecar for browser-use | Bridge TypeScript adapter to Python library | ✓ Good — clean process isolation |
-| Gap closure phases (16-19) | Audit found wiring gaps between subsystems | ✓ Good — all 32 integration points verified |
+| Gap closure phases (16-19, 29-30) | Audit found wiring gaps between subsystems | ✓ Good — milestone audits catch integration bugs |
+| Agent teams as prompt+env concern | Claude Code handles coordination internally | ✓ Good — forgectl just sets CLAUDE_NUM_TEAMMATES |
+| GSD as mounted skill set | Bind-mount, not bake into image — user controls version | ✓ Good — credential exclusion prevents leaks |
+| GitHub sub-issues as native deps | Leverage hierarchy rather than synthetic issues | ✓ Good — TTL cache + cycle detection handles edge cases |
+| Standalone DFS for issue cycle detection | Pipeline validateDAG errors on unknown refs (valid in issues) | ✓ Good — clean separation of concerns |
+| Optional injection for sub-issue deps | SubIssueCache/githubContext optional throughout | ✓ Good — Notion adapter unaffected |
 
 ## Constraints
 
@@ -115,9 +108,5 @@ v2.0 added 6 major subsystems: persistent storage, flight recorder, durable exec
 - **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
 - **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
 
-| Agent teams inside containers | Each container runs its own team; forgectl collects output, doesn't orchestrate internally | — Pending |
-| GSD as mounted skill set | Bind-mount, not bake into image — user controls their own version | — Pending |
-| GitHub sub-issues as native deps | Leverage GitHub's sub-issue hierarchy rather than synthetic issues for code work | — Pending |
-
 ---
-*Last updated: 2026-03-13 after v3.0 milestone start*
+*Last updated: 2026-03-14 after v3.0 milestone completion*
