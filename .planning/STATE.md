@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Autonomous Factory
 status: executing
-stopped_at: "Phase 24-02 complete: no-progress detection, exclusion enforcement, coverage injection all wired into executeLoopNode"
-last_updated: "2026-03-13T23:35:09.401Z"
+stopped_at: "Phase 24-03 complete: CORR-02 gap closed — checkExclusionViolations extracted and tested with real git repos"
+last_updated: "2026-03-14T02:04:41.999Z"
 last_activity: "2026-03-13 — Phase 20-01 complete: schema migration, delegations repo, pipeline type extensions, filtrex"
 progress:
   total_phases: 5
   completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 11
+  completed_plans: 11
   percent: 20
 ---
 
@@ -57,6 +57,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 23 P03 | 351s | 2 tasks | 5 files |
 | Phase 24 P01 | 8min | 2 tasks | 3 files |
 | Phase 24 P02 | 341 | 2 tasks | 2 files |
+| Phase 24 P03 | 249 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,8 @@ Progress: [██░░░░░░░░] 20%
 - [Phase 24-01]: extractCoverage returns -1 sentinel for no-match — safe for numeric comparisons in filtrex expressions (_coverage >= 80 evaluates false rather than throwing)
 - [Phase 24]: lastIterOutput tracked separately from nodeStates loop state so exhaustion message can access final coverage after state resets
 - [Phase 24]: No-progress detection uses i > startIteration guard for correct crash recovery behavior (startIteration may not be 1)
+- [Phase 24]: Exclusion violation causes immediate return from loop — prevents no-progress detection race
+- [Phase 24]: picomatch moved to exclusion.ts; executor.ts no longer imports picomatch
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T23:35:09.396Z
-Stopped at: Phase 24-02 complete: no-progress detection, exclusion enforcement, coverage injection all wired into executeLoopNode
+Last session: 2026-03-14T02:04:41.994Z
+Stopped at: Phase 24-03 complete: CORR-02 gap closed — checkExclusionViolations extracted and tested with real git repos
 Resume file: None
