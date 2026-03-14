@@ -4,7 +4,7 @@
 
 - ✅ **v1.0 Core Orchestrator** — Phases 1-9 (shipped 2026-03-09)
 - ✅ **v2.0 Durable Runtime** — Phases 10-19 (shipped 2026-03-12)
-- 📋 **v3.0 E2E GitHub Integration** — Phases 25-28 (planned)
+- 📋 **v3.0 E2E GitHub Integration** — Phases 25-29 (planned)
 
 ## Phases
 
@@ -110,6 +110,19 @@ Plans:
 - [x] 28-02-PLAN.md — Wire into dispatcher (rollup callback, forge:synthesize label, synthesizer-gated close)
 - [ ] 28-03-PLAN.md — Gap closure: synthesizer-gated close behavioral tests
 
+### Phase 29: Wire SubIssueCache Through Composition Layer
+**Goal**: Thread SubIssueCache through the orchestrator composition layer so sub-issue runtime features (dependency-aware dispatch, progress rollup, auto-close, webhook invalidation) execute at runtime — not just in unit tests
+**Depends on**: Phase 28
+**Requirements**: SUBISSUE-03, SUBISSUE-04, SUBISSUE-05, SUBISSUE-06
+**Gap Closure:** Closes all gaps from v3.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `Orchestrator.start()` includes `subIssueCache` in TickDeps so `terminalIssueIds` populates from live cache during scheduler ticks
+  2. `Orchestrator.dispatchIssue()` passes `subIssueCache` to `dispatchIssueImpl` so `triggerParentRollup` and `handleSynthesizerOutcome` execute at runtime
+  3. `server.ts` webhook registration includes `subIssueCache` in WebhookDeps so webhook-driven cache invalidation works (not just TTL fallback)
+**Plans:** 0/1 plans
+Plans:
+- [ ] 29-01-PLAN.md — Wire subIssueCache into orchestrator index.ts and daemon server.ts
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -137,3 +150,4 @@ Plans:
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
 | 28. Sub-Issue Advanced | 3/3 | Complete    | 2026-03-14 | - |
+| 29. Wire SubIssueCache | 0/1 | Planned    | - | - |
