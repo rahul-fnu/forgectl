@@ -51,6 +51,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 26: Skill / Config Bind-Mounting** - Mount CLAUDE.md, skills, agents directories into containers safely (completed 2026-03-13)
 - [x] **Phase 27: Agent Teams** - Enable Claude Code multi-agent teams with resource scaling and checkpoint exclusion (completed 2026-03-13)
 - [x] **Phase 28: Sub-Issue Advanced Features** - Progress rollup on parent issues, auto-close parent on completion (completed 2026-03-13)
+- [ ] **Phase 30: Fix SubIssueCache Singleton + Polling githubContext** - Unify dual cache instances, wire githubContext into polling path (gap closure)
 
 ## Phase Details
 
@@ -123,6 +124,18 @@ Plans:
 Plans:
 - [ ] 29-01-PLAN.md — Wire subIssueCache into orchestrator index.ts and daemon server.ts
 
+### Phase 30: Fix SubIssueCache Singleton + Polling githubContext
+**Goal**: Eliminate dual SubIssueCache instances and provide githubContext in the polling path so progress rollup and auto-close fire for all dispatched issues — not just webhook-triggered ones
+**Depends on**: Phase 29
+**Requirements**: SUBISSUE-03, SUBISSUE-05, SUBISSUE-06
+**Gap Closure:** Closes gaps from post-Phase-29 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. A single SubIssueCache instance is shared between the GitHub adapter and the orchestrator — writes during `fetchCandidateIssues` are readable by scheduler ticks
+  2. Polling-dispatched issues have a truthy `githubContext` so `triggerParentRollup` executes for scheduler-originated work (the primary production path)
+  3. Progress rollup comments and auto-close fire end-to-end for polling-originated issues, not just webhook-triggered ones
+Plans:
+- [ ] 30-01-PLAN.md — Unify SubIssueCache singleton, wire githubContext into scheduler, integration tests
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -151,3 +164,4 @@ Plans:
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
 | 28. Sub-Issue Advanced | 3/3 | Complete    | 2026-03-14 | - |
 | 29. Wire SubIssueCache | 1/1 | Complete    | 2026-03-14 | - |
+| 30. Fix Cache Singleton + Context | 0/1 | Planned | - | - |
