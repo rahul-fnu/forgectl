@@ -222,7 +222,7 @@ describe("GitHub Tracker Adapter", () => {
       expect(headers["If-None-Match"]).toBe('"abc123"');
     });
 
-    it("sends since parameter for delta polling", async () => {
+    it("does not use since parameter (delta polling disabled)", async () => {
       const { createGitHubAdapter } = await import(
         "../../src/tracker/github.js"
       );
@@ -233,12 +233,12 @@ describe("GitHub Tracker Adapter", () => {
       mockFetch.mockResolvedValueOnce(makeResponse([])); // sub-issues for #42
       await adapter.fetchCandidateIssues();
 
-      // Second fetch should include since — returns empty (no new issues)
+      // Second fetch should NOT include since (full fetch every tick)
       mockFetch.mockResolvedValueOnce(makeResponse([]));
       await adapter.fetchCandidateIssues();
 
       const url = mockFetch.mock.calls[2][0] as string;
-      expect(url).toContain("since=2026-01-15T12%3A00%3A00Z");
+      expect(url).not.toContain("since=");
     });
 
     it("sends labels filter when configured", async () => {

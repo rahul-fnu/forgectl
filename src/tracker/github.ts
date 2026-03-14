@@ -259,9 +259,10 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
         params.set("labels", labelsFilter.join(","));
       }
 
-      if (lastUpdatedAt) {
-        params.set("since", lastUpdatedAt);
-      }
+      // Delta polling disabled — always fetch full candidate list.
+      // The `since` param caused stale cache entries for auto-closed issues
+      // (closed issues disappear from state:open queries, leaving stale
+      // open entries in the cache that caused infinite re-dispatch loops).
 
       const url = `${API_BASE}/repos/${owner}/${repo}/issues?${params.toString()}`;
 
@@ -425,20 +426,7 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
         }
       }
 
-      // Merge enriched delta into the full candidate cache.
-      // Delta polling (since param) only returns recently-updated issues,
-      // so we must retain previously-fetched candidates that are still open.
-      if (lastUpdatedAt) {
-        const enrichedIds = new Set(enriched.map((i) => i.id));
-        // Remove closed/updated issues from cache, add new/updated ones
-        cachedIssues = [
-          ...cachedIssues.filter((ci) => !enrichedIds.has(ci.id) && ci.state !== "closed"),
-          ...enriched.filter((i) => i.state !== "closed"),
-        ];
-      } else {
-        // First fetch — no delta, just set the full list
-        cachedIssues = enriched;
-      }
+      cachedIssues = enriched;
       return cachedIssues;
     },
 
