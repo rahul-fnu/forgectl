@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.0
-milestone_name: E2E GitHub Integration
-status: completed
-stopped_at: Milestone v3.0 completed and archived
-last_updated: "2026-03-14T05:00:00.000Z"
-last_activity: 2026-03-14 -- v3.0 milestone completed, archived, tagged
+milestone: v5.0
+milestone_name: Intelligent Decomposition
+status: active
+stopped_at: null
+last_updated: "2026-03-14T06:00:00.000Z"
+last_activity: 2026-03-14 -- Milestone v5.0 started
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,16 +21,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Planning next milestone
+**Current focus:** v5.0 Intelligent Decomposition
 
 ## Current Position
 
-Milestone v3.0 E2E GitHub Integration — SHIPPED
-All 6 phases (25-30), 11 plans complete. Tagged v3.0.
-Next: `/gsd:new-milestone` for next version.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-14 — Milestone v5.0 started
 
 ## Session Continuity
 
-Last session: 2026-03-14T05:00:00.000Z
-Stopped at: Milestone v3.0 completed and archived
+Last session: 2026-03-14T06:00:00.000Z
+Stopped at: null
 Resume file: None
+
+## Accumulated Context
+
+- v3.0 shipped: sub-issue DAG, skill mounting, agent teams, rollup
+- v2.0 shipped: SQLite, flight recorder, governance, GitHub App, browser-use
+- v1.0 shipped: tracker adapters, orchestrator state machine, workflow system
+- Tech debt carried: mapFrontMatterToConfig missing team/skills, duplicate GitHubContext type, console.warn in cycle detection

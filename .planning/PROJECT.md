@@ -47,7 +47,18 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ### Active
 
-(None — planning next milestone)
+## Current Milestone: v5.0 Intelligent Decomposition
+
+**Goal:** Make forgectl handle complex, multi-file issues reliably by breaking them into focused sub-tasks, executing them in parallel on lightweight runtimes, and learning from outcomes over time.
+
+**Target features:**
+- LLM-driven task decomposition inside containers (agent analyzes issue, outputs DAG)
+- Decomposition validation with human approval gate and single-agent fallback
+- Lightweight worktree + process runtime (no Docker overhead for trusted sub-tasks)
+- Parallel sub-task execution with branch-per-node merge and conflict detection
+- Decomposition feedback loop (re-plan vs re-execute on failure)
+- Rate limit detection with scheduled retry and workspace preservation
+- Run outcome learning (persist lessons, dead-end tracking, feed into future prompts)
 
 ### Out of Scope
 
@@ -67,7 +78,7 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 
 ## Context
 
-Shipped v3.0 with 16,662 LOC TypeScript (src) + 21,299 LOC tests. 1,162 tests passing across 101 test files. 30 phases, 57 plans executed across 3 milestones over 14 days.
+Shipped v3.0 with 16,662 LOC TypeScript (src) + 21,299 LOC tests. 1,162 tests passing across 101 test files. 30 phases, 57 plans executed across 3 milestones over 14 days. v5.0 focuses on intelligent decomposition — inspired by analysis of ComposioHQ/agent-orchestrator (LLM task decomposition, lightweight spawning) and greyhaven-ai/autocontext (run outcome learning, dead-end tracking).
 
 Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest.
 
@@ -109,4 +120,4 @@ v3.0 added 3 features: GitHub sub-issue DAG dependencies, skill/config bind-moun
 - **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
 
 ---
-*Last updated: 2026-03-14 after v3.0 milestone completion*
+*Last updated: 2026-03-14 after v5.0 milestone started*
