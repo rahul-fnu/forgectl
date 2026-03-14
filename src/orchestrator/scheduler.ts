@@ -85,6 +85,8 @@ export async function tick(deps: TickDeps): Promise<void> {
   const doneLabel = config.tracker?.done_label;
   const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
 
+  logger.debug("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
+
   // Step 5: Sort candidates
   const sorted = sortCandidates(eligible);
 

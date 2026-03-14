@@ -305,7 +305,7 @@ describe("dispatchIssue", () => {
     });
   });
 
-  it("schedules retry for continuation failures", async () => {
+  it("releases issue immediately on continuation (completed)", async () => {
     vi.mocked(executeWorker).mockResolvedValue({
       agentResult: { status: "completed", tokenUsage: { input: 0, output: 0, total: 0 }, durationMs: 100, turnCount: 1, stdout: "", stderr: "" },
       comment: "done",
@@ -316,13 +316,11 @@ describe("dispatchIssue", () => {
     dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
     await vi.waitFor(() => {
-      expect(scheduleRetry).toHaveBeenCalledWith(
-        "a",
-        1000, // continuation_delay_ms
-        expect.any(Function),
-        state,
-      );
+      expect(state.claimed.has("a")).toBe(false);
     });
+
+    // scheduleRetry should NOT be called for continuation path
+    expect(scheduleRetry).not.toHaveBeenCalled();
   });
 
   it("releases issue on max retries exhausted", async () => {

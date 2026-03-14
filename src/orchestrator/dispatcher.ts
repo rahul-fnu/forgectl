@@ -513,15 +513,10 @@ async function executeWorkerAndHandle(
         }
       }
 
-      // Re-dispatch after short delay
-      scheduleRetry(
-        issue.id,
-        orchestratorConfig.continuation_delay_ms,
-        () => {
-          releaseIssue(state, issue.id);
-        },
-        state,
-      );
+      // Release immediately — the issue is done (closed + done-labeled).
+      // The continuation delay was designed for multi-turn re-dispatch of the
+      // same issue, but completed+closed issues don't need re-dispatch.
+      releaseIssue(state, issue.id);
     } else {
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
