@@ -520,7 +520,20 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
         method: "POST",
         body: JSON.stringify({ title, body, head: branch, base: "main" }),
       });
-      const data = await response.json() as { html_url?: string };
+      const data = await response.json() as { html_url?: string; number?: number };
+
+      // Auto-merge the PR to main
+      if (data.number) {
+        try {
+          await githubFetch(
+            `${API_BASE}/repos/${owner}/${repo}/pulls/${data.number}/merge`,
+            { method: "PUT", body: JSON.stringify({ merge_method: "squash" }) },
+          );
+        } catch {
+          // Non-fatal — PR stays open for manual merge
+        }
+      }
+
       return data.html_url;
     },
   };
