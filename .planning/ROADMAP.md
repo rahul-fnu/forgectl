@@ -136,4 +136,4 @@ Plans:
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
-| 28. Sub-Issue Advanced | 3/3 | Complete   | 2026-03-14 | - |
+| 28. Sub-Issue Advanced | 3/3 | Complete    | 2026-03-14 | - |
