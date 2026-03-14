@@ -47,6 +47,9 @@ export interface WorkflowFileConfig {
     steps: ValidationStep[];
     on_failure: "abandon" | "output-wip" | "pause";
   };
+  delegation?: {
+    max_children?: number;
+  };
   autonomy?: "full" | "interactive" | "semi" | "supervised";
   auto_approve?: {
     label?: string;

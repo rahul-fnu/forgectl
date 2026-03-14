@@ -1,5 +1,31 @@
 # Milestones
 
+## v2.1 Autonomous Factory (Shipped: 2026-03-14)
+
+**Phases completed:** 5 phases, 11 plans
+**Git range:** 00cb030..5bf7819
+**LOC:** 17,026 src + 22,248 test (TypeScript)
+**Timeline:** 2 days (2026-03-13 → 2026-03-14)
+**Tests:** 1,211 passing across 100 test files
+
+**Key accomplishments:**
+1. Conditional pipeline nodes: if/else branch routing with filtrex expression evaluation, ready-queue executor, cascade skip propagation, and dry-run annotations
+2. Loop pipeline nodes: loop-until iteration with global max_iterations safety cap (50), per-iteration checkpointing, crash recovery, and API-visible loop state
+3. Multi-agent delegation: lead agent decomposes issues into subtasks, concurrent child dispatch with two-tier slot pools, single-retry failure recovery, and aggregate synthesis write-back
+4. Self-correction integration: test-fail/fix/retest pipeline pattern with progressive context, no-progress detection (SHA-256 hash), exclusion enforcement, and coverage-aware loop termination
+5. Schema foundation: SQLite migration 0005, delegations table, extended PipelineNode types for conditions/loops, filtrex expression evaluator
+
+**Tech debt:**
+- Pre-existing: eslint.config.js missing — npm run lint non-functional
+- ROADMAP route path documentation discrepancy (GET /pipelines/:id vs /api/v1/pipeline/:id/status)
+- loadConfig() coupling in executeLoopNode for excludePatterns (not injected via DI)
+- Phase 23 VERIFICATION.md artifact not updated after DELEG-02 gap fix
+- console.log in executor.ts for terminal UI output (intentional)
+
+**Archive:** [milestones/v2.1-ROADMAP.md](milestones/v2.1-ROADMAP.md) | [milestones/v2.1-REQUIREMENTS.md](milestones/v2.1-REQUIREMENTS.md)
+
+---
+
 ## v2.0 Durable Runtime (Shipped: 2026-03-12)
 
 **Phases completed:** 10 phases, 22 plans

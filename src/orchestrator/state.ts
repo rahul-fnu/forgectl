@@ -1,6 +1,7 @@
 import type { TrackerIssue } from "../tracker/types.js";
 import type { AgentSession } from "../agent/session.js";
 import type { CleanupContext } from "../container/cleanup.js";
+import type { OrchestratorConfig } from "../config/schema.js";
 
 /**
  * Possible states for an issue within the orchestrator lifecycle.
@@ -110,4 +111,118 @@ export class SlotManager {
   setMax(n: number): void {
     this.maxConcurrent = n;
   }
+}
+
+/**
+ * Two-tier slot manager that separates top-level issues from child delegations.
+ * Top-level slots are for issues dispatched by the tracker poller.
+ * Child slots are for subtasks spawned by delegation manifests.
+ */
+export class TwoTierSlotManager {
+  private topLevelMax: number;
+  private childMax: number;
+  private topLevelRunning: Map<string, WorkerInfo> = new Map();
+  private childRunning: Map<string, WorkerInfo> = new Map();
+
+  constructor(topLevelMax: number, childMax: number) {
+    this.topLevelMax = topLevelMax;
+    this.childMax = childMax;
+  }
+
+  /**
+   * Returns true when delegation is enabled (childMax > 0).
+   */
+  isDelegationEnabled(): boolean {
+    return this.childMax > 0;
+  }
+
+  /**
+   * Returns true when there is at least one available top-level slot.
+   */
+  hasTopLevelSlot(): boolean {
+    return this.topLevelRunning.size < this.topLevelMax;
+  }
+
+  /**
+   * Returns true when there is at least one available child slot.
+   */
+  hasChildSlot(): boolean {
+    return this.childMax > 0 && this.childRunning.size < this.childMax;
+  }
+
+  /**
+   * Returns the number of available top-level slots (clamped to 0).
+   */
+  availableTopLevelSlots(): number {
+    return Math.max(0, this.topLevelMax - this.topLevelRunning.size);
+  }
+
+  /**
+   * Returns the number of available child slots (clamped to 0).
+   */
+  availableChildSlots(): number {
+    return Math.max(0, this.childMax - this.childRunning.size);
+  }
+
+  /**
+   * Register a top-level worker for the given issue ID.
+   */
+  registerTopLevel(id: string, info: WorkerInfo): void {
+    this.topLevelRunning.set(id, info);
+  }
+
+  /**
+   * Release a top-level worker by issue ID.
+   */
+  releaseTopLevel(id: string): void {
+    this.topLevelRunning.delete(id);
+  }
+
+  /**
+   * Register a child worker for the given task ID.
+   */
+  registerChild(id: string, info: WorkerInfo): void {
+    this.childRunning.set(id, info);
+  }
+
+  /**
+   * Release a child worker by task ID.
+   */
+  releaseChild(id: string): void {
+    this.childRunning.delete(id);
+  }
+
+  /**
+   * Returns the top-level running map for inspection.
+   */
+  getTopLevelRunning(): Map<string, WorkerInfo> {
+    return this.topLevelRunning;
+  }
+
+  /**
+   * Returns the child running map for inspection.
+   */
+  getChildRunning(): Map<string, WorkerInfo> {
+    return this.childRunning;
+  }
+
+  /**
+   * Returns total max slots (topLevelMax + childMax) for backward compatibility.
+   */
+  getMax(): number {
+    return this.topLevelMax + this.childMax;
+  }
+}
+
+/**
+ * Factory that creates a TwoTierSlotManager from OrchestratorConfig.
+ * childSlots = config.child_slots (default 0)
+ * topLevelMax = Math.max(1, config.max_concurrent_agents - childSlots)
+ */
+export function createTwoTierSlotManager(
+  config: OrchestratorConfig,
+): TwoTierSlotManager {
+  const childSlots = config.child_slots ?? 0;
+  const topLevelMax = Math.max(1, config.max_concurrent_agents - childSlots);
+  return new TwoTierSlotManager(topLevelMax, childSlots);
 }

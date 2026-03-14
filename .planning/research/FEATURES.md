@@ -1,181 +1,315 @@
-# Feature Landscape
+# Feature Research
 
-**Domain:** AI agent orchestrator -- GitHub sub-issues, skill/config mounting, Claude Code agent teams
-**Researched:** 2026-03-13
-**Builds on:** forgectl v2.0 (existing orchestrator, tracker adapters, container sandbox, agent adapters)
-
----
-
-## Table Stakes
-
-Features users expect given existing forgectl capabilities. Missing = orchestrator feels incomplete for multi-issue workflows.
-
-### 1. GitHub Sub-Issue Fetching and DAG Construction
-
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| Fetch sub-issues via REST API (`GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues`) | Parent issues with sub-issues are standard GitHub workflow; orchestrator must see them | Medium | Existing `GitHubAdapter` in `src/tracker/github.ts` |
-| Build parent-child DAG from sub-issue relationships | Without this, orchestrator treats each sub-issue as independent work with no ordering | Medium | `TrackerIssue.blocked_by` field already exists but is always `[]` |
-| Populate `blocked_by` from sub-issue hierarchy | Existing orchestrator already filters on `blocked_by`; just needs real data | Low | Sub-issue fetch above |
-| Topological dispatch ordering respecting sub-issue hierarchy | Orchestrator should not start a child issue if its parent/blocker is incomplete | Low | Existing pipeline DAG executor has topological sort in `src/pipeline/` |
-| Store GitHub internal `id` in TrackerIssue metadata | REST sub-issue API requires internal numeric `id` (not issue `number` and not `node_id`) for POST/DELETE operations | Low | Extend `normalizeIssue()` to store `ghIssue.id` in `metadata` |
-
-**Confidence:** HIGH -- GitHub sub-issues REST API is documented and GA. Endpoints: `GET`, `POST`, `DELETE` on `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues`, plus `PATCH .../sub_issues/priority` for reprioritize. Limits: 100 sub-issues per parent, 8 nesting levels.
-
-**Critical API detail:** The REST `POST` endpoint to add a sub-issue requires the issue's internal numeric `id` (from the `id` JSON field), NOT the issue `number` and NOT the `node_id`. The existing adapter uses `ghIssue.number` for `TrackerIssue.id`. Sub-issue operations will need `ghIssue.id` stored in `metadata.github_internal_id`.
-
-### 2. CLAUDE.md / Skills / Agents Directory Mounting into Containers
-
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| Mount project `.claude/` directory into container | Claude Code inside containers cannot see project skills, CLAUDE.md, or agent definitions without this | Low | Existing `prepareClaudeMounts()` in `src/auth/mount.ts` already mounts `~/.claude` for OAuth; extend pattern |
-| Mount user-level `~/.claude/skills/` and `~/.claude/agents/` | Users' personal skills and agents (e.g., GSD framework at `~/.claude/skills/gsd-*/`) must be available inside the sandbox | Low | Same bind-mount pattern |
-| Mount project `.claude/skills/` and `.claude/agents/` | Project-specific skills and agent definitions checked into the repo | Low | Workspace already copied via `prepareRepoWorkspace()` -- `.claude/` just needs to not be in exclude list |
-| CLAUDE.md hierarchy preservation | Claude Code expects `~/.claude/CLAUDE.md` (global), `./CLAUDE.md` (project root), and nested `dir/CLAUDE.md` files | Low | Workspace copy already includes these if not excluded |
-| Read-only mount for skills/agents, writable for agent-memory | Skills and agents should not be modified by the sandbox agent; `~/.claude/agent-memory/` directories need write access for persistent memory feature | Medium | Split bind-mounts: `:ro` for skills/agents, writable tmpdir for memory |
-
-**Confidence:** HIGH -- Claude Code skill/agent/CLAUDE.md loading is purely file-system based and well-documented. Skill locations: `~/.claude/skills/<name>/SKILL.md` (user), `.claude/skills/<name>/SKILL.md` (project). Agent locations: `~/.claude/agents/<name>.md` (user), `.claude/agents/<name>.md` (project). Loading is hierarchical with priority: CLI flag > project > user > plugin.
-
-### 3. Agent Config Passthrough (--agents flag, --model, etc.)
-
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| Pass `--agents` JSON flag to Claude Code invocations | Allows forgectl to inject subagent definitions for in-container Claude Code sessions without files on disk | Low | Existing `claudeCodeAdapter.buildShellCommand()` in `src/agent/claude-code.ts` appends flags |
-| Pass `--agent <name>` flag to run Claude Code as a specific agent type | Enables running the main thread as a coordinator agent that can spawn subagents | Low | Same flag passthrough |
-| Configure model per-agent in WORKFLOW.md | Already partially supported (`agent.model`); ensure it flows through to `--model` flag | Low | Existing config merge |
-| Pass `--add-dir` for additional skill directories | Claude Code can load skills from additional directories; useful for shared skill repos | Low | Flag passthrough |
-
-**Confidence:** HIGH -- Claude Code CLI flags are well-documented. `--agents` accepts inline JSON with `description`, `prompt`, `tools`, `disallowedTools`, `model`, `permissionMode`, `mcpServers`, `hooks`, `maxTurns`, `skills`, `memory` fields. `--agent` sets main thread agent type.
+**Domain:** Multi-agent delegation, conditional/loop pipeline nodes, pipeline self-correction
+**Milestone:** v2.1 Autonomous Factory
+**Researched:** 2026-03-12
+**Confidence:** HIGH (core behaviors); MEDIUM (YAML syntax conventions); HIGH (self-correction loop structure)
 
 ---
 
-## Differentiators
+## Context: What Is Already Built
 
-Features that set forgectl apart from manual multi-agent workflows. Not expected, but highly valued.
+Before mapping new features, note what v2.0 already delivers so nothing is re-invented:
 
-### 4. Automatic Sub-Issue DAG with Cross-Issue Dependency Resolution
+- **Static DAG pipeline executor** (`src/pipeline/executor.ts`): topological sort, parallel execution, fan-in merging, checkpoint/resume per node.
+- **PipelineNode type** (`src/pipeline/types.ts`): `id`, `task`, `depends_on`, `workflow`, `agent`, `input`, `pipe`. No `if`, `loop`, or `delegate` fields yet.
+- **Validation self-correction loop** (`src/validation/runner.ts`): run steps → collect failures → invoke agent fix → restart steps from top. Already bounds loops via `maxRetries` from step config.
+- **Orchestrator dispatcher** (`src/orchestrator/dispatcher.ts`): claim → execute worker → retry with backoff. Per-issue, not per-subtask.
+- **Governance/autonomy** (`src/governance/`): pre/post-gate approval state machine. Wired into the worker.
+- **SQLite storage** (`src/storage/schema.ts`): `runs`, `pipeline_runs`, `run_events` tables. No parent/child run relationship yet.
 
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| Auto-discover full sub-issue tree (up to 8 levels deep) | No manual dependency annotation needed; orchestrator builds work graph from GitHub's native hierarchy | Medium | Sub-issue fetch, recursive traversal |
-| Merge sub-issue hierarchy with explicit blocked-by dependencies | GitHub has BOTH parent/child (sub-issues) AND blocking/blocked-by (dependencies) -- forgectl should unify both into one DAG | High | Two different API surfaces; dependency API access is unclear (see pitfall below) |
-| Progress rollup comments on parent issues | When sub-issues complete, post progress summary on parent ("3/5 sub-issues done, 2 in progress") | Medium | Existing `postComment()` on adapter |
-| Auto-close parent when all sub-issues complete | Natural completion semantics for hierarchical work | Low | Existing `updateState()` + `auto_close` config |
-| Create sub-issues from pipeline definitions | Allow forgectl to decompose a parent issue into sub-issues based on a pipeline YAML, then dispatch each | High | REST `POST /repos/{owner}/{repo}/issues` + sub-issue linking via internal `id` |
-
-### 5. Claude Code Agent Teams in Containers
-
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| Enable agent teams inside containers via environment variable | Multiple Claude Code instances collaborate on complex issues within a single sandbox | Low | Pass `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var to container |
-| Teammate isolation via git worktrees inside container | Each teammate gets its own worktree (Claude Code native `isolation: worktree` feature on subagents) | Medium | Container needs git installed, sufficient disk, worktree support |
-| Configure team structure in WORKFLOW.md | Define lead agent type, preferred teammate count, task decomposition hints | Medium | New `team:` config schema section |
-| Writable team state directories in container | Agent teams store state at `~/.claude/teams/{name}/config.json` and `~/.claude/tasks/{name}/`; these must be writable | Low | Writable bind-mount for `~/.claude/teams/` and `~/.claude/tasks/` |
-| Token budget awareness for teams | Teams use significantly more tokens (each teammate is a separate Claude instance); forgectl should enforce per-run budget limits | Medium | Existing cost tracking + team multiplier estimation |
-| In-process teammate mode (no tmux dependency) | Containers will not have tmux/iTerm2; in-process mode is the only viable option | Low | Set `--teammate-mode in-process` or config equivalent |
-
-**Confidence:** MEDIUM -- Agent teams are experimental (gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var). Known limitations: no session resumption with in-process teammates, task status can lag, one team per session, no nested teams, lead is fixed. Feature could change or be removed. The in-process mode works in any terminal, which is good for containers.
-
-### 6. Skill Injection and Custom Agent Definitions per Workflow
-
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| Workflow-specific skill bundles | Different workflows mount different skill sets (e.g., "api-conventions" for backend, "component-patterns" for frontend) | Medium | New `skills:` list in WORKFLOW.md front matter, selective skill directory mounting |
-| Workflow-specific agent definitions (subagents) | Each workflow defines specialized subagents (e.g., code-reviewer, test-writer) that Claude Code can delegate to | Medium | Mount `.claude/agents/` or pass `--agents` JSON |
-| Dynamic skill generation from issue context | Generate a temporary SKILL.md from the issue description/labels to guide the agent | Medium | Template expansion into `.claude/skills/` before mount |
-| Preload skills into subagents via agent definition | Subagent `skills:` field injects full skill content at startup -- no discovery needed | Low | Agent definitions with `skills` field in frontmatter |
+The new milestone adds three feature clusters on top of this foundation.
 
 ---
 
-## Anti-Features
+## Feature Cluster 1: Multi-Agent Delegation (Lead → Worker)
 
-Features to explicitly NOT build.
+### What "delegation" means in this context
 
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Custom inter-agent messaging protocol | Claude Code agent teams already have mailbox messaging and shared task lists; don't reinvent | Use native agent team communication; forgectl orchestrates at the issue/container level |
-| Persistent agent team sessions across issues | Agent teams are experimental and don't support session resumption; coupling forgectl to this is fragile | Spawn fresh teams per issue; use forgectl checkpoints for durable state |
-| Nested agent teams (teams spawning sub-teams) | Claude Code explicitly prohibits this -- teammates cannot spawn their own teams | Decompose work via sub-issues instead; one team per leaf issue |
-| Real-time streaming of teammate output to dashboard | Adds massive complexity; teammates run inside containers with their own contexts | Collect results after completion; post summaries to GitHub comments |
-| Full CQRS for sub-issue state | Already decided against CQRS in v2.0; sub-issue state lives in GitHub | Poll GitHub for state; use flight recorder for audit trail |
-| Managing GitHub Projects boards | Out of scope; forgectl manages issues, not project views | Users manage board views in GitHub UI |
-| Sub-issue creation across repositories | GitHub sub-issues work within a single repo; cross-repo adds enormous complexity | Keep sub-issues within the configured repo; document limitation |
-| Split-pane teammate mode in containers | Requires tmux/iTerm2 which containers do not have; adds unnecessary dependency | Always use `in-process` teammate mode in containers |
-| Mounting entire `~/.claude/` writable | Security risk -- agent could modify user's global config, settings, or credentials | Mount specific subdirectories; skills/agents as `:ro`, only agent-memory as writable |
-| Skill marketplace / skill package manager | Over-engineering for v2.1; manual skill placement works fine | Users place skills in `.claude/skills/` or mount via WORKFLOW.md config |
+A **lead agent** receives a complex issue, decomposes it into N subtasks at runtime, and dispatches each subtask to a **child worker agent** using the existing `executeWorker` machinery. The lead does not execute the subtasks itself — it writes a decomposition plan, then the orchestrator dispatches child workers per subtask. Results flow back to the lead for synthesis or direct write-back.
 
----
+This is the **orchestrator-worker pattern**, the dominant production multi-agent architecture in 2025-2026 (confirmed: Anthropic engineering blog, Arize AI comparison, AWS guidance).
 
-## Feature Dependencies
+### Table Stakes (Users Expect These)
+
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| Lead agent produces a subtask list | Delegation only works if the lead outputs structured subtask specs (id, task description, workflow, agent type). Without structure, the orchestrator cannot dispatch. | MEDIUM | Prompt engineering: lead prompt must elicit structured JSON output; zod schema to validate it. |
+| Orchestrator dispatches child workers per subtask | The existing `dispatchIssue` / `executeWorker` machinery must be callable with a synthetic issue representing a subtask, not just a real tracker issue. | MEDIUM | `executeWorker` accepts a `TrackerIssue`; needs a `SyntheticIssue` that satisfies the interface. |
+| Child workers run concurrently (up to slot limit) | Parallelization is the primary ROI of multi-agent. If children are sequential, delegation adds overhead with no benefit. Anthropic data shows 90% time reduction with 3-5 parallel subagents. | MEDIUM | Existing `maxParallel` concurrency pattern in pipeline executor can be adapted. |
+| `maxChildren` budget per parent issue | Without a budget cap, one complex issue can spawn hundreds of children, exhausting Docker slots and API rate limits. The limit must be set in WORKFLOW.md. | LOW | Config schema extension. |
+| Depth limit (max depth=2 for v2.1) | Unlimited recursion (lead spawns leads that spawn leads) is the fastest way to infinite loops and cost blowouts. Depth 2 = lead + one level of workers. Enforce via context passed into each worker invocation. | LOW | Pass `parentDepth` into worker; worker refuses to delegate if depth >= 2. |
+| Per-parent `maxChildren` budget tracked in SQLite | If the daemon crashes mid-delegation, we must not re-spawn already-running children. The parent run record needs a `childIds` field. | MEDIUM | Schema migration: add `parentRunId` and `childRunIds` to `runs` table. |
+| Child results collected and summarized for parent | After all children complete, results (branch names, file diffs, validation outcomes) must be aggregated and returned to the parent (or written to the tracker directly). | MEDIUM | New result-aggregation step after child dispatch loop. |
+| Failure retry with updated instructions | If a child fails, the lead can re-issue it with amended task instructions (incorporating the failure reason). Standard in orchestrator-worker literature. | MEDIUM | Child retry loop: on child failure, re-prompt lead for revised subtask spec, re-dispatch. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Lead agent writes subtask specs to tracker (creates sub-issues) | Full traceability: each subtask is a real GitHub issue with its own comment thread, labels, and lifecycle. Users can follow along from their phone. | HIGH | Requires `TrackerAdapter.createIssue()` — not yet in the interface. Adds complexity to the adapter. |
+| Lead synthesizes child results before write-back | Rather than posting N separate comments, lead reads child outputs and writes one coherent summary comment. Requires another agent invocation post-children. | MEDIUM | Adds one more `executeWorker` call in "synthesis" mode after children complete. |
+| Autonomy gates per child | Each child worker can have its own autonomy level (e.g., child implementing a DB migration goes to `supervised`). Inherited from lead's WORKFLOW.md but overridable per subtask spec. | MEDIUM | Pass governance opts per child; already wired in dispatcher. |
+
+### Anti-Features
+
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Unlimited delegation depth | Each level multiplies agents, API calls, and cost. A three-level hierarchy is never necessary for single-machine use. | Hard-code depth=2 for v2.1. Revisit when distributed execution is in scope. |
+| Lead agent manages child workspaces directly | Lead reaching into child workspaces violates isolation. Child output is always collected via the existing git/files output modes. | Children write to their own branches/dirs; parent reads via resolver, not direct file access. |
+| Spawning children on a remote queue (BullMQ/Redis) | External queue adds infrastructure. Single-machine SQLite is sufficient. | Track children in SQLite `runs` table with `parentRunId` column. |
+| Lead agent re-implements the orchestrator | The lead should produce a subtask list and stop. The forgectl orchestrator dispatches workers. The lead is not a second orchestrator. | Lead outputs JSON plan; forgectl runtime dispatches, not another agent. |
+
+### Feature Dependencies
 
 ```
-GitHub Internal ID Storage (1)
+Multi-Agent Delegation
+    requires: executeWorker (already built)
+    requires: SQLite runs table migration (add parentRunId, childRunIds)
+    requires: SyntheticIssue adapter (new — wraps subtask spec as TrackerIssue)
+    requires: child concurrency limiter (adapt PipelineExecutor.maxParallel pattern)
+    requires: depth tracking (new context field in worker invocation)
+    enhances: governance (children inherit autonomy, can override per-subtask)
+    conflicts-with: unlimited depth (must enforce depth <= 2)
+```
+
+---
+
+## Feature Cluster 2: Conditional Pipeline Nodes (if/else, loop-until)
+
+### What "conditional nodes" mean here
+
+The existing pipeline executor treats `PipelineNode.depends_on` as purely structural (edges in the DAG). Conditional nodes extend this so:
+
+- **If nodes**: a node only executes if a boolean expression over upstream node results evaluates to true. Otherwise it is skipped (or the else-branch executes instead).
+- **Loop nodes**: a node (or subgraph) re-executes until a condition on its own output evaluates to true, or a max iteration count is reached.
+
+These are runtime control flow additions to the static DAG — a dynamic overlay on the existing static executor.
+
+### Industry reference
+
+This pattern is confirmed in every major pipeline/workflow framework (Azure Pipelines, GitHub Actions, LangGraph, Haystack, Google ADK, Prefect). The key implementation insight from Haystack: conditions should be expressions evaluated against node output, not boolean constants — otherwise you could have achieved the same result with static DAG structure.
+
+### Table Stakes (Users Expect These)
+
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| `condition` field on PipelineNode | Nodes with `condition: "expr"` are skipped if the expression evaluates falsy. This is the YAML primitive users write. | MEDIUM | Expression evaluator (see below); parser extension. |
+| Expression evaluator over upstream node results | The expression references `nodes.<nodeId>.status`, `nodes.<nodeId>.result.validation.passed`, `nodes.<nodeId>.result.output.branch`. Must be safe (no `eval`). | MEDIUM | Use a sandboxed evaluator (e.g., `expr-eval` npm package or a small hand-rolled subset). |
+| `if_failed` / `if_passed` branch shorthand | `condition: "nodes.test.result.validation.passed == false"` is verbose. Shorthand `if_failed: test` is more readable in YAML. Both resolve to the same runtime check. | LOW | Syntactic sugar in the parser, reduces to a condition expression. |
+| `else_node` field to name the branch to skip to | When a condition is false, skip to `else_node` (or skip the entire subtree if no else). | MEDIUM | Parser must validate that `else_node` exists in the pipeline; executor must route accordingly. |
+| `loop: { until: "expr", max_iterations: N }` on a node | The node re-executes until `until` is true or `max_iterations` is reached. Loop iteration state (count) is tracked in `NodeExecution`. | HIGH | Executor must support re-queuing a node; loop state must be checkpointed. |
+| Hard max_iterations safety cap | If YAML specifies `max_iterations: 100`, forgectl caps it at a global maximum (e.g., 20) to prevent runaway loops. | LOW | Config-level cap constant; warn if YAML exceeds it. |
+| Skip-on-false behavior is visible in dry-run | `forgectl pipeline run --dry-run` shows which nodes would be skipped given hypothetical condition values. | LOW | Dry-run formatter extended to show conditional logic. |
+| Condition evaluation errors are fatal | If an expression references a node that doesn't exist or returns a type error, the pipeline fails immediately rather than silently skipping. | LOW | Defensive expression evaluation with typed error. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| YAML-native condition syntax (no scripting) | Keeps pipeline files readable without requiring users to write JavaScript/Python conditions. Competing tools (Azure Pipelines `${{ if }}`) embed scripting languages, which is powerful but brittle. | MEDIUM | Design a small, safe expression subset: `==`, `!=`, `&&`, `\|\|`, `!`, dot-path access. |
+| Condition based on validation result | `if_failed: test` → "run the fix node only if tests failed." This is the primary use case for self-correction pipelines (Cluster 3). | LOW | Validation result is already in `NodeExecution.result.validation.passed`. |
+| Loop counter available as expression variable | `nodes.fix_node.loop_iteration` is available in condition expressions, enabling patterns like "if this is the 3rd iteration and still failing, use a different strategy." | MEDIUM | Add `loopIteration` to `NodeExecution`; expose in evaluator context. |
+
+### Anti-Features
+
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Turing-complete condition expressions | Arbitrary code in conditions (Python lambdas, JS `eval`) is a security and debuggability problem. | A safe expression subset: comparison operators, boolean logic, dot-path access to node results. |
+| Conditions that branch based on external API calls | External calls in conditions make pipeline execution non-deterministic and hard to checkpoint. | Conditions reference only node results already in memory. External decisions should be a node. |
+| Nested conditional subgraphs (if inside if inside loop) | Infinite recursion in the graph resolver; hard to reason about and visualize. | Depth limit on conditional nesting: max 2 levels. Deeper logic belongs in the agent's task. |
+| Runtime pipeline modification (adding nodes conditionally) | Dynamic graph mutation makes checkpoint/resume fragile. | All nodes are declared statically in YAML; conditions control execution, not graph structure. |
+
+### Feature Dependencies
+
+```
+Conditional Pipeline Nodes
+    requires: PipelineNode type extension (add condition, else_node, loop fields)
+    requires: PipelineExecutor refactor (condition evaluation before executeNode)
+    requires: Expression evaluator (safe, sandboxed, references NodeExecution results)
+    requires: Loop state tracking in NodeExecution (loopIteration counter)
+    requires: Checkpoint extension (checkpoint loop state between iterations)
+    enhances: self-correction (Cluster 3 is built on top of loop nodes)
+    conflicts-with: static topological sort (loops break DAG property — need cycle detection bypass for loop nodes)
+```
+
+---
+
+## Feature Cluster 3: Pipeline Self-Correction (test fail → fix → retest)
+
+### What "self-correction" means here
+
+A pipeline-level feedback loop (distinct from the existing in-container validation loop in `src/validation/runner.ts`) where:
+
+1. A test node runs (e.g., `npm test`, lint, coverage check).
+2. If tests fail, a fix node runs with the failure output as context.
+3. The test node re-runs.
+4. This repeats until tests pass or max iterations is reached.
+
+The **key distinction from existing validation**: the existing `runValidationLoop` runs validation commands inside the same container as the original agent invocation, feeds errors back as a prompt to the same agent, and retries — all within a single `executeWorker` call. Pipeline self-correction is at a higher level: separate nodes, each its own worker invocation, with explicit iteration tracking in the pipeline executor.
+
+### Why both are needed
+
+- The existing validation loop is for synchronous in-container correction (fast, single agent, single container).
+- Pipeline self-correction is for cases where fix and test are separate agents or separate workflows (different containers, different agents, potentially different repos).
+
+### Industry patterns (confirmed)
+
+The standard self-correction pattern (Haystack docs, Google ADK LoopAgent, AWS Evaluator-Reflect-Refine, Medium blog by Soham Ghosh 2026):
+
+1. Generator → Evaluator → ConditionalRouter → (loop back to Generator | exit to output)
+2. Termination via: (a) condition met, or (b) max_iterations reached
+3. Each iteration carries prior failure context into the next generator prompt
+
+Critical warning from industry research: agents given failing tests will often weaken the tests rather than fix the code. Mitigation: the fix node must not have write access to test files, or the validation node must separately verify test file integrity.
+
+### Table Stakes (Users Expect These)
+
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| `loop` node type that wraps a fix node | The YAML primitive: `loop: { until: "nodes.test.result.validation.passed", max_iterations: 5 }` on a fix node causes it to re-run until tests pass. | HIGH | Conditional pipeline nodes (Cluster 2); loop re-execution in executor. |
+| Failure output passed as context to fix node | The fix node gets the test failure output (stdout/stderr from the failed validation) as `context`. Without this, the fix agent cannot know what to fix. | MEDIUM | `NodeExecution.result` already contains validation output; needs to be materialized as a context file for the next node. |
+| Loop iteration count tracked and visible | `forgectl pipeline status` shows "fix-loop: 3/5 iterations, still failing." Without visibility, users cannot tell if the loop is working. | LOW | `loopIteration` in `NodeExecution`; REST API and dashboard exposure. |
+| Max iteration cap with clean failure | When `max_iterations` is reached and tests still fail, the pipeline fails the loop node cleanly and reports "self-correction exhausted after N iterations." | LOW | Existing `getDependencyIssues` pattern extended for loop exhaustion. |
+| Fix node cannot modify test files | Guard: the fix workflow's WORKFLOW.md `exclude` list includes `*.test.ts`, `*.spec.ts`, `test/`, so the agent cannot weaken tests. | LOW | WORKFLOW.md `exclude` config already supported; document this as a required practice. |
+| Coverage drop self-correction | `until: "nodes.coverage.result.output.coveragePercent >= 80"` — but coverage value must be extractable from agent output. | HIGH | Requires structured output parsing from the test node; coverage percent must be in a known location in agent output. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Multi-trigger self-correction (lint + test + coverage in sequence) | A single pipeline loop covers lint fail → reformat, test fail → fix, coverage drop → add tests. Each trigger type has its own fix node. | HIGH | Composing multiple loop nodes in sequence within a pipeline; each loop is independent. |
+| Fix agent different from original agent | The test agent runs with Claude Code; the fix agent runs with Codex. Different strengths for different correction tasks. | LOW | Already supported by `agent` field on PipelineNode. |
+| Self-correction history injected into fix prompts | Each iteration's fix prompt includes the history of all previous attempts: "In iteration 1, you tried X. It failed because Y. In iteration 2, you tried Z. It also failed." Progressive context accumulation. | MEDIUM | Accumulate `NodeExecution` results across iterations; materialize as context file for each iteration. |
+| Governance gate before applying fix | Before the fix node runs, apply pre-execution approval gate if autonomy requires it. "Tests failed — approve this fix attempt?" | MEDIUM | Governance already wired into executeWorker; needs to be honored per loop iteration, not just once at start. |
+
+### Anti-Features
+
+| Feature | Why Avoid | Alternative |
+|---------|-----------|------------|
+| Infinite self-correction with escalating model | Trying increasingly powerful (expensive) models when cheaper ones fail. Sounds smart but hides budget blowout risk. | Fixed max_iterations + clean failure. User re-triages the issue manually if N iterations fail. |
+| Self-correction that can modify the test suite | Agents will take the path of least resistance: weaken tests. This is the most commonly reported failure mode in industry (confirmed: DEV Community "275 Tests" article, 2026). | `exclude` list in fix workflow WORKFLOW.md; test file integrity check as a post-loop validation step. |
+| Parallel self-correction (try multiple fixes simultaneously) | Merging parallel fix attempts that touched the same files creates merge conflicts that are hard to resolve automatically. | Sequential: one fix attempt at a time. Parallelism is for independent subtasks (Cluster 1), not for self-correction. |
+| Self-correction across unrelated failing checks | One fix agent trying to simultaneously fix lint, tests, and coverage. Each concern has different context requirements. | Separate loop nodes per check type. Lint loop, test loop, coverage loop run in sequence. |
+
+### Feature Dependencies
+
+```
+Pipeline Self-Correction
+    requires: Conditional pipeline nodes (Cluster 2) — loop-until is the primitive
+    requires: Context materialization between iterations (failure output as context file)
+    requires: Loop state tracking (iteration counter in NodeExecution)
+    requires: Existing validation runner (already provides structured failure output)
+    enhances: Governance (approval gate per iteration is a differentiator)
+    conflicts-with: fix node modifying test files (must use WORKFLOW.md exclude)
+    depends-on (soft): Self-correction works best when the test node emits structured
+                       failure output (exit code + stderr). Already done in runValidationStep.
+```
+
+---
+
+## Feature Prioritization Matrix
+
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Lead agent produces subtask list | HIGH | MEDIUM | P1 |
+| Child workers dispatched concurrently | HIGH | MEDIUM | P1 |
+| `maxChildren` + depth=2 limit | HIGH | LOW | P1 |
+| SQLite parent/child run relationship | HIGH | LOW | P1 |
+| `condition` field + expression evaluator | HIGH | MEDIUM | P1 |
+| `loop` field + max_iterations cap | HIGH | HIGH | P1 |
+| Failure output as context to fix node | HIGH | MEDIUM | P1 |
+| Fix node `exclude` list guard | HIGH | LOW | P1 |
+| Child failure retry with updated instructions | MEDIUM | MEDIUM | P2 |
+| `if_failed` / `if_passed` shorthand | MEDIUM | LOW | P2 |
+| Loop iteration count in status/API | MEDIUM | LOW | P2 |
+| Lead agent synthesis call (one final summary) | MEDIUM | MEDIUM | P2 |
+| Self-correction history in fix prompts | MEDIUM | MEDIUM | P2 |
+| Governance gate per loop iteration | MEDIUM | MEDIUM | P2 |
+| Lead creates sub-issues in tracker | LOW | HIGH | P3 |
+| Multi-trigger self-correction (lint + test + coverage) | LOW | HIGH | P3 |
+| Parallel alternative fix attempts | LOW — anti-feature | — | DO NOT BUILD |
+
+**Priority key:**
+- P1: Must have for v2.1 to deliver on "Autonomous Factory" promise
+- P2: Should have; add once P1 features are validated
+- P3: Nice to have; future consideration or v2.2
+
+---
+
+## Full Dependency Graph (Cross-Feature)
+
+```
+SQLite schema migration (add parentRunId, childRunIds)
     |
-    v
-Sub-Issue Fetch (1) --> DAG Construction (1) --> Topological Dispatch (1)
-                                              --> Progress Rollup (4)
-                                              --> Auto-Close Parent (4)
-                                              --> Sub-Issue Creation from Pipeline (4)
-
-Skill/Config Mounting (2) --> Agent Config Passthrough (3)
-                          |       |
-                          |       v
-                          |   Agent Teams in Containers (5)
-                          |       |
-                          |       v
-                          |   Team Config in WORKFLOW.md (5)
-                          |
-                          --> Skill Injection per Workflow (6)
-                          --> Dynamic Skill Generation (6)
-
-CLAUDE.md Mounting (2) --> Agent Definitions Mounting (2) --> Workflow-Specific Agents (6)
+    +---> Multi-Agent Delegation
+    |         requires: SyntheticIssue adapter (subtask as TrackerIssue)
+    |         requires: child concurrency limiter
+    |         requires: depth tracking (parentDepth context field)
+    |
+PipelineNode type extension (condition, else_node, loop fields)
+    |
+    +---> Expression Evaluator (safe, references NodeExecution results)
+    |         |
+    |         +---> Conditional Pipeline Nodes (if/else branches)
+    |                   |
+    |                   +---> Pipeline Self-Correction (loop-until is the primitive)
+    |                             requires: context materialization between iterations
+    |                             requires: fix node exclude guard (WORKFLOW.md)
+    |
+PipelineExecutor refactor
+    requires: condition evaluation before executeNode
+    requires: loop re-queuing (cycle in execution for loop nodes only)
+    requires: loop state in NodeExecution (loopIteration counter)
+    requires: checkpoint extension (persist loop state)
 ```
 
-**Critical path:** Sub-issue fetching must come first (unlocks DAG). Skill/config mounting must come before agent teams (teams need skills and agent definitions available in the container).
+**Build order enforced by dependencies:**
+1. Schema migration (parallel with planning)
+2. PipelineNode type extension + expression evaluator
+3. PipelineExecutor refactor (conditional execution)
+4. Loop node support (builds on conditional)
+5. Multi-agent delegation (independent of pipeline changes, uses executor machinery)
+6. Self-correction pipelines (composes loop nodes + context materialization)
 
 ---
 
-## MVP Recommendation
+## MVP Definition
 
-### Build first (foundation):
+### Launch With (v2.1 core)
 
-1. **GitHub sub-issue fetching + `blocked_by` population** -- Immediately makes the existing orchestrator DAG-aware for real GitHub hierarchies. Low-medium complexity, high value. Extends existing `GitHubAdapter.normalizeIssue()` to store `ghIssue.id` in metadata and populate `blocked_by` from sub-issue parent relationships. The orchestrator's existing `blocked_by` filtering logic handles the rest.
+- [x] Multi-agent delegation: lead → workers, depth=2, maxChildren budget, concurrent dispatch, SQLite child tracking
+- [x] Conditional pipeline nodes: `condition` field, expression evaluator, `else_node`, skip-on-false
+- [x] Loop nodes: `loop.until` + `loop.max_iterations`, hard safety cap
+- [x] Self-correction: failure context to fix node, fix-exclude list, clean exhaustion failure
 
-2. **`.claude/` directory mounting (skills + agents + CLAUDE.md)** -- Unlocks customizable agent behavior inside containers. Low complexity, extends existing `prepareClaudeMounts()` pattern in `src/auth/mount.ts`. Foundation for both agent teams and skill injection.
+### Add After Validation (v2.1.x)
 
-### Build second (configuration):
+- [ ] Child failure retry with updated instructions — trigger: users report child failures not retried
+- [ ] Self-correction history accumulation — trigger: users report fix agent repeating same failed approach
+- [ ] `if_failed` / `if_passed` shorthand — trigger: YAML verbosity complaints
 
-3. **Agent config passthrough (`--agents`, `--agent`, `--add-dir` flags)** -- Low complexity, immediate value. Lets WORKFLOW.md define specialized agents and skills for Claude Code to use inside containers.
+### Future Consideration (v2.2+)
 
-4. **Workflow-specific skill/agent config in WORKFLOW.md** -- New `skills:` and `agents:` config sections that control what gets mounted and passed via CLI flags per workflow.
-
-### Build third (advanced):
-
-5. **Agent teams enablement** -- Pass `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, ensure writable `~/.claude/teams/` and `~/.claude/tasks/` directories, set `in-process` teammate mode. Medium complexity, high differentiator.
-
-6. **Sub-issue DAG features (progress rollup, auto-close parent)** -- Low-medium complexity, builds on foundation from step 1.
-
-### Defer:
-- **Cross-issue dependency resolution (blocking/blocked-by)**: GitHub's dependency API for programmatic access is poorly documented; start with sub-issue hierarchy only.
-- **Sub-issue creation from pipelines**: Complex two-way sync; start with read-only consumption of existing sub-issues.
-- **Team task persistence across crashes**: Experimental feature limitations make this fragile; fresh teams per issue is safer.
-- **Dynamic skill generation from issue context**: Nice optimization but not needed for initial value.
+- [ ] Lead creates sub-issues in tracker — requires `TrackerAdapter.createIssue()` addition
+- [ ] Multi-trigger self-correction (lint + test + coverage as one loop) — high complexity, composable from existing P1 features
+- [ ] Governance gate per loop iteration — requires governance/approval flow changes
 
 ---
 
 ## Sources
 
-### HIGH Confidence
-- [GitHub REST API for sub-issues](https://docs.github.com/en/rest/issues/sub-issues) -- Official docs, GA endpoints
-- [GitHub sub-issues architecture blog post](https://github.blog/engineering/architecture-optimization/introducing-sub-issues-enhancing-issue-management-on-github/) -- 100 sub-issues per parent, 8 nesting levels
-- [GitHub issue dependencies docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies) -- blocked-by/blocking relationships
-- [Claude Code subagents documentation](https://code.claude.com/docs/en/sub-agents) -- Full subagent config: YAML frontmatter, --agents flag, tool restrictions, model selection, skills preloading, hooks, memory, worktree isolation
-- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) -- SKILL.md format, directory locations (`~/.claude/skills/`, `.claude/skills/`), frontmatter fields, context:fork, supporting files, --add-dir
+- [Anthropic multi-agent research system engineering blog](https://www.anthropic.com/engineering/multi-agent-research-system) — orchestrator-worker pattern, delegation specs, effort budgeting
+- [Anthropic: When to use multi-agent systems](https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them) — context-centric decomposition, verification subagent pattern
+- [Google ADK loop agents documentation](https://google.github.io/adk-docs/agents/workflow-agents/loop-agents/) — loop-until termination, max_iterations, sub-agent signaling via exit_loop
+- [Haystack pipeline loops documentation](https://docs.haystack.deepset.ai/docs/pipeline-loops) — ConditionalRouter, max_runs_per_component, self-correction pattern with feedback injection
+- [AWS Prescriptive Guidance: Evaluator-reflect-refine loop patterns](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — standard self-correction loop structure
+- [Arize AI: Orchestrator-worker agent comparison](https://arize.com/blog/orchestrator-worker-agents-a-practical-comparison-of-common-agent-frameworks/) — framework comparison (LangGraph, CrewAI, OpenAI Agents SDK)
+- [DEV Community: "I Let an AI Agent Write 275 Tests"](https://dev.to/htekdev/i-let-an-ai-agent-write-275-tests-heres-what-it-was-actually-optimizing-for-32n7) — agents weaken tests rather than fix code (anti-feature validation)
+- [LangGraph conditional edges and loops](https://latenode.com/blog/langgraph-multi-agent-orchestration-complete-framework-guide-architecture-analysis-2025) — graph-based control flow, loop constructs
+- [Kore.ai: Choosing orchestration patterns](https://www.kore.ai/blog/choosing-the-right-orchestration-pattern-for-multi-agent-systems) — supervisor vs orchestrator-worker tradeoffs
 
-### MEDIUM Confidence
-- [Claude Code agent teams documentation](https://code.claude.com/docs/en/agent-teams) -- Experimental feature, requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var, shared task list, mailbox messaging, in-process and split-pane modes, known limitations
-- [GitHub sub-issues API practical guide](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- REST POST needs internal `id` not `number`; GraphQL needs `GraphQL-Features: sub_issues` header
-- [GSD (Get-Shit-Done) framework](https://github.com/gsd-build/get-shit-done) -- Real-world example of skill/agent mounting, `$HOME` path handling in containers
+---
 
-### LOW Confidence
-- GitHub dependency API programmatic access -- Docs are UI-focused only; no clear REST endpoints for reading blocked-by/blocking relationships programmatically. May require GraphQL with undocumented schema fields. Needs phase-specific research before building.
+*Feature research for: forgectl v2.1 Autonomous Factory*
+*Researched: 2026-03-12*

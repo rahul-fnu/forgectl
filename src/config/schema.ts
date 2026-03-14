@@ -91,6 +91,7 @@ export const OrchestratorConfigSchema = z.object({
   drain_timeout_ms: z.number().int().positive().default(30000),
   continuation_delay_ms: z.number().int().min(0).default(1000),
   in_progress_label: z.string().default("in-progress"),
+  child_slots: z.number().int().min(0).default(0),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

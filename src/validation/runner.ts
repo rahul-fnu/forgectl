@@ -14,6 +14,8 @@ export interface ValidationResult {
     passed: boolean;
     attempts: number;
   }>;
+  /** Combined stdout+stderr from all steps in the final validation pass. Undefined when no steps are configured. */
+  lastOutput?: string;
 }
 
 /**
@@ -43,6 +45,7 @@ export async function runValidationLoop(
   }
 
   let attempt = 0;
+  let lastResults: StepResult[] = [];
 
   while (attempt <= maxRetries) {
     attempt++;
@@ -66,8 +69,11 @@ export async function runValidationLoop(
       }
     }
 
+    lastResults = results;
+
     if (allPassed) {
       logger.info("validation", "All validation steps passed");
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
       return {
         passed: true,
         totalAttempts: attempt,
@@ -76,6 +82,7 @@ export async function runValidationLoop(
           passed: true,
           attempts: stepAttemptCounts[s.name],
         })),
+        lastOutput: lastOutput || undefined,
       };
     }
 
@@ -99,8 +106,9 @@ export async function runValidationLoop(
     }
   }
 
-  // Exhausted retries
+  // Exhausted retries — capture output from the final pass
   logger.error("validation", `Validation failed after ${attempt} attempts`);
+  const lastOutput = lastResults.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
   return {
     passed: false,
     totalAttempts: attempt,
@@ -109,5 +117,6 @@ export async function runValidationLoop(
       passed: stepLastPassed[s.name],
       attempts: stepAttemptCounts[s.name],
     })),
+    lastOutput: lastOutput || undefined,
   };
 }

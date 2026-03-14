@@ -8,6 +8,7 @@ import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
+import type { DelegationManager } from "./delegation.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
 import { executeWorker } from "./worker.js";
@@ -144,6 +145,7 @@ export function dispatchIssue(
   metrics: MetricsCollector,
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
+  delegationManager?: DelegationManager,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -172,6 +174,7 @@ export function dispatchIssue(
     metrics,
     governance,
     githubContext,
+    delegationManager,
   );
 }
 
@@ -186,6 +189,7 @@ async function executeWorkerAndHandle(
   metrics: MetricsCollector,
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
+  delegationManager?: DelegationManager,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -323,6 +327,21 @@ async function executeWorkerAndHandle(
     // Remove from running
     const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);
+
+    // --- Delegation hook: check if lead agent output contains a manifest ---
+    if (delegationManager) {
+      const specs = delegationManager.parseDelegationManifest(result.agentResult.stdout, issue.identifier);
+      if (specs && specs.length > 0) {
+        const maxChildren = config.orchestrator.child_slots ?? 5;
+        const depth = 0; // top-level lead is always depth 0
+        delegationManager.runDelegation(issue.identifier, issue, specs, depth, maxChildren).catch(
+          (err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.error("dispatcher", `Delegation run error for ${issue.identifier}: ${msg}`);
+          },
+        );
+      }
+    }
 
     // Post comment (best-effort)
     tracker.postComment(issue.id, result.comment).catch((err: unknown) => {

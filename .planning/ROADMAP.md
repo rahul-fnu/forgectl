@@ -4,6 +4,7 @@
 
 - ✅ **v1.0 Core Orchestrator** — Phases 1-9 (shipped 2026-03-09)
 - ✅ **v2.0 Durable Runtime** — Phases 10-19 (shipped 2026-03-12)
+- ✅ **v2.1 Autonomous Factory** — Phases 20-24 (shipped 2026-03-14)
 
 ## Phases
 
@@ -42,6 +43,19 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
+<details>
+<summary>✅ v2.1 Autonomous Factory (Phases 20-24) — SHIPPED 2026-03-14</summary>
+
+- [x] Phase 20: Schema Foundation (1/1 plan) — completed 2026-03-13
+- [x] Phase 21: Conditional Pipeline Nodes (2/2 plans) — completed 2026-03-13
+- [x] Phase 22: Loop Pipeline Nodes (2/2 plans) — completed 2026-03-13
+- [x] Phase 23: Multi-Agent Delegation (3/3 plans) — completed 2026-03-13
+- [x] Phase 24: Self-Correction Integration (3/3 plans) — completed 2026-03-14
+
+Full details: [milestones/v2.1-ROADMAP.md](milestones/v2.1-ROADMAP.md)
+
+</details>
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -65,3 +79,8 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
+| 20. Schema Foundation | v2.1 | 1/1 | Complete | 2026-03-13 |
+| 21. Conditional Pipeline Nodes | v2.1 | 2/2 | Complete | 2026-03-13 |
+| 22. Loop Pipeline Nodes | v2.1 | 2/2 | Complete | 2026-03-13 |
+| 23. Multi-Agent Delegation | v2.1 | 3/3 | Complete | 2026-03-13 |
+| 24. Self-Correction Integration | v2.1 | 3/3 | Complete | 2026-03-14 |

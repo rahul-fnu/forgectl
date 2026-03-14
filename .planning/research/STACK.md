@@ -1,299 +1,211 @@
-# Technology Stack
+# Technology Stack: v2.1 Additions
 
-**Project:** forgectl v2.1 — Sub-issue DAGs, Skill Mounting, Agent Teams
-**Researched:** 2026-03-13
-**Scope:** NEW capabilities only. Existing stack (TypeScript, Node 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, Drizzle/SQLite, Octokit, etc.) is validated and excluded.
-
-## Key Finding: Zero New NPM Dependencies
-
-All three features build on existing dependencies. This milestone is integration work, not library adoption.
-
-| Feature | Existing Dependency | Change Needed |
-|---------|-------------------|---------------|
-| Sub-issue DAGs | `@octokit/rest` + existing `githubFetch()` | New API calls, populate `blocked_by` |
-| Skill mounting | `dockerode` | Additional bind mounts, `--add-dir` CLI flag |
-| Agent teams | `dockerode` | Env vars, resource scaling, prompt changes |
+**Project:** forgectl v2.1 Autonomous Factory
+**Researched:** 2026-03-12
+**Scope:** NEW dependencies only for three features: (1) multi-agent delegation, (2) conditional/loop pipeline nodes, (3) pipeline self-correction. Existing stack (TypeScript, Node 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, Octokit, chalk, picomatch, keytar) is validated and excluded.
+**Confidence:** HIGH for expression evaluator recommendation; HIGH for no-new-deps conclusions on delegation/self-correction.
 
 ---
 
-## Feature 1: GitHub Sub-Issues DAG Dependencies
+## Recommended Stack Additions
 
-### API Endpoints
-
-GitHub sub-issues reached GA in 2025. The REST API provides these endpoints (all callable via existing `githubFetch()` in `src/tracker/github.ts`):
-
-| Endpoint | Method | Path | Purpose |
-|----------|--------|------|---------|
-| List sub-issues | GET | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Fetch child issues of a parent |
-| Add sub-issue | POST | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Link an issue as child of parent |
-| Remove sub-issue | DELETE | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues/{sub_issue_id}` | Unlink child from parent |
-| Reprioritize | PATCH | `/repos/{owner}/{repo}/issues/{issue_number}/sub_issues` | Reorder children |
-| Get parent | GET | `/repos/{owner}/{repo}/issues/{issue_number}/parent` | Fetch parent issue for a given issue |
-
-**Confidence: HIGH** (official GitHub docs, GA feature, verified endpoints)
-
-### Critical API Gotcha: sub_issue_id vs issue number
-
-The `sub_issue_id` parameter in POST/DELETE requests requires the issue's **internal numeric ID** (the `id` field, e.g. `7890123456`), NOT the human-readable issue number (e.g. `42`). This is a common source of 500 errors.
-
-The current `normalizeIssue()` in `src/tracker/github.ts` stores `ghIssue.number` as `TrackerIssue.id` but discards `ghIssue.id`. The internal ID must be captured.
-
-**Recommendation:** Store `ghIssue.id` in `TrackerIssue.metadata.github_internal_id`. This keeps the TrackerIssue interface tracker-agnostic (Notion doesn't have this concept) while preserving the data needed for sub-issue API calls.
-
-### What Exists Already (Reusable)
-
-| Component | Location | Reuse Strategy |
-|-----------|----------|----------------|
-| `TrackerIssue.blocked_by: string[]` | `src/tracker/types.ts` | Currently always `[]` for GitHub. Populate from parent issue chain. |
-| `filterCandidates()` blocked_by check | `src/orchestrator/dispatcher.ts:100-105` | Already blocks dispatch when blockers are non-terminal. Just populate `blocked_by`. |
-| DAG validation + topological sort | `src/pipeline/dag.ts` | Reuse `validateDAG()` and `topologicalSort()` for sub-issue dependency ordering. |
-| `githubFetch()` with retry/rate-limit | `src/tracker/github.ts:131-193` | Add sub-issue endpoint calls using same authenticated fetch. |
-| `getParallelGroups()` | `src/pipeline/dag.ts:155-191` | Use for parallel sub-issue scheduling. |
-
-### Technology Needed
+### One New Dependency: Expression Evaluator
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `@octokit/rest` | ^22.0.1 (existing) | Sub-issues REST API | Already installed. Sub-issues use standard REST; no special headers required (unlike GraphQL which needs `GraphQL-Features: sub_issues`). |
+| `filtrex` | ^3.1.0 | Evaluate boolean condition expressions in YAML-defined pipeline nodes | Needed for `if/else` branch conditions and `loop-until` termination conditions in pipeline YAML. The conditions reference node output variables (exit codes, file counts, coverage percentages) — values that are not known until runtime. A safe, sandboxed DSL is required because these expressions come from user-authored YAML files and may run in a long-lived daemon. |
 
-### What NOT to Add
+**Why filtrex and not the alternatives:**
 
-- **No `@octokit/graphql`.** The REST API covers all sub-issue operations. The GraphQL API requires a special `GraphQL-Features: sub_issues` header and uses `node_id` instead of issue numbers, adding complexity. REST is simpler and matches the existing adapter pattern.
-- **No dependency graph library (e.g. `graphlib`, `dagre`).** The existing `src/pipeline/dag.ts` already implements DAG validation, cycle detection, topological sort, and parallel grouping. Reuse it.
+`filtrex` 3.1.0 (published October 2024) is the correct choice for forgectl's conditional node DSL because:
+
+1. **Truly sandboxed.** Expressions cannot access the process environment, Node.js APIs, or the global object. The library explicitly guarantees no sandbox breakout, unlike `node:vm`-based approaches (`safe-eval`, `safer-eval`) where breakouts have been demonstrated.
+
+2. **Never throws on execution.** `filtrex` will not throw during expression execution — it returns an error value instead. This is exactly the right behavior for a daemon where a user-authored condition expression must not crash the orchestrator process.
+
+3. **Boolean-first design.** forgectl's conditions are boolean predicates: `exit_code == 0`, `coverage >= 80`, `failed_tests == 0`. `filtrex` treats boolean logic as first-class (supports `and`, `or`, `not`, `==`, `!=`, `<`, `<=`, `>`, `>=`). `expr-eval` is math-first and requires more gymnastics for pure boolean use.
+
+4. **Zero dependencies.** No transitive risk. `jexl` depends on `@babel/runtime` and was last published in 2020. `expr-eval` was last published in a similar timeframe and has no maintained types.
+
+5. **ESM support.** Ships `dist/esm/filtrex.mjs` with TypeScript declarations at `dist/esm/filtrex.d.ts`. Compatible with the project's `"type": "module"` configuration.
+
+6. **Custom function injection.** The `filtrex` evaluator accepts a `functions` map at evaluation time, allowing forgectl to inject helpers like `contains(output, "PASS")` or `matches(branch, "feat/*")` that operate on node output strings — without any regex or VM risk.
+
+**What NOT to use for expressions:**
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| `node:vm` with raw user expressions | Not a security boundary. Sandbox breakouts are documented. The daemon is long-lived — a crash or breakout is unacceptable. | `filtrex` |
+| `eval()` | Obviously not. | `filtrex` |
+| `jexl` ^2.3.0 | Last published 2020. Depends on `@babel/runtime`. Async-first design adds unnecessary complexity for synchronous pipeline conditions. | `filtrex` |
+| `expr-eval` ^2.0.2 | Math-only DSL, no native boolean expressions, last published 2021+, no maintained TypeScript types. | `filtrex` |
+| `jsonata` ^2.1.0 | JSON transformation language — correct tool for JSON querying, wrong tool for boolean predicate conditions. Overkill, different mental model. | `filtrex` |
 
 ---
 
-## Feature 2: Skill/Config Bind-Mounting into Containers
+## No New Dependencies: Multi-Agent Delegation
 
-### How Claude Code Discovers Skills
+Multi-agent delegation (lead agent decomposes issue → spawns worker agents → waits for results → synthesizes) requires zero new npm dependencies. Everything needed already exists:
 
-Claude Code loads skills from these locations (in priority order):
+**What already exists that covers delegation:**
+- `executeWorker()` in `src/orchestrator/worker.ts` — the atomic unit of agent execution. A delegation service calls this for each child task.
+- `SlotManager` — controls concurrency. Child workers compete for the same slot pool, preventing runaway spawning.
+- `DrizzleORM` + `better-sqlite3` — storage for parent/child run relationships (schema addition, not a new library).
+- `Zod` — validation for delegation config (max children budget, depth limit) parsed from WORKFLOW.md front matter.
+- Existing governance/approval system — child runs inherit autonomy level from parent run context.
 
-| Priority | Location | Path Pattern | Loaded When |
-|----------|----------|-------------|-------------|
-| 1 (highest) | Enterprise | Managed settings | Always |
-| 2 | Personal | `~/.claude/skills/<name>/SKILL.md` | Always |
-| 3 | Project | `.claude/skills/<name>/SKILL.md` (in CWD) | Always |
-| 4 | Additional dirs | `.claude/skills/<name>/SKILL.md` inside `--add-dir` paths | When `--add-dir` specified |
+**Schema additions needed (no new library):**
 
-For CLAUDE.md files from additional directories: set `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`.
+The `runs` table in `src/storage/schema.ts` needs two new columns:
+- `parentRunId text` — foreign key to `runs.id` (self-referential). `null` for top-level runs.
+- `delegationDepth integer` — 0 for top-level, 1 for children, capped at 2 by application logic.
 
-**Confidence: HIGH** (official Claude Code docs at code.claude.com/docs/en/skills)
+Drizzle ORM supports self-referential foreign keys via `foreignKey` from `drizzle-orm/sqlite-core`. A new `delegations` table tracks per-issue child budgets:
+- `issueId text`, `parentRunId text`, `childCount integer`, `maxChildren integer`.
 
-### Skill File Format
+The `DelegationService` class lives in `src/orchestrator/delegation.ts` and orchestrates the lead/worker pattern entirely using existing primitives.
 
-Every skill directory contains a `SKILL.md` with YAML frontmatter:
+**Pattern rationale (supervisor/hierarchical):**
+The lead agent gets the issue, produces a decomposition (a list of subtasks as text). The `DelegationService` parses this output, creates child `TrackerIssue`-like objects, calls `executeWorker()` for each (up to `maxChildren` budget, `depth <= 2`), waits for all child results, and synthesizes a final result comment. This is the standard hierarchical/supervisor pattern for multi-agent AI systems and maps cleanly onto the existing worker/dispatcher/slot-manager architecture.
+
+---
+
+## No New Dependencies: Conditional and Loop Pipeline Nodes
+
+Conditional pipeline nodes (`type: "condition"` with `if/else` branches, `type: "loop"` with `until` condition) integrate into the existing `PipelineExecutor` in `src/pipeline/executor.ts`. The only new dependency is `filtrex` (documented above) for evaluating the condition expressions.
+
+**What already exists:**
+- `PipelineNode` type in `src/pipeline/types.ts` — extend with `type?: "task" | "condition" | "loop"`, `condition?: string`, `if_branch?: string[]`, `else_branch?: string[]`, `until?: string`, `max_iterations?: number`.
+- `topologicalSort` / `validateDAG` in `src/pipeline/dag.ts` — condition and loop nodes participate in the DAG. Loop nodes self-reference (they re-queue themselves on the executor's run list when the condition is not yet met), but the static DAG is acyclic (the loop is a runtime construct, not a graph edge).
+- `NodeExecution` status enum — add `"loop-iterating"` status to express that a loop node is mid-iteration.
+- `CheckpointRef` — loop iteration checkpoints save iteration count alongside normal checkpoint data.
+
+**Expression evaluation context for `filtrex`:**
+
+The context object passed to each condition evaluation contains the upstream node's execution result:
+```typescript
+{
+  exit_code: number,      // last validation step exit code
+  output: string,         // agent stdout (trimmed)
+  passed: boolean,        // validation passed/failed
+  iteration: number,      // current loop iteration count
+  files_changed: number,  // git output files changed
+  coverage: number,       // parsed from stdout if available
+}
+```
+Custom functions injected: `contains(str, substr)`, `startsWith(str, prefix)`, `matches(str, pattern)` using `picomatch` (already in project).
+
+**Loop termination safety:** Every loop node requires `max_iterations` (required field, no default). The executor enforces this cap regardless of the `until` condition result. On cap hit, the node transitions to `failed` with a clear error message.
+
+---
+
+## No New Dependencies: Pipeline Self-Correction
+
+Self-correction (test fail → fix agent → retest) is implemented as a specialised pipeline node type and/or a pre-built pipeline pattern using conditional/loop nodes. No new npm dependency is needed.
+
+**What already exists:**
+- `runValidationLoop()` in `src/validation/runner.ts` — already implements "run test, feed failures back to agent, retry". This is self-correction within a single node.
+- The new `type: "loop"` node (above) implements self-correction at the pipeline level: a loop node runs an agent task, a condition checks the result, and the loop body is re-entered if self-correction is needed.
+- `executeWorker()` accepts `validationConfig` with `on_failure: "abandon" | "output-wip" | "pause"` — self-correction loops use `on_failure: "output-wip"` (don't abandon on first failure, let the loop node decide).
+
+**Self-correction pipeline pattern (no new code beyond conditional/loop nodes):**
 
 ```yaml
----
-name: my-skill
-description: What this skill does and when to use it
-disable-model-invocation: true   # optional: manual-only
-allowed-tools: Read, Grep, Bash  # optional: tool restrictions
-context: fork                     # optional: run in subagent
----
+nodes:
+  - id: implement
+    type: task
+    task: "Implement the feature"
 
-Markdown instructions here...
+  - id: self-correct
+    type: loop
+    depends_on: [implement]
+    task: "Fix the failing tests. Previous test output: {{output}}"
+    until: "passed == true"
+    max_iterations: 3
+    condition_source: implement   # read condition from this node's last result
 ```
 
-Key frontmatter fields relevant to forgectl integration:
-
-| Field | Purpose | Relevance |
-|-------|---------|-----------|
-| `name` | Slash command name | Used for invocation |
-| `description` | When Claude should auto-load | Drives automatic skill activation |
-| `disable-model-invocation` | Prevent auto-triggering | Important for dangerous skills like deploy |
-| `allowed-tools` | Tool restrictions | Security boundary |
-| `context: fork` | Run in isolated subagent | Useful for parallel skill execution |
-
-### Docker Bind-Mount Strategy
-
-The existing `createContainer()` in `src/container/runner.ts` accepts `binds: string[]`. Skills/configs are mounted read-only so Claude Code inside the container can discover them.
-
-| Mount Purpose | Host Path | Container Path | Mode | Claude Code Flag |
-|---------------|-----------|----------------|------|-----------------|
-| GSD skills directory | User-configured skill path(s) | `/forgectl-skills/.claude/skills/` | `ro` | `--add-dir /forgectl-skills` |
-| Project CLAUDE.md | Workspace `.claude/CLAUDE.md` | Already in workspace bind | `rw` | None (auto-discovered in CWD) |
-| Settings with env vars | Generated settings.json | `/home/node/.claude/settings.json` | `ro` | None (auto-discovered in `~/.claude/`) |
-
-The container's Claude Code invocation appends `--add-dir /forgectl-skills` to pick up mounted skills. Skills from `--add-dir` directories are auto-discovered and support hot-reload (changes detected without restart).
-
-### Integration Changes Needed
-
-1. **`src/agent/types.ts`** - Add `additionalDirs?: string[]` to `AgentOptions`
-2. **`src/agent/claude-code.ts`** - Append `--add-dir` flags in `buildShellCommand()`
-3. **`src/container/runner.ts`** - Accept skill bind mounts in `createContainer()`
-4. **`src/config/schema.ts`** - New `skills` config section (Zod validated)
-5. **`src/workflow/types.ts`** - Workflow-level skill path overrides
-
-### Technology Needed
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `dockerode` | ^4.0.2 (existing) | Bind mounts via `HostConfig.Binds` | Already used. Add more bind entries for skill directories. |
-
-### What NOT to Add
-
-- **No Docker volume plugins.** Simple bind mounts suffice. Skills are small text files (< 500 lines per SKILL.md recommended).
-- **No file-sync tools.** Read-only mounts are sufficient. Skills are static during execution.
-- **No special packaging/bundling.** Skills are just directories with SKILL.md files. Mount the directory tree as-is.
-- **No `settings.json` generation library.** Write a simple JSON file with the needed env vars. It is three fields.
+The `DelegationService` and the loop executor share the same `executeWorker()` invocation path, so governance gates, flight recorder events, and SQLite checkpoints all apply without additional wiring.
 
 ---
 
-## Feature 3: Claude Code Agent Teams Inside Containers
+## Installation
 
-### How Agent Teams Work
+```bash
+# One new production dependency
+npm install filtrex
 
-Agent teams are an experimental Claude Code feature (v2.1.32+) where a lead session spawns teammate instances that coordinate via shared task list and mailbox messaging.
-
-**Confidence: MEDIUM** (official docs, but marked experimental with known limitations)
-
-### Architecture Summary
-
-| Component | Role | Storage |
-|-----------|------|---------|
-| Team lead | Creates team, spawns teammates, coordinates | Main Claude Code session |
-| Teammates | Independent Claude Code instances, own context window | `~/.claude/teams/{team-name}/config.json` |
-| Task list | Shared work items with pending/in-progress/completed states | `~/.claude/tasks/{team-name}/` |
-| Mailbox | Inter-agent messaging (point-to-point and broadcast) | Internal to Claude Code |
-
-### Enabling Inside Containers
-
-| Requirement | Configuration | Notes |
-|-------------|--------------|-------|
-| Feature flag | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var | Pass via container env |
-| Display mode | `--teammate-mode in-process` or `teammateMode: "in-process"` in settings.json | Containers have no tmux/iTerm2. Must use in-process mode. |
-| Writable home | `~/.claude/tasks/` and `~/.claude/teams/` must be writable | Default container filesystem is writable; just ensure the paths exist |
-| Resources | N+1 Claude Code processes (lead + N teammates) | Increase memory/CPU limits for team-enabled workflows |
-| API key | All teammates share the lead's Anthropic API key | Already injected via container secrets |
-| Permissions | Teammates inherit lead's `--dangerously-skip-permissions` | Already set by forgectl |
-| Version | Claude Code >= v2.1.32 | Container image must have recent enough version |
-
-### How forgectl Triggers Teams
-
-Agent teams are NOT triggered by a CLI flag. They are triggered by the **prompt content** instructing the lead to create a team. This means:
-
-1. The prompt builder (`src/context/`) generates prompts that instruct the lead to spawn teammates
-2. The container needs scaled resources when team mode is expected
-3. The `AgentOptions.timeout` should be higher (teams do parallel work but wall-clock time is longer)
-
-Example prompt injection for team mode:
-```
-Create an agent team with 3 teammates to work on this task:
-- Teammate 1: Implement the core logic in src/feature/
-- Teammate 2: Write tests in test/feature/
-- Teammate 3: Update documentation
-
-Wait for all teammates to complete before finishing.
+# No new dev dependencies
 ```
 
-### Resource Scaling
-
-| Config | Single Agent | Agent Team (3 teammates) | Agent Team (5 teammates) |
-|--------|-------------|-------------------------|-------------------------|
-| Memory | 4 GB (default) | 8 GB | 12 GB |
-| CPUs | 2 | 4 | 6 |
-| Timeout | 10 min | 20 min | 30 min |
-
-The multiplier should be configurable per workflow, not hardcoded.
-
-### Known Limitations (from official docs)
-
-| Limitation | Impact on forgectl |
-|------------|-------------------|
-| No session resumption for teammates | If container crashes, team state is lost. Checkpoint at issue level, not team level. |
-| Task status can lag | Teammates may not mark tasks complete. The lead may need nudging via timeout. |
-| One team per session | Fine for forgectl -- one issue = one container = one team. |
-| No nested teams | Teammates cannot spawn sub-teams. OK for current scope. |
-| Shutdown can be slow | Budget for graceful shutdown time in container lifecycle. |
-
-### Technology Needed
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `dockerode` | ^4.0.2 (existing) | Container env vars, resource limits | Add team-specific env vars and scale resources. |
-
-### What NOT to Add
-
-- **No tmux in container images.** `in-process` mode works without tmux. Adding tmux to Docker images increases image size and complexity for zero benefit in headless operation.
-- **No external team orchestration.** Let Claude Code's built-in team coordination handle intra-task parallelism. forgectl orchestrates at the issue level; Claude Code orchestrates at the sub-task level. These are different abstraction layers.
-- **No `agent-relay` for team communication.** The existing `agent-relay` package is for forgectl's own multi-agent patterns (review mode, parallel pipelines). Claude Code teams use their own internal messaging. Do not mix them.
-- **No Claude Code SDK or programmatic API.** Claude Code is invoked as a CLI tool via `claude -p`. There is no SDK for controlling teams programmatically. The prompt is the interface.
+**Total new production dependencies for v2.1: 1**
+**Total new dev dependencies for v2.1: 0**
 
 ---
-
-## Configuration Additions
-
-New Zod schema fields in `src/config/schema.ts`:
-
-```typescript
-// Skills mounting config
-skills: z.object({
-  paths: z.array(z.string()).optional(),    // Extra skill dirs to mount
-  mountUserSkills: z.boolean().default(true), // Mount ~/.claude/skills/
-}).optional()
-
-// Agent team config (per workflow in WORKFLOW.md)
-team: z.object({
-  enabled: z.boolean().default(false),
-  size: z.number().min(2).max(10).default(3),  // Suggested teammate count
-  resourceMultiplier: z.number().min(1).max(5).default(2),  // Memory/CPU scaling
-  timeout: z.number().optional(),  // Override timeout for team tasks
-}).optional()
-
-// Sub-issue config (extends tracker config)
-subIssues: z.object({
-  enabled: z.boolean().default(false),
-  maxDepth: z.number().min(1).max(5).default(2),  // Max nesting depth to fetch
-  autoBlock: z.boolean().default(true),  // Auto-populate blocked_by from parent chain
-}).optional()
-```
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Sub-issue API | REST via `githubFetch()` | GraphQL via `@octokit/graphql` | REST is simpler, no special headers, consistent with existing adapter. GraphQL `sub_issues` feature flag adds fragility. |
-| Sub-issue ID storage | `metadata.github_internal_id` | New `internalId` field on TrackerIssue | Keeps TrackerIssue interface tracker-agnostic. Only GitHub needs this internal ID. Notion sub-tasks (if ever) would use UUIDs natively. |
-| Skill delivery | Bind mounts + `--add-dir` | Copy skills into container image at build time | Bind mounts allow per-run skill selection without image rebuilds. More flexible. |
-| Skill delivery | Bind mounts + `--add-dir` | Docker volumes | Volumes add lifecycle management complexity. Bind mounts are simpler for read-only content. |
-| Team coordination | Claude Code native teams | forgectl `agent-relay` multi-agent | Different abstraction levels. `agent-relay` coordinates across issues/containers. Claude Code teams coordinate within a single task. Using `agent-relay` for intra-task work would fight Claude Code's own coordination. |
-| Team display | `in-process` mode | Install `tmux` in container | Containers run headless via `claude -p`. tmux adds image bloat for zero benefit. |
-| DAG library | Existing `src/pipeline/dag.ts` | `graphlib` npm package | Already have validated, tested DAG code. Adding a dependency for the same functionality is waste. |
+| Expression evaluator | `filtrex` ^3.1.0 | `jexl` ^2.3.0 | Last published 2020. Async-first (unnecessary). Depends on `@babel/runtime`. Stale. |
+| Expression evaluator | `filtrex` ^3.1.0 | `expr-eval` ^2.0.2 | Math DSL, no native booleans, no maintained types, last published 2021+. |
+| Expression evaluator | `filtrex` ^3.1.0 | `node:vm` + raw JS | Not a security boundary. Breakouts documented. Daemon cannot afford crashes from user-authored YAML. |
+| Expression evaluator | `filtrex` ^3.1.0 | Custom recursive descent parser | Correct approach if we need full control, but `filtrex` 3.1.0 covers the entire required operator set. Build vs. buy: `filtrex` has zero deps, ships types, and costs 0 maintenance burden. |
+| Delegation storage | SQLite schema extension | New `delegations` table only | Prefer adding `parentRunId`/`delegationDepth` to `runs` table (co-located, simpler joins) plus a lightweight `delegation_budgets` table for the per-issue child count. |
+| Self-correction | Loop pipeline node | Dedicated `SelfCorrectionRunner` class | The loop node pattern is more general, reusable, and composable. A dedicated class would duplicate the loop executor's core logic. |
+| Multi-agent framework | Custom delegation service | `agent-squad` / OpenAI Agents SDK | These frameworks assume you control the LLM API call. forgectl's agents are external CLI processes (`claude -p`, `codex exec`). Frameworks that expect function-calling APIs don't compose with forgectl's agent adapter model. |
 
-## Installation
+---
 
-No new packages required:
-
-```bash
-# Verify existing dependencies cover all needs
-npm ls @octokit/rest dockerode zod
-# All three should already be installed at current versions
-
-# No new installs needed
-```
-
-## What NOT to Add (Summary)
+## What NOT to Add
 
 | Dependency | Why Skip |
 |------------|----------|
-| `@octokit/graphql` | REST API covers all sub-issue operations without special headers |
-| `graphlib` / `dagre` | Existing `src/pipeline/dag.ts` already has DAG validation, cycle detection, topological sort |
-| `tmux` (in container image) | `in-process` teammate mode works without it |
-| Any Claude Code SDK | Does not exist. CLI with `-p` flag is the programmatic interface |
-| `agent-relay` for teams | Wrong abstraction level. Claude Code teams have their own messaging |
-| Docker volume plugins | Bind mounts are simpler and sufficient for read-only skill files |
-| `node-cron` / scheduling lib | Existing poll loop + setTimeout patterns suffice |
+| `xstate` | Delegation state machine has 5 states (pending/dispatching/waiting/synthesizing/done). TypeScript discriminated union handles this cleanly. xstate is overkill. |
+| `p-limit` | Delegation concurrency is controlled by the existing `SlotManager`. Don't add a second concurrency primitive. |
+| `zod-to-json-schema` | Not needed for any v2.1 feature. Agent tool schemas are hand-authored. |
+| `vm2` | Abandoned in 2023 after critical security vulnerabilities. Do not use. |
+| `safer-eval` | Uses `node:vm` internally, which is not a true security boundary. `filtrex` is safer. |
+| Any workflow engine (Temporal, Conductor, Airflow) | All require separate server infrastructure. forgectl's loop/condition nodes are implemented in-process using SQLite state. The scope is depth-2 delegation with simple boolean conditions — not enterprise workflow orchestration. |
+| Any LLM SDK (LangChain, LlamaIndex, Vercel AI SDK) | forgectl's agents are subprocess-invoked CLI tools, not API clients. LLM SDKs assume you own the model call. This project does not. |
+
+---
+
+## Version Compatibility
+
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| `filtrex` ^3.1.0 | Node.js 20+, ESM | Ships `.mjs` entry, TypeScript declarations. No known conflicts with existing stack. Zero deps. |
+
+---
+
+## Integration Points
+
+| Existing Subsystem | How v2.1 Touches It |
+|-------------------|---------------------|
+| `src/pipeline/types.ts` | Add `type`, `condition`, `if_branch`, `else_branch`, `until`, `max_iterations`, `condition_source` fields to `PipelineNode`. Add `"loop-iterating"` to `NodeExecution.status`. |
+| `src/pipeline/executor.ts` | Add `executeConditionNode()` and `executeLoopNode()` methods. Import `filtrex` for condition evaluation. |
+| `src/pipeline/dag.ts` | `validateDAG` must accept loop nodes without treating them as cycles. Condition nodes with `if_branch`/`else_branch` reference other node IDs — validate those references exist. |
+| `src/storage/schema.ts` | Add `parentRunId`, `delegationDepth` columns to `runs` table. Add `delegationBudgets` table. |
+| `src/orchestrator/worker.ts` | `executeWorker` is called by delegation service unchanged. No modification to the function signature — delegation is a caller-level concern. |
+| `src/orchestrator/dispatcher.ts` | Extend to handle delegated child runs: check depth, check budget, call `DelegationService`. |
+| `src/validation/runner.ts` | No changes. `runValidationLoop` is the within-node correction primitive. The loop pipeline node calls `executeWorker` (which calls `runValidationLoop`) on each iteration. |
+| `src/governance/autonomy.ts` | Child runs inherit autonomy from parent context. `GovernanceOpts` passed through to child `executeWorker` calls. |
+
+---
 
 ## Sources
 
-- [GitHub Sub-Issues REST API Docs](https://docs.github.com/en/rest/issues/sub-issues) -- HIGH confidence, GA feature
-- [GitHub Blog: Sub-Issues and Projects REST API](https://github.blog/changelog/2025-09-11-a-rest-api-for-github-projects-sub-issues-improvements-and-more/) -- HIGH confidence
-- [Create GitHub Issue Hierarchy Using the API](https://jessehouwing.net/create-github-issue-hierarchy-using-the-api/) -- MEDIUM confidence, verified sub_issue_id vs number gotcha
-- [GitHub Sub-Issues Public Preview Discussion](https://github.com/orgs/community/discussions/148714) -- MEDIUM confidence, community discussion
-- [Claude Code Agent Teams Documentation](https://code.claude.com/docs/en/agent-teams) -- HIGH confidence, official docs
-- [Claude Code Skills Documentation](https://code.claude.com/docs/en/skills) -- HIGH confidence, official docs
-- [Claude Code CLI Reference](https://code.claude.com/docs/en/cli-reference) -- HIGH confidence, official docs
-- [Claude Code --add-dir Guide](https://claudelog.com/faqs/--add-dir/) -- MEDIUM confidence, community source verified against official docs
-- [Claude Code Headless Mode](https://code.claude.com/docs/en/headless) -- HIGH confidence, official docs
+- [filtrex on npm](https://www.npmjs.com/package/filtrex) — v3.1.0, published 2024-10-14, zero deps, ESM + TypeScript
+- [filtrex GitHub](https://github.com/joewalnes/filtrex) — boolean expression DSL, safety guarantees, custom function injection
+- [jexl on npm](https://www.npmjs.com/package/jexl) — v2.3.0, last published 2020-09-15 (stale, not recommended)
+- [expr-eval on npm](https://www.npmjs.com/package/expr-eval) — v2.0.2, math DSL (wrong fit for boolean conditions)
+- [Drizzle ORM self-referential FK](https://gebna.gg/blog/self-referencing-foreign-key-typescript-drizzle-orm) — verified pattern for `runs.parentRunId`
+- [Drizzle ORM relations v2](https://orm.drizzle.team/docs/relations-v2) — current docs for relational queries
+- [Azure AI Agent Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns) — supervisor/hierarchical pattern rationale
+- [AWS prescriptive guidance: evaluator reflect-refine loop](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — self-correction loop patterns
+- npm registry (`npm info`) — version and publish date verification for all packages listed above
+
+---
+*Stack research for: forgectl v2.1 — multi-agent delegation, conditional/loop pipeline nodes, pipeline self-correction*
+*Researched: 2026-03-12*
