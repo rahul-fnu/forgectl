@@ -425,8 +425,21 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
         }
       }
 
-      cachedIssues = enriched;
-      return enriched;
+      // Merge enriched delta into the full candidate cache.
+      // Delta polling (since param) only returns recently-updated issues,
+      // so we must retain previously-fetched candidates that are still open.
+      if (lastUpdatedAt) {
+        const enrichedIds = new Set(enriched.map((i) => i.id));
+        // Remove closed/updated issues from cache, add new/updated ones
+        cachedIssues = [
+          ...cachedIssues.filter((ci) => !enrichedIds.has(ci.id) && ci.state !== "closed"),
+          ...enriched.filter((i) => i.state !== "closed"),
+        ];
+      } else {
+        // First fetch — no delta, just set the full list
+        cachedIssues = enriched;
+      }
+      return cachedIssues;
     },
 
     async fetchIssueStatesByIds(ids: string[]): Promise<Map<string, string>> {
