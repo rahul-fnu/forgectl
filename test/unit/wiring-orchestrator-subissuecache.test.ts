@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TrackerAdapter } from "../../src/tracker/types.js";
 import type { WorkspaceManager } from "../../src/workspace/manager.js";
 import type { Logger } from "../../src/logging/logger.js";
+import type { GitHubContext } from "../../src/orchestrator/dispatcher.js";
 import { ConfigSchema } from "../../src/config/schema.js";
 import { SubIssueCache } from "../../src/tracker/sub-issue-cache.js";
 
@@ -172,6 +173,94 @@ describe("OrchestratorOptions.subIssueCache wiring", () => {
       // Verify startScheduler was called with deps containing subIssueCache
       const deps = vi.mocked(startScheduler).mock.calls[0][0];
       expect(deps.subIssueCache).toBe(cache);
+
+      await orchestrator.stop();
+    });
+  });
+});
+
+describe("GitHubContext wiring for polling rollup (SUBISSUE-05, SUBISSUE-06)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe("Test 5: setGitHubContext after start() updates TickDeps.githubContext", () => {
+    it("mutates deps.githubContext when setGitHubContext is called after start", async () => {
+      const orchestrator = new Orchestrator(makeBaseOpts());
+      await orchestrator.start();
+
+      const ctx: GitHubContext = { octokit: {}, repo: { owner: "o", repo: "r" } };
+      orchestrator.setGitHubContext(ctx);
+
+      // The deps object passed to startScheduler is the same reference — mutation is visible
+      const deps = vi.mocked(startScheduler).mock.calls[0][0];
+      expect(deps.githubContext).toBe(ctx);
+
+      await orchestrator.stop();
+    });
+  });
+
+  describe("Test 6: dispatchIssue passes githubContext to dispatchIssueImpl at position 10", () => {
+    it("forwards githubContext as the 10th argument (index 9) to dispatchIssueImpl", async () => {
+      const orchestrator = new Orchestrator({ ...makeBaseOpts(), subIssueCache: new SubIssueCache() });
+      await orchestrator.start();
+
+      const ctx: GitHubContext = { octokit: { mock: true }, repo: { owner: "owner", repo: "repo" } };
+
+      const issue = {
+        id: "1",
+        identifier: "GH-1",
+        title: "Test",
+        description: "",
+        state: "open",
+        priority: null,
+        labels: [],
+        assignees: [],
+        url: "",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        blocked_by: [],
+        metadata: {},
+      };
+
+      // Pass ctx explicitly — this is the webhook path where caller provides context
+      orchestrator.dispatchIssue(issue, ctx);
+
+      expect(dispatchIssueImpl).toHaveBeenCalledOnce();
+      const args = vi.mocked(dispatchIssueImpl).mock.calls[0];
+      // args[9] = githubContext (position 10, 0-indexed 9)
+      expect(args[9]).toBe(ctx);
+
+      await orchestrator.stop();
+    });
+  });
+
+  describe("Test 7: githubContext undefined in TickDeps when setGitHubContext never called", () => {
+    it("leaves githubContext as undefined when setGitHubContext is not called", async () => {
+      const orchestrator = new Orchestrator(makeBaseOpts());
+      await orchestrator.start();
+
+      const deps = vi.mocked(startScheduler).mock.calls[0][0];
+      expect(deps.githubContext).toBeUndefined();
+
+      await orchestrator.stop();
+    });
+  });
+
+  describe("Test 8: setGitHubContext before second call overwrites previous context", () => {
+    it("replaces githubContext when called a second time (live mutation)", async () => {
+      const orchestrator = new Orchestrator(makeBaseOpts());
+      await orchestrator.start();
+
+      const ctx1: GitHubContext = { octokit: {}, repo: { owner: "first", repo: "repo" } };
+      const ctx2: GitHubContext = { octokit: {}, repo: { owner: "second", repo: "repo" } };
+
+      orchestrator.setGitHubContext(ctx1);
+      const deps = vi.mocked(startScheduler).mock.calls[0][0];
+      expect(deps.githubContext).toBe(ctx1);
+
+      orchestrator.setGitHubContext(ctx2);
+      expect(deps.githubContext).toBe(ctx2);
 
       await orchestrator.stop();
     });
