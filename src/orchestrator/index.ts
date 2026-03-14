@@ -6,6 +6,7 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { RepoContext } from "../github/types.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { createState, type OrchestratorState, SlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
 import { startScheduler, tick, type TickDeps } from "./scheduler.js";
@@ -28,6 +29,7 @@ export interface OrchestratorOptions {
   runRepo?: RunRepository;
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
+  subIssueCache?: SubIssueCache;
 }
 
 /**
@@ -45,6 +47,7 @@ export class Orchestrator {
   private readonly runRepo?: RunRepository;
   private readonly autonomy?: AutonomyLevel;
   private readonly autoApprove?: AutoApproveRule;
+  private readonly subIssueCache?: SubIssueCache;
   private stopScheduler: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
@@ -60,6 +63,7 @@ export class Orchestrator {
     this.runRepo = opts.runRepo;
     this.autonomy = opts.autonomy;
     this.autoApprove = opts.autoApprove;
+    this.subIssueCache = opts.subIssueCache;
   }
 
   /**
@@ -91,6 +95,7 @@ export class Orchestrator {
       runRepo: this.runRepo,
       autonomy: this.autonomy,
       autoApprove: this.autoApprove,
+      subIssueCache: this.subIssueCache,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -237,6 +242,7 @@ export class Orchestrator {
       this.metrics,
       governance,
       githubContext,
+      this.subIssueCache,
     );
   }
 

@@ -91,7 +91,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 8: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, undefined, deps.subIssueCache);
   }
 }
 

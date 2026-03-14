@@ -25,6 +25,7 @@ import { BoardEngine } from "../board/engine.js";
 import { BoardStore, resolveBoardStateDir } from "../board/store.js";
 import { PipelineRunService } from "./pipeline-service.js";
 import { Orchestrator } from "../orchestrator/index.js";
+import { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { createTrackerAdapter } from "../tracker/registry.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { loadWorkflowFile } from "../workflow/workflow-file.js";
@@ -87,6 +88,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
 
   // Orchestrator initialization (when enabled or forced via CLI)
   let orchestrator: Orchestrator | null = null;
+  let subIssueCache: SubIssueCache | undefined;
   let watcher: WorkflowFileWatcher | null = null;
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
   if (orchestratorEnabled && config.tracker) {
@@ -112,11 +114,13 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
       const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
       const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
 
+      subIssueCache = new SubIssueCache();
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
         runRepo,
         autonomy: wf?.config?.autonomy,
         autoApprove: wf?.config?.auto_approve,
+        subIssueCache,
       });
       await orchestrator.start();
 
@@ -196,6 +200,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
           });
         },
         resumeRun,
+        subIssueCache,
       });
 
       registerGitHubRoutes(app, ghAppService);
