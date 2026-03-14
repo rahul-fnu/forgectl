@@ -104,10 +104,11 @@ Plans:
   1. When a sub-issue completes, the parent issue receives a GitHub comment listing completed vs. remaining sub-issues
   2. When the last sub-issue reaches a terminal state, the parent issue is automatically closed with a summary comment
   3. Progress comments are updated in-place (edited, not appended) to avoid comment spam on parent issues
-**Plans:** 2/2 plans complete
+**Plans:** 3 plans (2 complete + 1 gap closure)
 Plans:
-- [ ] 28-01-PLAN.md — Sub-issue rollup module (comment builder, marker search, upsert, terminal check)
-- [ ] 28-02-PLAN.md — Wire into dispatcher (rollup callback, forge:synthesize label, synthesizer-gated close)
+- [x] 28-01-PLAN.md — Sub-issue rollup module (comment builder, marker search, upsert, terminal check)
+- [x] 28-02-PLAN.md — Wire into dispatcher (rollup callback, forge:synthesize label, synthesizer-gated close)
+- [ ] 28-03-PLAN.md — Gap closure: synthesizer-gated close behavioral tests
 
 ## Progress
 
@@ -135,4 +136,4 @@ Plans:
 | 25. Sub-Issue DAG | 2/2 | Complete    | 2026-03-13 | - |
 | 26. Skill Mounting | 2/2 | Complete    | 2026-03-13 | - |
 | 27. Agent Teams | 2/2 | Complete    | 2026-03-13 | - |
-| 28. Sub-Issue Advanced | 2/2 | Complete   | 2026-03-13 | - |
+| 28. Sub-Issue Advanced | 2/3 | Gap Closure | 2026-03-13 | - |
