@@ -239,7 +239,7 @@ export async function executeWorker(
 
   // 2. Run before hook
   try {
-    await workspaceManager.runBeforeHook(issue.identifier);
+    await workspaceManager.runBeforeHook(workspaceId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("worker", `Before hook failed for ${issue.identifier}: ${message}`);
@@ -528,7 +528,7 @@ export async function executeWorker(
 
   // 12. Run after hook (catch and log errors)
   try {
-    await workspaceManager.runAfterHook(issue.identifier);
+    await workspaceManager.runAfterHook(workspaceId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("worker", `After hook failed for ${issue.identifier} (ignored): ${message}`);
