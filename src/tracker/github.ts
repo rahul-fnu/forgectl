@@ -120,6 +120,40 @@ function parseIssueNumber(idOrIdentifier: string): number {
  * Create a GitHub Issues TrackerAdapter.
  */
 /**
+ * Sanitize Claude's merge output before writing it to a file.
+ * Returns cleaned content, or null if the output is invalid.
+ */
+function sanitizeMergeOutput(raw: string, filename: string): string | null {
+  let text = raw.trim();
+  if (!text) return null;
+
+  // Reject obvious error messages
+  if (/^error:/i.test(text) || text.startsWith("Error: Reached max turns")) return null;
+  if (text.startsWith("I ") || text.startsWith("Here ") || text.startsWith("The merged")) return null;
+
+  // Strip ALL markdown code fences — opening and closing, anywhere in the text.
+  // Claude sometimes wraps output in ```lang ... ``` even when told not to.
+  // Match opening fence at start of a line: ```optional-lang
+  text = text.replace(/^```\w*\r?\n/gm, "");
+  // Match closing fence at start of a line: ```
+  text = text.replace(/^```\s*$/gm, "");
+  text = text.trim();
+
+  if (!text) return null;
+
+  // Validate file-type-specific syntax as a sanity check
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (ext === "toml" && !text.includes("[")) return null;
+  if (ext === "json" && !text.startsWith("{") && !text.startsWith("[")) return null;
+  if (ext === "rs" && !text.includes("fn ") && !text.includes("mod ") && !text.includes("use ") && !text.includes("struct ")) return null;
+
+  // Final check: reject if it still contains code fence markers
+  if (/^```/m.test(text)) return null;
+
+  return text + "\n";
+}
+
+/**
  * Resolve merge conflicts on a PR branch using Claude Code, then merge.
  * Clones the repo, merges main into the branch with Claude resolving conflicts,
  * force-pushes the resolved branch, and retries the merge.
@@ -184,15 +218,9 @@ async function resolveAndMerge(
             `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
             { cwd: tmpDir, encoding: "utf-8", timeout: 60000 },
           );
-          const trimmed = resolved.trim();
-          // Validate Claude output — reject error messages and markdown-wrapped code
-          const isError = trimmed.startsWith("Error:") || trimmed.startsWith("error:");
-          const hasCodeFence = trimmed.startsWith("```");
-          if (trimmed && !isError) {
-            // Strip markdown code fences if Claude wrapped the output
-            const cleaned = hasCodeFence
-              ? trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "")
-              : trimmed;
+          // Sanitize Claude output before writing to file
+          const cleaned = sanitizeMergeOutput(resolved, file);
+          if (cleaned) {
             writeFileSync(join(tmpDir, file), cleaned);
           } else {
             execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
