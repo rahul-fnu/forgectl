@@ -191,7 +191,7 @@ describe("triggerParentRollup", () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it("adds forge:synthesize label when all children are terminal", async () => {
+  it("auto-closes parent epic when all children are terminal", async () => {
     const childIssue = makeIssue({ id: "42" });
     const parentEntry = makeCacheEntry("10", ["42"]);
     const cache = makeCache([parentEntry]);
@@ -204,7 +204,7 @@ describe("triggerParentRollup", () => {
 
     await triggerParentRollup(childIssue, cache, tracker, githubCtx, config, logger);
 
-    expect(tracker.updateLabels).toHaveBeenCalledWith("10", ["forge:synthesize"], []);
+    expect(tracker.updateState).toHaveBeenCalledWith("10", "closed");
   });
 
   it("does NOT add forge:synthesize label when children are not all terminal", async () => {

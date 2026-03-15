@@ -192,12 +192,17 @@ export async function triggerParentRollup(
   const allTerminal = allChildrenTerminal(parentEntry.childStates, terminalStates);
 
   if (allTerminal) {
+    // Auto-close the parent epic — all sub-issues are done
+    logger.info("dispatcher", `All sub-issues complete for parent #${parentEntry.parentId}, auto-closing`);
     tracker
-      .updateLabels(parentEntry.parentId, ["forge:synthesize"], [])
+      .updateState(parentEntry.parentId, "closed")
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn("dispatcher", `Failed to add forge:synthesize label to parent ${parentEntry.parentId}: ${msg}`);
+        logger.warn("dispatcher", `Failed to auto-close parent ${parentEntry.parentId}: ${msg}`);
       });
+    tracker
+      .postComment(parentEntry.parentId, `All sub-issues completed. Auto-closing.`)
+      .catch(() => { /* best-effort */ });
   }
 }
 
