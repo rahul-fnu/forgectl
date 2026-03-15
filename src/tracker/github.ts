@@ -3,6 +3,11 @@ import { resolveToken } from "./token.js";
 import { SubIssueCache } from "./sub-issue-cache.js";
 import { detectIssueCycles } from "./sub-issue-dag.js";
 
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
 const API_BASE = "https://api.github.com";
 const RATE_LIMIT_WARNING_THRESHOLD = 100;
 
@@ -114,6 +119,103 @@ function parseIssueNumber(idOrIdentifier: string): number {
 /**
  * Create a GitHub Issues TrackerAdapter.
  */
+/**
+ * Resolve merge conflicts on a PR branch using Claude Code, then merge.
+ * Clones the repo, merges main into the branch with Claude resolving conflicts,
+ * force-pushes the resolved branch, and retries the merge.
+ */
+async function resolveAndMerge(
+  owner: string,
+  repo: string,
+  branch: string,
+  prNumber: number,
+  ghToken: string,
+  rawToken: string,
+): Promise<void> {
+  const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-conflict-"));
+  const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+
+  try {
+    // Clone and checkout the PR branch
+    execSync(`git clone --depth=50 "${repoUrl}" .`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git config user.name forgectl`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git config user.email forge@localhost`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git checkout "${branch}"`, { cwd: tmpDir, stdio: "pipe" });
+
+    // Try merging main into the branch
+    try {
+      execSync(`git merge origin/main --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+      // No conflicts — just push
+    } catch {
+      // Get conflicted files
+      const conflictOutput = execSync(`git diff --name-only --diff-filter=U`, {
+        cwd: tmpDir,
+        encoding: "utf-8",
+      }).trim();
+
+      if (!conflictOutput) return; // No conflicts found somehow
+
+      const conflicts = conflictOutput.split("\n");
+
+      for (const file of conflicts) {
+        // Extract three-way versions
+        let base = "", ours = "", theirs = "";
+        try { base = execSync(`git show :1:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* new file */ }
+        try { ours = execSync(`git show :2:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+        try { theirs = execSync(`git show :3:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+
+        // Use Claude to resolve
+        const prompt = [
+          `Merge these three versions of ${file}. Output ONLY the merged file content, no explanation.`,
+          `=== BASE (common ancestor) ===`,
+          base,
+          `=== OURS (main branch) ===`,
+          ours,
+          `=== THEIRS (feature branch - new code to keep) ===`,
+          theirs,
+          `Rules: Include ALL content from both sides. Combine imports, merge function lists. Do not duplicate identical lines.`,
+        ].join("\n");
+
+        try {
+          const { writeFileSync } = await import("node:fs");
+          const promptFile = join(tmpDir, ".forgectl-merge-prompt.txt");
+          writeFileSync(promptFile, prompt);
+          const resolved = execSync(
+            `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
+            { cwd: tmpDir, encoding: "utf-8", timeout: 60000 },
+          );
+          if (resolved.trim()) {
+            writeFileSync(join(tmpDir, file), resolved);
+          } else {
+            execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+          }
+        } catch {
+          execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+        }
+        execSync(`git add "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+      }
+
+      execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+    }
+
+    // Push the resolved branch
+    execSync(`git push origin "${branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+
+    // Retry the merge via API
+    const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
+    await fetch(mergeUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${ghToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ merge_method: "squash" }),
+    });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
@@ -525,10 +627,15 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
       // Auto-merge the PR to main
       if (data.number) {
         try {
-          await githubFetch(
+          const mergeResponse = await githubFetch(
             `${API_BASE}/repos/${owner}/${repo}/pulls/${data.number}/merge`,
             { method: "PUT", body: JSON.stringify({ merge_method: "squash" }) },
           );
+
+          if (!mergeResponse.ok) {
+            // Merge failed — likely conflicts. Try to resolve them.
+            await resolveAndMerge(owner, repo, branch, data.number, token, config.token);
+          }
         } catch {
           // Non-fatal — PR stays open for manual merge
         }
