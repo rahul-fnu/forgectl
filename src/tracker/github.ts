@@ -216,6 +216,79 @@ async function resolveAndMerge(
   }
 }
 
+/**
+ * Wait for CI checks to pass on a PR, then merge. Resolves conflicts first if needed.
+ * Polls check status every 30s for up to 15 minutes.
+ */
+async function autoMergeWithCI(
+  owner: string,
+  repo: string,
+  branch: string,
+  prNumber: number,
+  ghToken: string,
+  rawToken: string,
+): Promise<void> {
+  const headers = {
+    Authorization: `token ${ghToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/vnd.github+json",
+  };
+
+  // Step 1: Check if PR is mergeable, resolve conflicts if not
+  const prUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`;
+  const prData = await (await fetch(prUrl, { headers })).json() as { mergeable?: boolean; mergeable_state?: string; head?: { sha?: string } };
+
+  if (prData.mergeable === false) {
+    await resolveAndMerge(owner, repo, branch, prNumber, ghToken, rawToken);
+  }
+
+  // Step 2: Wait for CI checks to pass (poll every 30s, max 15 min)
+  const headSha = prData.head?.sha;
+  if (headSha) {
+    const maxWaitMs = 15 * 60 * 1000;
+    const pollMs = 30_000;
+    const start = Date.now();
+
+    while (Date.now() - start < maxWaitMs) {
+      const statusUrl = `${API_BASE}/repos/${owner}/${repo}/commits/${headSha}/check-runs`;
+      const checks = await (await fetch(statusUrl, { headers })).json() as {
+        check_runs?: Array<{ status: string; conclusion: string | null }>;
+      };
+
+      const runs = checks.check_runs ?? [];
+      if (runs.length === 0) {
+        // No CI configured — proceed to merge
+        break;
+      }
+
+      const allComplete = runs.every((r) => r.status === "completed");
+      if (allComplete) {
+        const allPassed = runs.every((r) => r.conclusion === "success" || r.conclusion === "skipped");
+        if (!allPassed) {
+          // CI failed — don't merge, leave PR open
+          return;
+        }
+        break;
+      }
+
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  }
+
+  // Step 3: Merge
+  const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
+  const mergeResponse = await fetch(mergeUrl, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ merge_method: "squash" }),
+  });
+
+  if (!mergeResponse.ok) {
+    // Last resort: resolve and retry
+    await resolveAndMerge(owner, repo, branch, prNumber, ghToken, rawToken);
+  }
+}
+
 export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
@@ -624,21 +697,11 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
       });
       const data = await response.json() as { html_url?: string; number?: number };
 
-      // Auto-merge the PR to main
+      // Auto-merge: resolve conflicts, wait for CI, then merge
       if (data.number) {
-        try {
-          const mergeResponse = await githubFetch(
-            `${API_BASE}/repos/${owner}/${repo}/pulls/${data.number}/merge`,
-            { method: "PUT", body: JSON.stringify({ merge_method: "squash" }) },
-          );
-
-          if (!mergeResponse.ok) {
-            // Merge failed — likely conflicts. Try to resolve them.
-            await resolveAndMerge(owner, repo, branch, data.number, token, config.token);
-          }
-        } catch {
+        void autoMergeWithCI(owner, repo, branch, data.number, token, config.token).catch(() => {
           // Non-fatal — PR stays open for manual merge
-        }
+        });
       }
 
       return data.html_url;
