@@ -184,8 +184,16 @@ async function resolveAndMerge(
             `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
             { cwd: tmpDir, encoding: "utf-8", timeout: 60000 },
           );
-          if (resolved.trim()) {
-            writeFileSync(join(tmpDir, file), resolved);
+          const trimmed = resolved.trim();
+          // Validate Claude output — reject error messages and markdown-wrapped code
+          const isError = trimmed.startsWith("Error:") || trimmed.startsWith("error:");
+          const hasCodeFence = trimmed.startsWith("```");
+          if (trimmed && !isError) {
+            // Strip markdown code fences if Claude wrapped the output
+            const cleaned = hasCodeFence
+              ? trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "")
+              : trimmed;
+            writeFileSync(join(tmpDir, file), cleaned);
           } else {
             execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
           }
