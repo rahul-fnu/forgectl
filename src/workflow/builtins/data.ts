@@ -46,4 +46,5 @@ for f in glob.glob('/output/data/*'):
   review: { enabled: false, system: "" },
   cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

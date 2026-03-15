@@ -1,233 +1,179 @@
 # Project Research Summary
 
-**Project:** forgectl v2.1 Autonomous Factory
-**Domain:** Multi-agent orchestration, conditional/loop pipeline execution, pipeline self-correction
-**Researched:** 2026-03-12
-**Confidence:** HIGH
+**Project:** forgectl v5.0 — Intelligent Decomposition
+**Domain:** LLM-driven task decomposition, worktree runtimes, rate limit resilience, run outcome learning
+**Researched:** 2026-03-14
+**Confidence:** HIGH (core features), MEDIUM (sqlite-vec, outcome learning heuristics)
 
 ## Executive Summary
 
-forgectl v2.1 adds three tightly coupled capabilities to the existing v2.0 Durable Runtime: multi-agent delegation (a lead agent decomposes an issue and dispatches child workers), conditional/loop pipeline nodes (if/else branches and loop-until iteration in YAML-defined pipelines), and pipeline self-correction (a pipeline-level test-fail-fix-retest feedback loop distinct from the existing in-container validation loop). Research confirms that all three features are implementable with exactly one new npm dependency (`filtrex` ^3.1.0 for safe expression evaluation) and targeted extensions to existing subsystems. The v2.0 architecture — `executeWorker`, `PipelineExecutor`, `SlotManager`, SQLite/Drizzle storage, and `GovernanceSystem` — provides the correct primitives for all three features without requiring new frameworks or infrastructure.
+forgectl v5.0 adds four independent capabilities to an already-mature (v3.0) AI agent orchestrator: LLM-driven task decomposition, a lightweight worktree runtime for parallel sub-task execution, rate-limit-aware retry scheduling, and a run outcome learning system. Research confirms that all four capabilities are well-understood in the industry — real-world precedents exist in ComposioHQ/agent-orchestrator (worktree-per-task, CI-gated dispatch), greyhaven-ai/autocontext (outcome learning with curator-based lesson curation), and clash-sh/clash (git merge-tree conflict detection). The recommended approach is additive-only: every new feature wires into existing orchestrator subsystems (pipeline DAG, governance approval state machine, flight recorder, workspace manager, SQLite/Drizzle) without replacing them. The architecture research identifies a natural 5-phase build order with a dependency-driven sequence: storage schema first, then rate limit retry and outcome learner in parallel, then worktree runtime, then decomposition engine last.
 
-The recommended build order is driven by hard dependencies: the SQLite schema migration must land first (all other work depends on it), followed by conditional pipeline node support (which loop nodes build on), followed by loop nodes (which self-correction pipelines compose), and delegation (which is architecturally independent of pipeline changes but shares the same schema migration). Self-correction is not a new subsystem — it is an integration milestone proving that loop nodes plus context piping produce the test-fail-fix-retest pattern. The industry-standard orchestrator-worker pattern (Anthropic, AWS, Azure AI guidance) maps directly onto forgectl's existing `dispatchIssue`/`executeWorker` machinery with minimal wiring changes.
+The central risk is scope creep through bad defaults. Each feature independently carries a "looks done but isn't" failure mode: decomposition without semantic plan validation, worktrees without crash-safe cleanup, rate limit detection misclassifying context-window overflows, and outcome lessons accumulating noise faster than signal. The mitigation in every case is the same: gate behind explicit opt-in configuration, maintain the single-agent path as default, and require N-failure confirmation before treating any signal as persistent. The existing governance and workspace-preservation infrastructure largely handles these risks if wired correctly — the new code is smaller than it appears because so much of the required infrastructure already exists.
 
-The highest-severity risks are slot budget exhaustion (children contending with leads for global slots), workspace contamination between concurrent child agents, and the "loop of death" (self-correction without a hard iteration cap). All three are preventable with upfront design decisions: a two-tier slot pool, per-child isolated workspaces via subdirectories or Git worktrees, and a mandatory `max_iterations` field with no default. A secondary risk is that the existing static-DAG topological sort in `PipelineExecutor` must be refactored to a ready-queue model to support conditional branch skipping at runtime — this is a meaningful executor refactor, not a cosmetic change.
+The one area with meaningful uncertainty is sqlite-vec: the library is actively maintained and has documented Node.js integration, but the exact npm package name and platform binary availability for linux-x64 should be verified before pinning in package.json. The FTS5 fallback (already in SQLite) provides a graceful degradation path if the extension is unavailable.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The v2.0 stack is entirely validated and carries forward unchanged. v2.1 adds a single new production dependency: `filtrex` ^3.1.0, a sandboxed boolean expression evaluator used for conditional node guard expressions and loop termination conditions. `filtrex` was chosen over alternatives (`jexl`, `expr-eval`, `node:vm`) because it is truly sandboxed (no process/global access), never throws on expression execution (returns an error value instead), is boolean-first by design, ships zero transitive dependencies, and has full ESM + TypeScript declarations compatible with the project's `"type": "module"` configuration. Multi-agent delegation and pipeline self-correction require no new libraries — they are implemented entirely using existing `executeWorker`, `SlotManager`, Drizzle ORM, and `runValidationLoop` primitives.
+The existing stack (TypeScript, Node.js 20+, Fastify, Drizzle ORM, better-sqlite3, @octokit/app, Vitest, tsup) requires no changes. v5.0 adds five targeted dependencies. The `@anthropic-ai/sdk` is used directly for both the decomposition LLM call (via `betaZodTool` for structured JSON output) and text embeddings for outcome learning — no LangChain, no Vercel AI SDK, no instructor-ai. `simple-git` wraps git worktree operations via `.raw()` calls (no high-level worktree API exists in v3.27). `execa` replaces `child_process.spawn` for agent process management with typed errors, timeout enforcement, and automatic cleanup. `p-queue` manages parallel sub-task concurrency with pause/resume for re-plan interruptions. `sqlite-vec` adds K-nearest-neighbor vector search inside the existing SQLite database for semantic lesson retrieval.
 
 **Core technologies:**
-- `filtrex` ^3.1.0: safe expression evaluation for conditional/loop node DSL — only truly sandboxed evaluator with ESM support, zero deps, and boolean-first design
-- Drizzle ORM + better-sqlite3 (existing): schema extension for `delegations` table and `parentRunId`/`role`/`depth` columns on `runs` — self-referential FK pattern verified in Drizzle docs
-- Zod (existing): validation for delegation manifest JSON, new `delegation:` WORKFLOW.md block, and new PipelineNode fields
-- `picomatch` (existing): injected as a custom function into `filtrex` evaluation context for `matches(str, pattern)` expressions
-
-**What NOT to add:**
-- `xstate`: delegation state machine has 5 states, a TypeScript discriminated union is sufficient
-- `p-limit`: child concurrency is controlled by the existing `SlotManager`, not a second primitive
-- `vm2`: abandoned in 2023 after critical vulnerabilities
-- `jexl`: last published 2020, async-first (unnecessary overhead), depends on `@babel/runtime`
-- Any LLM SDK (LangChain, Vercel AI, etc.): forgectl agents are subprocess CLI invocations, not API clients
-- Any workflow engine (Temporal, Conductor, Airflow): all require separate server infrastructure; in-process SQLite state is sufficient
+- `@anthropic-ai/sdk ^0.78.0`: LLM decomposition calls + text embeddings — official SDK with `betaZodTool` for schema-enforced JSON output; `Anthropic.RateLimitError` carries parsed `retryAfter` field
+- `execa ^9.6.0`: process spawning for worktree agents — typed errors, SIGTERM/SIGKILL cleanup, ESM-native; required for daemon-managed process lifecycle
+- `simple-git ^3.27.0`: git worktree lifecycle (add, list, remove, prune) via `.raw()` — bundled TypeScript types, no viable alternative
+- `p-queue ^9.1.0`: bounded parallel sub-task queue with pause/resume/priority — necessary for re-plan interruption of in-flight tasks
+- `sqlite-vec` (verify package name at install): K-NN cosine similarity inside existing SQLite connection — zero additional infrastructure
 
 ### Expected Features
 
-**Must have (P1 — table stakes for v2.1):**
-- Lead agent produces structured subtask list (JSON manifest in stdout, sentinel-delimited) — delegation only works with structured output
-- Child workers dispatched concurrently up to slot limit — parallelism is the primary ROI of multi-agent (Anthropic: 90% time reduction with 3-5 parallel subagents)
-- `maxChildren` budget cap and `depth <= 2` enforcement in code, not just prompt instructions
-- SQLite `parentRunId`/`depth` columns on `runs` table — parent/child relationships must survive daemon restarts
-- `condition` field on `PipelineNode` with safe `filtrex` expression evaluator
-- `loop` field with required `max_iterations` (no default) — cap enforced before condition is checked
-- Failure output piped as context to fix node — without this, the fix agent cannot know what to fix
-- Fix node `exclude` list guard for test files — agents take path of least resistance and weaken tests (confirmed anti-pattern)
+Research confirms a clear P1/P2/P3 priority split. Everything required to make "intelligent decomposition" coherent is P1; everything that compounds on that foundation is P2; multi-role curator loops are P3/v6+.
 
-**Should have (P2 — add after P1 validated):**
-- Child failure retry with updated lead instructions
-- `if_failed` / `if_passed` shorthand (syntactic sugar reducing to condition expression)
-- Loop iteration count exposed in status API and dashboard
-- Lead agent synthesis call (one final summary from all child results)
-- Self-correction history accumulation across iterations in fix prompts
+**Must have (v5.0 core — P1):**
+- LLM planner with structured JSON output (`{id, title, description, files_hint[], depends_on[]}`) — without this, the milestone does not exist
+- Decomposition quality scoring (cycle detection + node count bounds + file-scope overlap) — prevents pathological plans before any agent runs
+- Human approval gate with single-agent fallback — integrates with existing governance; decline = fallback, not failure
+- Worktree runtime: git worktree add/remove, process-based agent spawn, sub-1s startup vs 2-30s Docker overhead
+- Parallel sub-task execution with branch-per-node and topological merge ordering
+- Rate limit detection + scheduled retry: 429 + `Retry-After` parsing, workspace suspension, slot back-pressure
+- Re-plan vs re-execute on sub-task failure: planner must be callable mid-run with failure context
 
-**Defer (P3 / v2.2+):**
-- Lead creates sub-issues in GitHub/Notion tracker — requires `TrackerAdapter.createIssue()` not yet in interface
-- Multi-trigger self-correction (lint + test + coverage in one composed loop)
-- Governance gate per loop iteration (per-iteration approval flow)
-- Parallel alternative fix attempts (anti-feature: creates merge conflicts)
+**Should have (v5.x — P2):**
+- Early merge conflict detection via `git merge-tree` dry-run across active worktrees (requires stable worktree runtime)
+- Run outcome learning (basic): structured lesson append post-run; top-5 relevant lessons injected into future prompts scoped by repo + label
+- Dead-end detection: 3+ failures on same approach/file set = approach-level dead end with TTL
+
+**Defer (v6+ — P3):**
+- Full autocontext-style curator loop (Competitor/Analyst/Coach/Curator roles) — requires accumulated lesson corpus first
+- Cross-run playbook promotion with human review — defer until lesson volume warrants the UX investment
 
 ### Architecture Approach
 
-v2.1 extends three existing subsystems rather than introducing new ones. The `PipelineExecutor` gains three new node handlers (`executeConditionalNode`, `executeLoopNode`, and the existing `executeTaskNode` via type dispatch in `executeNode`). The core scheduling loop must move from a pre-computed topological order to a ready-queue model where nodes are scheduled only when all their dependencies complete and any conditional guard evaluates true. The Orchestrator gains a new `DelegationManager` component (`src/orchestrator/delegation.ts`) that parses lead agent stdout for a sentinel-delimited delegation manifest, validates it with Zod, and dispatches child workers via a child-scoped slot pool. Self-correction is a composition pattern (loop nodes + context piping) with no new files beyond integration tests.
+All four v5.0 features are additive to the existing orchestrator architecture. Four new directories are created (`src/decomposition/`, `src/worktree/`, `src/rate-limit/`, `src/learning/`) and six existing files are modified (`worker.ts`, `dispatcher.ts`, `retry.ts`, `prompt.ts`, `schema.ts`, `config/schema.ts`). Three new SQLite tables extend the existing schema without touching existing columns: `decomposition_plans` (audit + re-planning), `rate_limit_retries` (crash-safe timer recovery), and `outcome_lessons` (scoped lesson store). The decomposition engine runs in a Docker container for the analysis pass (codebase access, full isolation), then approved sub-tasks execute in git worktrees (trusted context, 500ms startup). New components follow the optional dependency injection pattern established for `SubIssueCache` and `governance` — backward compatibility is preserved by design.
 
-**Major new and modified components:**
-1. `src/orchestrator/delegation.ts` (NEW) — `DelegationManifest` Zod schema, manifest parser, `delegateSubtasks()`, `waitForChildren()`, child slot budget enforcement
-2. `src/pipeline/condition.ts` (NEW) — Expression evaluator for `{{node.field}} op value` patterns using `filtrex`, under 100 lines
-3. `src/storage/repositories/delegations.ts` (NEW) — CRUD for the new `delegations` table
-4. `src/pipeline/executor.ts` (MODIFIED) — ready-queue scheduling model, `executeConditionalNode()`, `executeLoopNode()` with iteration checkpointing
-5. `src/storage/schema.ts` (MODIFIED) — `delegations` table; `parentRunId`, `role`, `depth` columns on `runs`
-
-**Key patterns to follow:**
-- Depth guard at `dispatchIssue()` level in code (not just system prompt instruction to the agent)
-- Sentinel-delimited manifest protocol (`---DELEGATE--- ... ---END-DELEGATE---`) — robust to agent explanation text surrounding the JSON
-- Static DAG with dynamic branch skipping (all nodes declared in YAML, executor marks non-taken branches as `skipped`)
-- Opaque loop meta-node (outer DAG sees a single `loop` node; inner mini-executor manages iterations with `max_iterations` hard cap)
-- Children dispatched after lead's `executeWorker()` returns — no concurrent workspace access between lead and children
+**Major components:**
+1. **Decomposition Engine** (`src/decomposition/`) — LLM call inside Docker container → Zod-validated DAG JSON → quality scoring → approval gate → emit `PipelineNode[]` to worktree runtime or fallback
+2. **Worktree Runtime** (`src/worktree/`) — git worktree lifecycle, execa-based agent spawn, topological layer execution, `git merge-tree` conflict detection, cleanup in try/finally
+3. **Rate Limit Retry Scheduler** (`src/rate-limit/`) — classify agent result (HTTP 429 vs other errors), preserve workspace with git checkpoint commit, schedule durable resume, restore timers on daemon restart
+4. **Outcome Learner** (`src/learning/`) — fire-and-forget lesson recording post-run, repo+label-scoped retrieval, 500-token injection cap, contradiction flagging
 
 ### Critical Pitfalls
 
-1. **Slot budget exhaustion (children eat parent's slots)** — The existing single-pool `SlotManager` causes deadlock: lead holds 1 slot, dispatches children that contend for remaining slots. Prevention: two-tier slot system with child slots pre-reserved at lead dispatch time. Children draw only from the reserved child pool.
+1. **Structurally valid but semantically bad decomposition plans** — structural validation (cycles, schema) passes but two nodes claim the same files, a test node has no implementation dependency, or the plan is a single node (the original issue repackaged). Prevent with a semantic validation pass: file-scope overlap detection, orphaned-test-node detection, node-count bounds check. Quality score gates auto-approve vs human review.
 
-2. **Parent/child relationships lost on daemon restart** — `OrchestratorState` is in-memory; the existing crash recovery has no concept of parent/child runs. Prevention: `parentRunId`, `depth`, `maxChildren`, `childrenDispatched` columns in `runs` table before any delegation code is written. `DelegationRepository.claimChildSlot()` must be atomic (`UPDATE WHERE children_dispatched < max_children`).
+2. **Partial plan failure leaves repo in incoherent state** — 3 of 5 nodes succeed, 2 fail; successful branches accumulate while failed ones stall; merging them produces non-compiling output. Prevent by defining the partial-failure strategy upfront before parallel execution ships: stop on first failure and re-plan, or roll back to single-agent. The fallback path must be tested and reliable before any decomposed plan executes in production.
 
-3. **Workspace contamination between concurrent child agents** — `WorkspaceManager.ensureWorkspace(issue.identifier)` returns the same path for all children of the same issue. Prevention: each child gets an isolated subdirectory `{issueWorkspace}/children/{childId}/` or a Git worktree (Git worktree is the pattern used by parallel agent tools in 2025).
+3. **Orphaned worktrees on bootstrap failure** — `git worktree add` succeeds, then any subsequent step fails; the worktree directory is registered in git's internal state but no cleanup fires. Prevent with mandatory try/finally cleanup, `git worktree prune` on daemon startup, SQLite tracking of all active worktree paths, and a maximum worktree count guard. This exact failure mode has occurred in production in the opencode project.
 
-4. **Conditional branch evaluation breaks static DAG assumptions** — The executor's `topologicalSort`-then-iterate model schedules all nodes including false branches. Prevention: refactor to a ready-queue model where nodes become eligible only when dependencies complete AND conditional guard evaluates true. This is a structural refactor of the core scheduling loop, not a small addition.
+4. **Rate limit misclassification** — "context length limit exceeded" and "rate limit exceeded" share surface-level string similarity; classifying context errors as rate limits creates infinite retry loops that never resolve. Prevent by classifying on HTTP status code first (429 = rate limit, 400/422 = client error); text pattern matching is fallback only. Rate limit retries use a separate counter from `max_retries`.
 
-5. **Loop nodes create implied cycles — DAG invariant violated** — `validateDAG` detects cycles as errors; loop nodes require re-execution. Prevention: model loops as opaque meta-nodes that own their internal iteration logic. The outer DAG sees a single `loop` node; `validateDAG` is not weakened.
-
-6. **Self-correction "loop of death"** — Without a convergence guard, the fix agent runs indefinitely burning cost. Prevention: `max_iterations` is a required field with no default; implement a no-progress detector (abort when two consecutive iterations produce identical test output by hash comparison); track and report best score across iterations on exhaustion.
-
-7. **Fix branch not carried forward between iterations** — Each loop iteration must explicitly build on the previous iteration's committed output. Prevention: the loop node's internal executor must maintain a `currentBase` branch that advances after each fix commit. Test runners in iteration N+1 must see cumulative state from iteration N.
+5. **Outcome learning noise accumulates faster than signal** — after 50+ runs, the lesson store contains contradictory, stale, and non-generalizable lessons; injecting all of them degrades agent behavior. Prevent with a hard 500-token injection cap, repo+label scope filtering, contradiction detection on insertion, and 60-day lesson TTL. Never auto-inject all lessons — use retrieval (top-N by relevance), not broadcast.
 
 ## Implications for Roadmap
 
-Based on the dependency graph established across all four research files, the mandatory build order is: schema first, then conditional nodes, then loop nodes, then delegation wiring, with self-correction as an integration milestone rather than a new feature phase. Five phases total.
+Based on the architecture research's explicit build order and the pitfall-to-phase mapping, a 5-phase structure is strongly recommended:
 
-### Phase 1: Schema Foundation and Type Extensions
+### Phase 1: Storage Schema Foundation
+**Rationale:** All four new components read from or write to new SQLite tables. Building schema and repositories first with no behavior change means phases 2-5 don't need to also manage schema migration concerns. This is the dependency for everything else.
+**Delivers:** Three new Drizzle tables (`decomposition_plans`, `rate_limit_retries`, `outcome_lessons`) + typed repository functions for each. Zero behavior change to existing code paths.
+**Addresses:** Storage requirements from all four new features before behavioral code lands
+**Avoids:** Schema churn when multiple features land simultaneously; tests existing migration infrastructure under the new tables before behavioral code depends on them
 
-**Rationale:** Every subsequent feature depends on the SQLite schema extension and PipelineNode type additions. Adding `parentRunId`, `role`, `depth`, `maxChildren`, `childrenDispatched` to `runs` and creating the `delegations` table must land before any delegation or recovery code. The PipelineNode type extension (`node_type`, `condition`, `loop` fields with Zod validation) must land before the executor refactor in Phase 2. This is a pure foundation phase — no behavioral change, only schema, types, migration, and one new dependency.
+### Phase 2: Rate Limit Retry Scheduler
+**Rationale:** Lowest implementation complexity of the four new components; delivers immediate user value (fewer failed runs before decomposition exists); exercises the storage extension pattern with real usage before the harder features land. Can proceed in parallel with Phase 3.
+**Delivers:** `src/rate-limit/` (detector, scheduler, types); modified `worker.ts`, `dispatcher.ts`, `retry.ts`; durable timer recovery on daemon restart; workspace preservation via checkpoint git commit before suspension
+**Uses:** `@anthropic-ai/sdk` `RateLimitError` typed error class; `rate_limit_retries` table from Phase 1
+**Implements:** Rate Limit Retry Scheduler component
+**Avoids pitfalls:** Rate limit misclassification (HTTP-status-first classifier); partial-workspace corruption (checkpoint commit before suspension); retry budget burn (separate `rateLimitAttempts` counter)
 
-**Delivers:** Drizzle migration with `delegations` table and extended `runs` columns; updated `PipelineNode` interface and Zod schema in `src/pipeline/parser.ts`; `filtrex` installed and typed.
+### Phase 3: Outcome Learner
+**Rationale:** Additive subscriber pattern with low coupling to other phases. Lessons accumulate over time — the earlier this is built, the more run history it captures before decomposition is added. Can proceed in parallel with Phase 2.
+**Delivers:** `src/learning/` (learner, classifier, formatter, types); `dispatcher.ts` fire-and-forget record call; `prompt.ts` lesson injection; `forgectl outcomes review` command stub
+**Uses:** `outcome_lessons` table from Phase 1; existing flight recorder events as raw input signal
+**Implements:** Outcome Learner component
+**Avoids pitfalls:** Lesson noise accumulation (500-token cap, scope filtering, TTL, contradiction detection); lesson scope contamination (repo+label scoped queries, never global broadcast)
 
-**Addresses:** Pitfall 2 (parent/child relationships lost on restart) — schema must precede all delegation code.
+### Phase 4: Worktree Runtime
+**Rationale:** Decomposition Engine (Phase 5) requires a working worktree runtime to execute approved plans. Worktree is medium-high complexity and has the most critical safety concerns (cleanup on failure, security boundary). It must be independently stable before the decomposition engine depends on it.
+**Delivers:** `src/worktree/` (manager, executor, merger, scheduler); git worktree lifecycle; execa-based agent spawn; `git merge-tree` dry-run conflict detection; topological layer execution; startup prune
+**Uses:** `simple-git ^3.27.0`, `execa ^9.6.0`, `p-queue ^9.1.0`; existing pipeline DAG `topologicalSort()`; existing workspace manager path sanitization
+**Implements:** Worktree Runtime component
+**Avoids pitfalls:** Orphaned worktrees (try/finally cleanup, startup prune, SQLite tracking); security boundary (stripped env vars, workspace path containment via existing WorkspaceManager); bootstrap failure (cleanupFailedWorktree helper)
 
-**Avoids:** The "implement delegation without schema" technical debt shortcut that PITFALLS.md marks as never acceptable.
-
-**Research flag:** Standard patterns. No additional research needed.
-
-### Phase 2: Conditional Pipeline Nodes
-
-**Rationale:** Conditional nodes are the foundation for loop nodes and self-correction. The executor refactor from pre-computed topological order to a ready-queue model is the most architecturally significant change in this milestone and must be complete before loop nodes are added on top. Self-contained pipeline subsystem change — testable with unit tests against mock `NodeExecution` states without any delegation complexity.
-
-**Delivers:** `src/pipeline/condition.ts` expression evaluator using `filtrex`; `executeConditionalNode()` in executor; ready-queue scheduling model replacing static topological sort; `skipped` status with `skipReason: "condition"` distinct from rerun-selection skips; dry-run support showing conditional logic.
-
-**Addresses:** P1 features — `condition` field with expression evaluator; `else_node` routing; node type discriminant in PipelineExecutor.
-
-**Avoids:** Pitfall 4 (conditional branching breaks static DAG assumptions); Pitfall 10 (condition field silently ignored by executor without type discriminant).
-
-**Research flag:** The ready-queue scheduling refactor is the most architecturally novel change in this milestone. Recommend a focused plan that explicitly specifies the new scheduling contract before writing code — partial refactors leave inconsistent behavior.
-
-### Phase 3: Loop Pipeline Nodes
-
-**Rationale:** Loop nodes build directly on the type dispatch infrastructure from Phase 2. The opaque meta-node model must be validated independently before self-correction pipelines compose on top. Per-iteration checkpointing with `iterationIndex` is required for crash recovery and must be designed before any loop code lands.
-
-**Delivers:** `executeLoopNode()` with iteration counter; `max_iterations` enforcement before condition evaluation; per-iteration checkpoint with `iterationIndex` (crash recovery resumes from last completed iteration); `loop-iterating` status in `NodeExecution`; loop exhaustion failure with full iteration history written to flight recorder.
-
-**Addresses:** P1 features — `loop` field, `max_iterations`, hard safety cap. P2 — loop iteration count in status API.
-
-**Avoids:** Pitfall 5 (loop nodes violate DAG acyclicity invariant); Pitfall 6 (loop of death without hard cap).
-
-**Research flag:** Well-documented patterns (Google ADK LoopAgent, Haystack, AWS guidance). No additional research needed.
-
-### Phase 4: Multi-Agent Delegation
-
-**Rationale:** Delegation is architecturally independent of the pipeline node changes but shares the Phase 1 schema. Building delegation after the pipeline phases allows focused attention on the two highest-severity design decisions in the entire milestone: the two-tier slot pool and workspace isolation. Both have correctness implications for crash recovery and must be resolved in planning before any code is written.
-
-**Delivers:** `src/orchestrator/delegation.ts` (manifest parser, `delegateSubtasks()`, `waitForChildren()`); `src/storage/repositories/delegations.ts`; modified `dispatchIssue()` with depth cap and child slot pool; modified `executeWorker()` with manifest parsing; child workspace isolation (`ensureChildWorkspace()`); governance inheritance (children default to `full` autonomy, gate fires once at lead dispatch); aggregate summary comment on parent issue after all children complete.
-
-**Addresses:** P1 features — lead subtask list, concurrent child dispatch, `maxChildren` + depth=2, SQLite child tracking, child result aggregation. P2 — governance inheritance.
-
-**Avoids:** Pitfall 1 (slot exhaustion); Pitfall 2 (restart relationship loss); Pitfall 3 (workspace contamination); Pitfall 8 (SQLite write contention from burst child completions); Pitfall 9 (governance gate fires N times for N children).
-
-**Research flag:** The two-tier slot design and child workspace isolation strategy (subdirectory vs Git worktree) require explicit resolution in a plan phase before implementation. These are novel to the codebase with no direct v2.0 precedent.
-
-### Phase 5: Self-Correction Integration and Validation
-
-**Rationale:** Self-correction is not new code — it is a composition of loop nodes (Phase 3) plus the existing context piping mechanism and `ValidationResult` fields on `NodeExecution.result`. This phase proves the composition works end-to-end, adds the no-progress detector, validates fix-branch carry-forward, and documents the required WORKFLOW.md patterns. The primary deliverable is integration tests and documentation, not new subsystems.
-
-**Delivers:** Integration tests proving test-fail-fix-retest pipeline; no-progress detector comparing test output hashes between consecutive iterations; iteration summary written to flight recorder on loop exhaustion; documented self-correction pipeline YAML patterns; fix node `exclude` list guidance in WORKFLOW.md documentation.
-
-**Addresses:** P1 features — failure output piped to fix node; fix node exclude guard; clean exhaustion failure with iteration history. P2 — self-correction history in fix prompts.
-
-**Avoids:** Pitfall 6 (loop of death — no-progress detector); Pitfall 7 (fix branch not carried forward between iterations).
-
-**Research flag:** Standard composition pattern. No additional research needed. Primary work is integration tests and documentation.
+### Phase 5: Decomposition Engine
+**Rationale:** Highest complexity; depends on Phase 4 (worktree runtime) for parallel execution of approved plans. Must not be wired as middleware on the default dispatch path — single-agent remains the default throughout. Builds on the full foundation established in Phases 1-4.
+**Delivers:** `src/decomposition/` (engine, prompt, validator, approval, fallback, types); `worker.ts` decomposition detection; structural + semantic DAG validation; quality scoring; human approval gate via existing governance; `FORGECTL_SKIP_DECOMPOSITION` escape hatch
+**Uses:** `@anthropic-ai/sdk` `betaZodTool` for schema-enforced LLM output; existing `detectIssueCycles()` from `src/tracker/sub-issue-dag.ts`; existing `enterPendingApproval()` from `src/governance/`
+**Implements:** Decomposition Engine component
+**Avoids pitfalls:** Bad plan execution (semantic validation pass before approval gate); single-agent path breakage (decomposition is opt-in by label/config, never middleware); partial failure with no fallback (fallback-to-single-agent path required before parallel execution ships)
 
 ### Phase Ordering Rationale
 
-- Schema must be first because `parentRunId`/`depth` and the `delegations` table are prerequisites for delegation crash recovery, which is a correctness requirement — not an optimization
-- Conditional nodes before loop nodes because loop node dispatch is built on the type-dispatch switch introduced in the conditional phase; attempting them in parallel creates integration conflicts
-- Loop nodes before self-correction because self-correction is a composition of loop nodes — there is nothing to compose until loops exist
-- Delegation after pipeline phases because the slot design and workspace isolation decisions are high-severity and warrant focused attention without concurrent pipeline complexity; delegation is also architecturally independent, so the sequencing has no penalty
-- Self-correction as the final integration milestone because it validates the composition of every prior phase and has no new code requirements
+- **Schema first** because all four features share the same storage layer; landing schema once avoids parallel schema changes conflicting across feature branches.
+- **Rate limit retry and outcome learner can parallelize** — they touch different code paths (worker error handling vs dispatcher completion hook) with no shared new code.
+- **Worktree before decomposition** because decomposition has no value without a working parallel execution backend; shipping decomposition engine without worktree runtime produces approval confirmations with nowhere to go.
+- **Decomposition last** to allow all supporting infrastructure to be independently tested and used in production before the most complex orchestration layer is added on top.
+- **P2 features (conflict detection, full sqlite-vec RAG, dead-end detection) after v5.0 ships** — once Phase 4 worktree runtime is proven stable and Phase 3 lesson store has meaningful data to retrieve from.
 
 ### Research Flags
 
-Phases needing focused pre-implementation design (plan phase recommended):
+Phases likely needing deeper research during planning:
+- **Phase 4 (Worktree Runtime):** The security model for "trusted" worktree execution needs precise definition before implementation — what OS-level isolation (namespaces, capability dropping, env stripping) is used below Docker's level? The pitfalls research identifies credential exposure via inherited `process.env` as a critical risk but does not specify the exact mitigations to use.
+- **Phase 5 (Decomposition Engine):** The decomposition prompt template is the highest-leverage artifact in the entire feature. Prompt engineering for structured DAG output across diverse real-world issue types is not covered in the research. Budget explicit iteration cycles for the decomposition prompt during Phase 5 planning.
 
-- **Phase 2 (Conditional Nodes):** The ready-queue scheduling refactor changes the core scheduling contract of `PipelineExecutor`. A plan phase should specify the new scheduling interface explicitly before implementation begins. Risk: partial refactor leaves inconsistent behavior that is hard to test.
-
-- **Phase 4 (Multi-Agent Delegation):** Two design decisions need explicit resolution before code: (1) two-tier slot pool design — whether child slots are reserved eagerly at lead dispatch or lazily at first child dispatch (both have restart recovery implications); (2) workspace isolation strategy — subdirectory vs Git worktree (affects WorkspaceManager API, child agent prompts, and fan-in merge logic).
-
-Phases with standard, well-documented patterns (skip additional research):
-
-- **Phase 1 (Schema Foundation):** Drizzle self-referential FK pattern is verified; migration tooling is established from v2.0.
-- **Phase 3 (Loop Nodes):** Opaque meta-node loop model is well-documented in Google ADK, Haystack, and AWS guidance.
-- **Phase 5 (Self-Correction):** Pure composition and integration testing; no novel design decisions.
+Phases with standard patterns (skip research-phase):
+- **Phase 1 (Storage Schema):** Standard Drizzle ORM migration pattern; identical to prior v3.0 schema additions. No novel patterns.
+- **Phase 2 (Rate Limit Retry):** HTTP 429 + `Retry-After` handling is fully documented in the official Anthropic SDK and OpenAI rate limit cookbook. The pattern is deterministic and well-tested in production.
+- **Phase 3 (Outcome Learner):** Fire-and-forget subscriber pattern directly matches the existing EventRecorder. Schema is fully defined in architecture research.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | `filtrex` verified against npm registry (zero deps, ESM, TypeScript, published Oct 2024). All "no new dependency" conclusions verified by direct codebase analysis. Alternatives (`jexl`, `expr-eval`, `node:vm`, `vm2`) ruled out with documented rationale. |
-| Features | HIGH | P1 features confirmed by Anthropic engineering blog, Google ADK docs, AWS prescriptive guidance, Haystack docs. Anti-features (test weakening, parallel fix attempts, unlimited delegation depth) confirmed by 2026 practitioner reports. Dependency graph across features is fully mapped. |
-| Architecture | HIGH | All component analysis based on direct v2.0 source code inspection (`src/pipeline/executor.ts`, `src/orchestrator/dispatcher.ts`, `src/storage/schema.ts`, `src/validation/runner.ts`). No speculative architecture — every integration point names the specific file and function. |
-| Pitfalls | HIGH (code-verified) / MEDIUM (ecosystem) | Code-verified pitfalls (slot exhaustion model, static DAG assumptions, in-memory OrchestratorState, missing `parentRunId` column) are HIGH confidence from direct source analysis. Ecosystem pitfalls (SQLite write contention under burst, self-correction loop of death, test-weakening behavior) are MEDIUM from multiple independent practitioner sources (2025-2026). |
+| Stack | HIGH | All dependencies verified against official GitHub repos and npm; version compatibility with Node 20 + ESM confirmed. One caveat: sqlite-vec npm package name requires verification at install time before pinning. |
+| Features | MEDIUM-HIGH | P1 features are well-validated against real-world systems (ComposioHQ, opencode). P2/P3 features are directionally clear but less validated in production at this exact scale and integration depth. |
+| Architecture | HIGH | Build order is explicitly dependency-driven; all integration points are named against the actual forgectl v3.0 codebase. Component boundaries match established patterns. No existing subsystem needs replacement. |
+| Pitfalls | HIGH | Critical pitfalls are sourced from real-world incident reports (opencode bootstrap failure issue, OpenAI Codex orphaned processes), peer-reviewed failure taxonomy (MAST arXiv:2503.13657), and production post-mortems. |
 
-**Overall confidence:** HIGH
+**Overall confidence:** HIGH for v5.0 core scope (Phases 1-5). MEDIUM for P2 features (conflict detection, full semantic dead-end tracking, sqlite-vec RAG).
 
 ### Gaps to Address
 
-- **Slot pool design specifics:** Research describes the two-tier slot model conceptually. The exact implementation — eager vs lazy child slot reservation, and how child slots interact with the global `maxConcurrent` config — must be decided in Phase 4 planning. Both approaches have correctness implications for the crash recovery case where the daemon restarts mid-delegation.
-
-- **Git worktree vs subdirectory for child workspaces:** Both are valid isolation strategies. Git worktrees provide stronger isolation and match how parallel agent tools (Cursor, others) implement it in 2025. Subdirectories are simpler but require stricter child agent prompting. The choice affects `WorkspaceManager` API design and should be resolved before Phase 4 implementation begins.
-
-- **No-progress detection implementation:** The self-correction no-progress detector (abort when two consecutive iterations produce identical test output) is the right concept. The implementation detail — raw stdout hash comparison vs structured failure set comparison — needs a concrete decision in Phase 5 planning. Structured comparison is more robust to whitespace/timestamp noise in test output.
-
-- **Governance inheritance for `parentApprovalId`:** Research specifies children should inherit `full` autonomy by default with a `parentApprovalId` field on `GovernanceOpts`. The mechanism for the post-approval gate (fires once on aggregate output vs per-child) needs explicit design in Phase 4 to avoid the "N approval comments for N children" pitfall.
+- **sqlite-vec npm package name:** Verify the exact installable package name against `asg017/sqlite-vec` releases before Phase 3. Use SQLite FTS5 as fallback if binary is unavailable for the target platform (linux-x64).
+- **Claude Code exit code taxonomy:** The rate limit classifier in Phase 2 requires a verified mapping of `claude` CLI exit codes and stderr patterns to error types (rate limit vs context overflow vs hard error). Must be tested against real Claude Code output before the classifier ships — not synthetic strings.
+- **Decomposition prompt quality:** Phase 5 should budget time for prompt iteration. The first version of the decomposition prompt will likely produce plans that are too coarse or too fine-grained for real-world issues across diverse issue types and repo structures.
+- **Worktree security boundary:** Precisely what isolation the worktree runtime provides vs Docker needs to be designed during Phase 4 planning. The exact env-stripping and path-containment implementation is not specified in the research — only the risk is identified.
 
 ## Sources
 
-### Primary (HIGH confidence — official docs and direct code analysis)
+### Primary (HIGH confidence)
+- [anthropics/anthropic-sdk-typescript](https://github.com/anthropics/anthropic-sdk-typescript) — `betaZodTool`, `RateLimitError`, streaming
+- [@anthropic-ai/sdk on npm](https://www.npmjs.com/package/@anthropic-ai/sdk) — version 0.78.0 verified
+- [sindresorhus/execa](https://github.com/sindresorhus/execa) — v9.6.x, ESM-native, typed subprocess lifecycle
+- [sindresorhus/p-queue](https://github.com/sindresorhus/p-queue) — v9.1.0, pause/resume/priority/drain
+- [steveukx/git-js](https://github.com/steveukx/git-js) — simple-git v3.27, worktree `.raw()` API
+- [clash-sh/clash](https://github.com/clash-sh/clash) — `git merge-tree` dry-run for early conflict detection
+- [git-merge-tree documentation](https://git-scm.com/docs/git-merge-tree) — three-way merge simulation without side effects
+- [OpenCode worktree bootstrap failure issue + fix PR](https://github.com/anomalyco/opencode) — real-world orphaned worktree pattern and cleanupFailedWorktree fix
+- [MAST: Multi-Agent System Failure Taxonomy (arXiv:2503.13657)](https://arxiv.org/pdf/2503.13657) — decomposition failure modes, coordination failures
+- [TDAG: Dynamic Task Decomposition (arXiv:2402.10178)](https://arxiv.org/abs/2402.10178) — DAG-based sub-agent generation with per-node subagent
+- [OpenAI rate limit handling cookbook](https://cookbook.openai.com/examples/how_to_handle_rate_limits) — Retry-After patterns, thundering herd prevention
+- forgectl v3.0 source: `src/pipeline/dag.ts`, `src/tracker/sub-issue-dag.ts`, `src/governance/approval.ts` — reuse points confirmed via direct codebase inspection
 
-- Direct codebase analysis of v2.0 `src/` — `executor.ts`, `dispatcher.ts`, `worker.ts`, `state.ts`, `schema.ts`, `runner.ts`, `governance/types.ts` (2026-03-12)
-- [filtrex on npm](https://www.npmjs.com/package/filtrex) — v3.1.0, published 2024-10-14, zero deps, ESM + TypeScript
-- [filtrex GitHub](https://github.com/joewalnes/filtrex) — boolean expression DSL, safety guarantees, custom function injection
-- [Drizzle ORM relations v2](https://orm.drizzle.team/docs/relations-v2) — self-referential FK patterns, current docs
-- [Google ADK loop agents documentation](https://google.github.io/adk-docs/agents/workflow-agents/loop-agents/) — loop-until termination, max_iterations, sub-agent signaling
-- [Haystack pipeline loops documentation](https://docs.haystack.deepset.ai/docs/pipeline-loops) — ConditionalRouter, max_runs_per_component, self-correction pattern with feedback injection
-- [AWS Prescriptive Guidance: Evaluator-reflect-refine loop patterns](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — standard self-correction loop structure
-- [Anthropic multi-agent engineering blog](https://www.anthropic.com/engineering/multi-agent-research-system) — orchestrator-worker pattern, delegation specs, effort budgeting
+### Secondary (MEDIUM confidence)
+- [ComposioHQ/agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) — worktree-per-task pattern, CI-gated dispatch, implicit planner
+- [greyhaven-ai/autocontext](https://github.com/greyhaven-ai/autocontext) — outcome learning architecture, curator roles, lesson curation pipeline
+- [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) — K-NN vector search in SQLite, active 2025 (npm package name requires verification)
+- [git worktrees for parallel AI agents (Upsun)](https://devcenter.upsun.com/posts/git-worktrees-for-parallel-ai-coding-agents/) — shared resource pitfalls, cleanup patterns
+- [No More Stale Feedback: Co-Evolving Critics (arXiv:2601.06794)](https://arxiv.org/abs/2601.06794) — stale lesson failure mode in agent feedback loops
+- [OpenAI Codex orphaned processes issue](https://github.com/openai/codex/issues/11090) — PPID=1 orphaned processes pattern
+- [LLM tool-calling rate limits in production](https://medium.com/@komalbaparmar007/llm-tool-calling-in-production-rate-limits-retries-and-the-infinite-loop-failure-mode-you-must-2a1e2a1e84c8) — $1.6M runaway loop case study, rate limit blast radius
 
-### Secondary (MEDIUM confidence — community consensus, multiple sources agree)
-
-- [Arize AI: Orchestrator-worker agent comparison](https://arize.com/blog/orchestrator-worker-agents-a-practical-comparison-of-common-agent-frameworks/) — LangGraph vs CrewAI vs OpenAI Agents SDK tradeoffs
-- [Azure AI Agent Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns) — supervisor/hierarchical pattern rationale
-- [Git Worktrees for Parallel Agents (DEV Community)](https://dev.to/arifszn/git-worktrees-the-power-behind-cursors-parallel-agents-19j1) — workspace isolation pattern, per-agent branches
-- [SQLite concurrent writes (Ten Thousand Meters)](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) — SQLITE_BUSY under concurrent writers, BEGIN IMMEDIATE pattern
-- [The "Loop of Death" — Sattyam Jain, Jan 2026](https://medium.com/@sattyamjain96/the-loop-of-death-why-90-of-autonomous-agents-fail-in-production-and-how-we-solved-it-at-e98451becf5f) — step budgets, convergence failure patterns
-- [Self-Correcting Multi-Agent AI Systems — Soham Ghosh, Feb 2026](https://medium.com/@sohamghosh_23912/self-correcting-multi-agent-ai-systems-building-pipelines-that-fix-themselves-010786bae2db) — best-score tracking, iteration history
-- [Galileo AI: Multi-agent coordination strategies](https://galileo.ai/blog/multi-agent-coordination-strategies) — parent-child topology, slot exhaustion patterns
-- [Multi-Agent System Reliability (Maxim AI)](https://www.getmaxim.ai/articles/multi-agent-system-reliability-failure-patterns-root-causes-and-production-validation-strategies/) — coordination failures, retry ambiguity, duplicate actions
-
-### Tertiary (MEDIUM-LOW confidence — single source, validate during implementation)
-
-- [DEV Community: "I Let an AI Agent Write 275 Tests"](https://dev.to/htekdev/i-let-an-ai-agent-write-275-tests-heres-what-it-was-actually-optimizing-for-32n7) — agents weaken tests anti-pattern (aligned with common sense; validate with fix node `exclude` list in practice)
-- [I Tried Agent Self-Correction (Nexumo, Feb 2026)](https://medium.com/@Nexumo_/i-tried-agent-self-correction-tool-errors-made-it-worse-d6ea76a17c1c) — self-correction backfire, tool error amplification
+### Tertiary (LOW confidence — validate during implementation)
+- sqlite-vec Node.js tutorial (DEV Community, 2025) — integration pattern confirmed but package name unverified
+- Various 2026 agentic workflow blog posts — directional confirmation of patterns; treat as supporting evidence only
 
 ---
-*Research completed: 2026-03-12*
+*Research completed: 2026-03-14*
 *Ready for roadmap: yes*

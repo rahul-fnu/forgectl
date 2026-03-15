@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ConfigSchema } from "../../src/config/schema.js";
+import { ConfigSchema, WorkflowSchema } from "../../src/config/schema.js";
 import { deepMerge } from "../../src/config/loader.js";
 
 describe("ConfigSchema", () => {
@@ -84,6 +84,25 @@ describe("ConfigSchema", () => {
     expect(() => ConfigSchema.parse({
       container: { network: { mode: "invalid" } }
     })).toThrow();
+  });
+});
+
+describe("WorkflowSchema", () => {
+  it("accepts skills array and stores it", () => {
+    const workflow = WorkflowSchema.parse({
+      name: "test",
+      container: { image: "node:20" },
+      skills: ["a", "b"],
+    });
+    expect(workflow.skills).toEqual(["a", "b"]);
+  });
+
+  it("defaults skills to empty array when not provided", () => {
+    const workflow = WorkflowSchema.parse({
+      name: "test",
+      container: { image: "node:20" },
+    });
+    expect(workflow.skills).toEqual([]);
   });
 });
 

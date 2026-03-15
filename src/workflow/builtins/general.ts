@@ -17,4 +17,5 @@ Complete the task as instructed.`,
   review: { enabled: false, system: "" },
   cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

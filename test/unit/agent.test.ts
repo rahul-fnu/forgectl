@@ -47,6 +47,15 @@ describe("claudeCodeAdapter", () => {
     const cmd = claudeCodeAdapter.buildShellCommand(PROMPT_FILE, { ...defaultOptions, model: "model's-name" });
     expect(cmd).toContain("'model'\\''s-name'");
   });
+
+  it("includes --add-dir flags as separate shell-escaped entries", () => {
+    const cmd = claudeCodeAdapter.buildShellCommand(PROMPT_FILE, {
+      ...defaultOptions,
+      flags: ["--add-dir", "/home/node/.claude/skills/gsd"],
+    });
+    expect(cmd).toContain("'--add-dir'");
+    expect(cmd).toContain("'/home/node/.claude/skills/gsd'");
+  });
 });
 
 describe("codexAdapter", () => {

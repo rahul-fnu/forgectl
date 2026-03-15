@@ -23,11 +23,31 @@ export function prepareClaudeMounts(auth: ClaudeAuth, runId: string): ContainerM
     binds.push(`${secretsDir}:/run/secrets:ro`);
     env.ANTHROPIC_API_KEY_FILE = "/run/secrets/anthropic_api_key";
   } else if (auth.type === "oauth_session" && auth.sessionDir) {
-    binds.push(`${auth.sessionDir}:/home/node/.claude:ro`);
+    // Create a writable .claude dir with only credentials copied in.
+    // Claude Code needs a writable home — mounting ~/.claude read-only breaks it.
+    // Same pattern as Codex mount: copy auth files to temp dir.
+    const claudeHome = join(secretsDir, "claude-home");
+    mkdirSync(claudeHome, { recursive: true, mode: 0o700 });
+
+    // Copy .credentials.json (OAuth tokens)
+    const credsPath = join(auth.sessionDir, ".credentials.json");
+    if (existsSync(credsPath)) {
+      const creds = readFileSync(credsPath, "utf-8");
+      writeFileSync(join(claudeHome, ".credentials.json"), creds, { mode: 0o600 });
+    }
+
+    // Copy settings.json if it exists
+    const settingsPath = join(auth.sessionDir, "settings.json");
+    if (existsSync(settingsPath)) {
+      const settings = readFileSync(settingsPath, "utf-8");
+      writeFileSync(join(claudeHome, "settings.json"), settings, { mode: 0o600 });
+    }
+
+    binds.push(`${claudeHome}:/home/node/.claude`);
+
     // Claude Code also needs .claude.json (sibling of .claude dir) for config
     const claudeJsonPath = join(auth.sessionDir, "..", ".claude.json");
     if (existsSync(claudeJsonPath)) {
-      // Copy to secrets dir so it's writable (Claude Code writes to it)
       const containerJsonPath = join(secretsDir, ".claude.json");
       const jsonContent = readFileSync(claudeJsonPath, "utf-8");
       writeFileSync(containerJsonPath, jsonContent, { mode: 0o600 });

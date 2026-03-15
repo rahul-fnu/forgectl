@@ -1,28 +1,29 @@
 # Milestones
 
-## v2.1 Autonomous Factory (Shipped: 2026-03-14)
+## v3.0 E2E GitHub Integration (Shipped: 2026-03-14)
 
-**Phases completed:** 5 phases, 11 plans
-**Git range:** 00cb030..5bf7819
-**LOC:** 17,026 src + 22,248 test (TypeScript)
+**Phases completed:** 6 phases, 11 plans
+**Git range:** 6708588..f43428b (69 commits)
+**LOC:** 16,662 src + 21,299 test (TypeScript)
 **Timeline:** 2 days (2026-03-13 → 2026-03-14)
-**Tests:** 1,211 passing across 100 test files
+**Tests:** 1,162 passing across 101 test files
 
 **Key accomplishments:**
-1. Conditional pipeline nodes: if/else branch routing with filtrex expression evaluation, ready-queue executor, cascade skip propagation, and dry-run annotations
-2. Loop pipeline nodes: loop-until iteration with global max_iterations safety cap (50), per-iteration checkpointing, crash recovery, and API-visible loop state
-3. Multi-agent delegation: lead agent decomposes issues into subtasks, concurrent child dispatch with two-tier slot pools, single-retry failure recovery, and aggregate synthesis write-back
-4. Self-correction integration: test-fail/fix/retest pipeline pattern with progressive context, no-progress detection (SHA-256 hash), exclusion enforcement, and coverage-aware loop termination
-5. Schema foundation: SQLite migration 0005, delegations table, extended PipelineNode types for conditions/loops, filtrex expression evaluator
+1. GitHub sub-issue DAG ordering — automatic dependency-aware dispatch from issue hierarchy with TTL cache and cycle detection
+2. Skill/config bind-mounting — secure read-only mounts of CLAUDE.md, skills/, agents/ into containers with credential exclusion
+3. Agent teams — Claude Code multi-agent collaboration inside containers with memory scaling (1GB/teammate) and weighted slot management
+4. Sub-issue progress rollup — live parent issue comments with in-place updates and synthesizer-gated auto-close
+5. Full composition wiring — SubIssueCache singleton threaded through orchestrator, scheduler, webhooks, and dispatcher
+6. Two gap-closure phases (29, 30) fixed cross-phase integration bugs found by milestone audit
 
 **Tech debt:**
-- Pre-existing: eslint.config.js missing — npm run lint non-functional
-- ROADMAP route path documentation discrepancy (GET /pipelines/:id vs /api/v1/pipeline/:id/status)
-- loadConfig() coupling in executeLoopNode for excludePatterns (not injected via DI)
-- Phase 23 VERIFICATION.md artifact not updated after DELEG-02 gap fix
-- console.log in executor.ts for terminal UI output (intentional)
+- mapFrontMatterToConfig() missing team and skills field mapping (orchestrated path only, CLI works)
+- buildOrchestratedRunPlan() hardcodes skills:[] (orchestrated path only)
+- Duplicate GitHubContext type in index.ts + dispatcher.ts (maintenance hazard)
+- Cycle detection uses console.warn not structured logger
+- ChildStatus in_progress/failed/blocked states unused by dispatcher
 
-**Archive:** [milestones/v2.1-ROADMAP.md](milestones/v2.1-ROADMAP.md) | [milestones/v2.1-REQUIREMENTS.md](milestones/v2.1-REQUIREMENTS.md)
+**Archive:** [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md) | [milestones/v3.0-REQUIREMENTS.md](milestones/v3.0-REQUIREMENTS.md)
 
 ---
 

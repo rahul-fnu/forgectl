@@ -2,7 +2,7 @@
 
 ## What This Is
 
-forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, browser-use) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. Now an autonomous factory: agents can decompose complex issues into subtasks, delegate to child workers, self-correct through test-fail-fix loops, and route pipeline execution through conditional and iterative branches.
+forgectl is a CLI + daemon that orchestrates AI agents (Claude Code, Codex, browser-use) in isolated Docker containers. It continuously polls issue trackers, dispatches agents to sandboxed workspaces, validates results, and reports back — with zero human intervention after setup. A durable runtime with crash recovery, governance gates, GitHub App for phone-first control, sub-issue dependency ordering, skill mounting, and agent teams.
 
 ## Core Value
 
@@ -26,76 +26,65 @@ Continuously pull work from issue trackers, dispatch AI agents to execute it in 
 - Real-time dashboard with orchestrator monitoring — v1.0
 - End-to-end demo: GitHub issue → dispatch → validate → comment → auto-close — v1.0
 - Backward compatibility (forgectl run, forgectl pipeline still work) — v1.0
-- SQLite persistent storage with Drizzle ORM, auto-migrations, typed repositories — v2.0
-- Append-only flight recorder with event sourcing audit trail and state snapshots — v2.0
-- CLI `forgectl run inspect <id>` for full audit trail — v2.0
-- Rich write-back: structured GitHub comments with changes, validation, cost — v2.0
-- Crash recovery: interrupted runs resume or fail cleanly on daemon restart — v2.0
-- Checkpoint/resume at step boundaries with idempotent replay — v2.0
-- Pause for human input with persistent context and resume on reply — v2.0
-- Atomic execution locks per issue/workspace via SQLite — v2.0
-- Configurable autonomy levels (full/semi/interactive/supervised) per workflow — v2.0
-- Approval state machine with auto-approve rules — v2.0
-- GitHub App: webhook receiver, HMAC verification, slash commands, permission checks — v2.0
-- Conversational clarification: agent asks question, pauses, resumes on reply — v2.0
-- Check runs on PRs and auto-generated PR descriptions — v2.0
-- Browser-use agent adapter with Python sidecar for web research workflows — v2.0
-- Conditional pipeline nodes with filtrex expression evaluation, if/else branching — v2.1
-- Ready-queue executor with runtime condition evaluation, cascade skip, else_node activation — v2.1
-- if_failed/if_passed YAML shorthand for condition expressions — v2.1
-- Skipped node status visible in pipeline API and dry-run annotations — v2.1
-- Condition evaluation errors treated as fatal (no silent skipping) — v2.1
-- Loop pipeline nodes with until expression and configurable max_iterations — v2.1
-- Global max_iterations safety cap (50) enforced regardless of YAML value — v2.1
-- Per-iteration loop checkpointing for crash recovery mid-loop — v2.1
-- Loop iteration counter exposed via REST API — v2.1
-- Lead agent decomposes issues into structured subtask specs via sentinel-delimited manifest — v2.1
-- Concurrent child worker dispatch with two-tier slot pool (top-level vs child) — v2.1
-- Delegation depth hard-capped at 2, maxChildren budget from WORKFLOW.md — v2.1
-- Parent/child run relationships persisted in SQLite, survive daemon restart — v2.1
-- Failed child retry with updated instructions incorporating failure context — v2.1
-- Lead agent synthesizes all child results into single aggregate summary — v2.1
-- Self-correction: test-fail/fix/retest pipeline with progressive context across iterations — v2.1
-- Fix agent exclusion enforcement (WORKFLOW.md exclude list) — v2.1
-- Coverage self-correction with structured output parsing and _coverage variable — v2.1
-- No-progress detection aborts loops when consecutive iterations produce identical output — v2.1
+- ✓ SQLite persistent storage with Drizzle ORM, auto-migrations, typed repositories — v2.0
+- ✓ Append-only flight recorder with event sourcing audit trail and state snapshots — v2.0
+- ✓ CLI `forgectl run inspect <id>` for full audit trail — v2.0
+- ✓ Rich write-back: structured GitHub comments with changes, validation, cost — v2.0
+- ✓ Crash recovery: interrupted runs resume or fail cleanly on daemon restart — v2.0
+- ✓ Checkpoint/resume at step boundaries with idempotent replay — v2.0
+- ✓ Pause for human input with persistent context and resume on reply — v2.0
+- ✓ Atomic execution locks per issue/workspace via SQLite — v2.0
+- ✓ Configurable autonomy levels (full/semi/interactive/supervised) per workflow — v2.0
+- ✓ Approval state machine with auto-approve rules — v2.0
+- ✓ GitHub App: webhook receiver, HMAC verification, slash commands, permission checks — v2.0
+- ✓ Conversational clarification: agent asks question, pauses, resumes on reply — v2.0
+- ✓ Check runs on PRs and auto-generated PR descriptions — v2.0
+- ✓ Browser-use agent adapter with Python sidecar for web research workflows — v2.0
+- ✓ GitHub sub-issue hierarchy parsed into DAG dependencies for dispatch ordering — v3.0
+- ✓ Custom skill/config directories bind-mounted into agent containers — v3.0
+- ✓ Agent teams enabled per workflow with memory scaling and slot weighting — v3.0
+- ✓ Sub-issue progress rollup and synthesizer-gated auto-close — v3.0
 
 ### Active
 
-(None yet — define requirements for next milestone with `/gsd:new-milestone`)
+## Current Milestone: v5.0 Intelligent Decomposition
+
+**Goal:** Make forgectl handle complex, multi-file issues reliably by breaking them into focused sub-tasks, executing them in parallel on lightweight runtimes, and learning from outcomes over time.
+
+**Target features:**
+- LLM-driven task decomposition inside containers (agent analyzes issue, outputs DAG)
+- Decomposition validation with human approval gate and single-agent fallback
+- Lightweight worktree + process runtime (no Docker overhead for trusted sub-tasks)
+- Parallel sub-task execution with branch-per-node merge and conflict detection
+- Decomposition feedback loop (re-plan vs re-execute on failure)
+- Rate limit detection with scheduled retry and workspace preservation
+- Run outcome learning (persist lessons, dead-end tracking, feed into future prompts)
 
 ### Out of Scope
 
-- Visual drag-and-drop workflow builder — deferred to v3, developer dashboard first
+- Visual drag-and-drop workflow builder — developer dashboard first
 - Distributed multi-worker execution — single machine first, scale later
 - Multi-tenant RBAC — single-user for now
 - Linear/Jira tracker adapters — GitHub + Notion first, others after adapter interface is proven
 - Generic LLM adapter interface (OpenAI, Gemini APIs) — deferred from v1.0
 - Notion App integration (database triggers, rich write-back) — deferred
-- Mirrored task model / tracker normalization — deferred
-- Dashboard v2 (power-user aggregate views) — deferred
 - Slack/Discord bot — get GitHub + Notion right first
 - Your own mobile app — GitHub and Notion apps are the UI
 - Full CQRS / event replay for state — events are audit trail, not source of truth
 - PostgreSQL support — SQLite sufficient for single-machine
 - Per-tool budget granularity — budget per run and per agent/period is enough
 - Temporal/BullMQ external dependencies — app-level checkpointing on SQLite
-- Unlimited delegation depth — depth=2 sufficient, each level multiplies cost
-- Turing-complete condition expressions — security risk, safe expression subset only
-- Runtime pipeline modification (adding nodes dynamically) — makes checkpoint fragile
-- Parallel alternative fix attempts — merge conflicts from parallel fixes
-- Agents weakening tests — fix agents excluded from test file modifications
-- External API calls in conditions — non-deterministic, hard to checkpoint
+- Skills/team config in orchestrated (daemon) path via WORKFLOW.md — works in CLI, needs mapFrontMatterToConfig wiring for daemon
 
 ## Context
 
-Shipped v2.1 with 17,026 LOC TypeScript (src) + 22,248 LOC tests. 1,211 tests passing across 100 test files. 24 phases, 57 plans executed across 3 milestones over 14 days.
+Shipped v3.0 with 16,662 LOC TypeScript (src) + 21,299 LOC tests. 1,162 tests passing across 101 test files. 30 phases, 57 plans executed across 3 milestones over 14 days. v5.0 focuses on intelligent decomposition — inspired by analysis of ComposioHQ/agent-orchestrator (LLM task decomposition, lightweight spawning) and greyhaven-ai/autocontext (run outcome learning, dead-end tracking).
 
-Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest, filtrex, picomatch.
+Tech stack: TypeScript, Node.js 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest.
 
-Key subsystems: CLI, config, container, agent (Claude Code + Codex + browser-use), orchestrator (scheduler, dispatcher, reconciler, delegation), tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline (condition evaluator, loop executor, checkpoint, coverage, exclusion), daemon, UI, storage (SQLite), flight recorder, governance, github-app.
+Key subsystems: CLI, config, container, agent (Claude Code + Codex + browser-use), orchestrator, tracker (GitHub + Notion), workspace, workflow, validation, output, pipeline, daemon, UI, storage (SQLite), flight recorder, governance, github-app, skills, sub-issue cache/DAG, rollup.
 
-v2.1 added conditional pipeline branching, loop iteration with safety caps, multi-agent delegation with two-tier slot management, and self-correction integration proving the composition of these primitives works end-to-end.
+v3.0 added 3 features: GitHub sub-issue DAG dependencies, skill/config bind-mounting, and agent teams. Two gap-closure phases (29, 30) fixed composition wiring for sub-issue runtime features.
 
 ## Key Decisions
 
@@ -115,14 +104,12 @@ v2.1 added conditional pipeline branching, loop iteration with safety caps, mult
 | Autonomy per workflow, not global | Different work needs different oversight; in WORKFLOW.md | ✓ Good — auto-approve rules add flexibility |
 | GitHub App as primary UI | Slash commands, reactions, conversations from phone | ✓ Good — full lifecycle control from GitHub |
 | HTTP sidecar for browser-use | Bridge TypeScript adapter to Python library | ✓ Good — clean process isolation |
-| Gap closure phases (16-19) | Audit found wiring gaps between subsystems | ✓ Good — all 32 integration points verified |
-| filtrex for condition expressions | Zero deps, ESM, boolean-first, sandboxed — safe for user YAML | ✓ Good — reused for loop until expressions too |
-| Ready-queue executor over static topo-sort | Runtime branching requires dynamic scheduling | ✓ Good — enabled conditions, loops, and skip propagation |
-| Two-tier slot pool for delegation | Prevents child agents from starving top-level work | ✓ Good — independent Maps, strict pool separation |
-| Loops as opaque meta-nodes | No DAG back-edges, compatible with cycle detector | ✓ Good — executeLoopNode handles iteration internally |
-| Crash-safe row-before-dispatch | Insert delegation row before dispatch, not after | ✓ Good — survives daemon crash mid-delegation |
-| extractCoverage returns -1 sentinel | Safe for numeric filtrex comparisons (no null/undefined) | ✓ Good — _coverage >= 80 evaluates false cleanly |
-| checkExclusionViolations as standalone module | Extracted from inline executor code for testability | ✓ Good — real git repo tests instead of mocking execSync |
+| Gap closure phases (16-19, 29-30) | Audit found wiring gaps between subsystems | ✓ Good — milestone audits catch integration bugs |
+| Agent teams as prompt+env concern | Claude Code handles coordination internally | ✓ Good — forgectl just sets CLAUDE_NUM_TEAMMATES |
+| GSD as mounted skill set | Bind-mount, not bake into image — user controls version | ✓ Good — credential exclusion prevents leaks |
+| GitHub sub-issues as native deps | Leverage hierarchy rather than synthetic issues | ✓ Good — TTL cache + cycle detection handles edge cases |
+| Standalone DFS for issue cycle detection | Pipeline validateDAG errors on unknown refs (valid in issues) | ✓ Good — clean separation of concerns |
+| Optional injection for sub-issue deps | SubIssueCache/githubContext optional throughout | ✓ Good — Notion adapter unaffected |
 
 ## Constraints
 
@@ -131,7 +118,6 @@ v2.1 added conditional pipeline branching, loop iteration with safety caps, mult
 - **Tracker agnostic**: Generic adapter interface — no hardcoded assumptions in core
 - **Backward compatible**: Existing `forgectl run` and `forgectl pipeline` commands must keep working
 - **Single process**: No distributed queue yet — single daemon process with SQLite-backed state
-- **Pipeline safety**: Condition expressions sandboxed via filtrex, no arbitrary code execution
 
 ---
-*Last updated: 2026-03-14 after v2.1 milestone*
+*Last updated: 2026-03-14 after v5.0 milestone started*

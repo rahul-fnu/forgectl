@@ -110,6 +110,7 @@ export function buildOrchestratedRunPlan(
   promptTemplate: string,
   attempt: number,
   validationConfig?: { steps: ValidationStep[]; on_failure: string },
+  skills?: string[],
 ): RunPlan {
   const runId = crypto.randomUUID();
 
@@ -143,6 +144,7 @@ export function buildOrchestratedRunPlan(
       review: { enabled: false, system: "" },
       cache: { enabled: true, ttl: "7d" },
       autonomy: "full",
+      skills: skills ?? [],
     },
     agent: {
       type: agentConfig.type,
@@ -202,6 +204,13 @@ export function buildOrchestratedRunPlan(
       author: config.commit.author,
       sign: config.commit.sign,
     },
+    // Team config from forgectl.yaml flows to RunPlan for env var injection and checkpoint bypass
+    ...(config.team?.size && config.team.size >= 2
+      ? {
+          team: { size: config.team.size, slotWeight: config.team.size },
+          skipCheckpoints: true,
+        }
+      : {}),
   };
 }
 
@@ -220,14 +229,18 @@ export async function executeWorker(
   validationConfig?: { steps: ValidationStep[]; on_failure: string },
   githubDeps?: GitHubDeps,
   governance?: GovernanceOpts,
+  skills?: string[],
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
-  const wsInfo = await workspaceManager.ensureWorkspace(issue.identifier);
+  // Use shared workspace per repo (not per issue) so sequential issues build on prior work.
+  // Falls back to issue identifier if no repo is configured.
+  const workspaceId = config.tracker?.repo?.replace("/", "_") ?? issue.identifier;
+  const wsInfo = await workspaceManager.ensureWorkspace(workspaceId);
   const workspacePath = wsInfo.path;
 
   // 2. Run before hook
   try {
-    await workspaceManager.runBeforeHook(issue.identifier);
+    await workspaceManager.runBeforeHook(workspaceId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("worker", `Before hook failed for ${issue.identifier}: ${message}`);
@@ -245,8 +258,28 @@ export async function executeWorker(
     };
   }
 
-  // 3. Build RunPlan (with optional validationConfig)
-  const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig);
+  // 2.5. Pre-flight: verify workspace is a git repo (prevents silent output loss)
+  const { existsSync } = await import("node:fs");
+  const { join: pathJoin } = await import("node:path");
+  if (existsSync(workspacePath) && !existsSync(pathJoin(workspacePath, ".git"))) {
+    const message = `Workspace ${workspacePath} is not a git repository (no .git directory). The after_create hook may have failed or is not configured. Agent output would be lost.`;
+    logger.error("worker", message);
+    const failResult: AgentResult = {
+      stdout: "",
+      stderr: message,
+      status: "failed",
+      tokenUsage: { input: 0, output: 0, total: 0 },
+      durationMs: 0,
+      turnCount: 0,
+    };
+    return {
+      agentResult: failResult,
+      comment: `**forgectl:** Workspace is not a git repository — agent output would be lost. Check workspace hooks.\n\n\`\`\`\n${message}\n\`\`\``,
+    };
+  }
+
+  // 3. Build RunPlan (with optional validationConfig and skills)
+  const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
 
   // 4. Create CleanupContext with empty tempDirs (workspace persists)
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
@@ -346,14 +379,20 @@ export async function executeWorker(
       }
     }
 
-    // 9. Collect git output (non-critical -- catch and log errors)
+    // 9. Collect git output — failure here means agent work is lost, so fail the run
     try {
       const pushToken = config.tracker?.token;
       const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
       branch = gitResult.branch;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn("worker", `Git output collection failed for ${issue.identifier} (ignored): ${message}`);
+      logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
+      // Override agent result — the work is lost if we can't collect output
+      agentResult = {
+        ...agentResult,
+        status: "failed",
+        stderr: `Agent completed but git output collection failed (work lost): ${message}`,
+      };
     }
 
     // Update progress: collecting_output complete
@@ -490,7 +529,7 @@ export async function executeWorker(
 
   // 12. Run after hook (catch and log errors)
   try {
-    await workspaceManager.runAfterHook(issue.identifier);
+    await workspaceManager.runAfterHook(workspaceId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("worker", `After hook failed for ${issue.identifier} (ignored): ${message}`);

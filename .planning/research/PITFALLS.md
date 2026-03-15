@@ -1,281 +1,266 @@
 # Pitfalls Research
 
-**Domain:** Adding multi-agent delegation, conditional/loop pipeline nodes, and pipeline self-correction to an existing TypeScript orchestrator (forgectl v2.1)
-**Researched:** 2026-03-12
-**Confidence:** HIGH (code-verified against existing src/, supplemented by current ecosystem research)
-
----
-
-## Context: What Already Exists
-
-forgectl v2.0 ships with:
-- `OrchestratorState` with in-memory `claimed`/`running`/`retryAttempts` maps, `SlotManager` for slot-based concurrency
-- `PipelineExecutor` with static DAG (`validateDAG`, `topologicalSort`), `maxParallel` cap, `inFlight` map, checkpoint hydration
-- `runValidationLoop` in `src/validation/runner.ts` — reruns ALL steps from top on any failure, single container only
-- `executionLocks` table in SQLite (unique per `lockType`+`lockKey`), `runs` and `pipelineRuns` tables
-- `GovernanceOpts` with `autonomy` levels, pre- and post-execution approval gates
-- `dispatchIssue` is fire-and-forget (`void executeWorkerAndHandle(...)`) — no return value, no child tracking
-
-All pitfalls below are grounded in this specific code.
+**Domain:** Adding LLM-driven task decomposition, worktree runtimes, rate limit retry, and outcome learning to an existing AI agent orchestrator (forgectl v5.0)
+**Researched:** 2026-03-14
+**Confidence:** HIGH (decomposition/worktree pitfalls verified via multiple real-world systems; outcome learning pitfalls verified via research literature)
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Slot Budget Exhaustion — Children Eat Parent's Slots
+### Pitfall 1: Decomposition Output That Produces a Valid DAG but a Terrible Plan
 
 **What goes wrong:**
-A lead agent dispatches 8 child workers for subtasks. Each child claims a slot from the same global `SlotManager`. The orchestrator's `maxConcurrent` is set to 5. The lead itself holds 1 slot. Three more unrelated issues are waiting. The 5 child dispatches saturate all slots. The lead is blocked waiting for children who are themselves waiting because slots are full, creating a deadlock where the system is "full" but doing nothing useful.
-
-The existing `dispatchIssue` is fire-and-forget — it calls `claimIssue(state, issue.id)` and immediately fires `void executeWorkerAndHandle(...)`. There is no concept of a parent slot that children should be charged against.
+The LLM produces a syntactically valid JSON DAG — it passes cycle detection, all node IDs resolve, dependencies are acyclic — but the plan is wrong. Tasks overlap (two nodes both "refactor auth module"), tasks are too coarse (single node: "implement the entire feature"), tasks are mis-sequenced (a test node depends on nothing rather than on the implementation node), or tasks are hallucinated (a node references a file that doesn't exist in the repo). The orchestrator happily executes the bad plan. Agents work in parallel on the same files, creating conflicts. Or the plan succeeds and the output is wrong.
 
 **Why it happens:**
-Developers model the slot as "one worker = one slot" without accounting for the tree structure. The lead's maxChildren budget (e.g., 3) is defined but never translated into a slot reservation at the time the lead is dispatched. Children are dispatched like top-level issues — they contend for the same global pool.
+Structural validation (cycle detection, schema validation) is easy to implement and gives false confidence. Semantic validation — "is this a good plan?" — is much harder and often skipped. Developers focus on the parser and DAG validator and treat the LLM output as correct-if-valid. The existing `pipeline/dag.ts` validates structure but has no concept of plan quality.
 
 **How to avoid:**
-- Introduce a two-tier slot system: "lead slots" (for issues directly from the tracker) and "child slots" (for delegated subtasks, reserved at lead dispatch time)
-- When a lead is dispatched with `maxChildren: N`, pre-reserve `N` slots from a child-slot pool before firing any workers
-- Children should only claim from the reserved child pool, not from the global `SlotManager`
-- Implement a `ChildSlotBudget` type on `WorkerInfo` that tracks `maxChildren`, `dispatched`, and `completed` counts
-- Enforce depth limit (max 2) at dispatch time in `dispatchIssue`: if the dispatching agent is itself a child, reject further delegation
+- After structural validation, run a semantic validation pass:
+  - Detect overlapping file ownership (two nodes claim the same files)
+  - Detect implausibly coarse nodes (single node with "implement entire X" in description)
+  - Detect orphaned test nodes (test node with no dependency on an implementation node)
+  - Verify referenced files exist in the repo (stat check)
+- Implement a confidence score: if the LLM decomposition doesn't meet a minimum score, trigger the fallback to single-agent execution
+- Always provide the human approval gate for decomposition output before execution — the plan is a hypothesis, not a directive
+- Use structured output (JSON schema enforcement) on the decomposition call to eliminate hallucinated node structures; structured output with schema validation eliminates field-level hallucinations but not semantic errors
 
 **Warning signs:**
-- `state.running.size` equals `slotManager.getMax()` but no progress (all slots held by leads waiting for unavailable child slots)
-- Logs showing "child dispatch attempted, no slots available" repeated indefinitely
-- `maxChildren` config property added to schema but `dispatchIssue` reads it without routing children to a separate pool
+- Two or more nodes referencing the same file path in their scope
+- A "test" node with `depends_on: []`
+- Any node whose description contains the phrase "entire", "all", or "the whole"
+- Node count that is 1 (the LLM returned a single-node plan, which is just the original task)
+- Node count that exceeds the number of distinct files in the issue's scope (over-decomposition)
 
-**Phase to address:** Phase introducing multi-agent delegation (child dispatch wiring)
+**Phase to address:** Decomposition Engine phase (core decomposition feature)
 
 ---
 
-### Pitfall 2: OrchestratorState Is In-Memory — Child Relationships Vanish on Restart
+### Pitfall 2: Bad Plan is Worse Than No Plan
 
 **What goes wrong:**
-A lead agent dispatches 3 child workers. The daemon restarts (or crashes). `OrchestratorState` is rebuilt from scratch — `claimed`, `running`, `retryAttempts` are all empty Maps. The existing v2.0 crash recovery in `src/durability/recovery.ts` resumes individual runs from SQLite, but it has no concept of parent/child relationships. On restart, the lead and its children resume as independent, unrelated runs. The `maxChildren` budget is lost. A new lead picks up the same issue and dispatches 3 more children, doubling the work.
-
-The existing `runs` schema has no `parentRunId` or `childOf` column. `pipelineRuns` has no relation to orchestrator-level delegation.
+A single-agent run on a complex issue produces partial output that can be reviewed and corrected. A decomposed plan that executes partially — three nodes succeed, two nodes fail mid-execution — leaves the repo in an incoherent intermediate state. Node A's changes are committed to a branch, Node B's changes conflict with A, Node C never ran. Merging the successful branches produces code that doesn't compile. The user has more cleanup work than if the agent had just attempted the whole thing monolithically.
 
 **Why it happens:**
-The v2.0 durability model was designed for single-worker runs (`executeWorker` → one run per issue). Multi-agent delegation introduces a tree of runs that must survive restarts as a unit, not as individual orphaned runs.
+Decomposition is treated as pure upside. Developers don't design for partial failure. The existing single-agent path has a well-tested retry and rollback story (workspace reuse, output branch). The decomposed path has neither — successful branches accumulate while failed branches stall.
 
 **How to avoid:**
-- Add `parentRunId` and `depth` columns to the `runs` table schema (Drizzle migration required)
-- Add `maxChildren` and `childrenDispatched` integer columns to `runs` for budget enforcement across restarts
-- The `DelegationRepository` should provide atomic `claimChildSlot(parentRunId): boolean` that checks and decrements in a single `UPDATE` with `WHERE children_dispatched < max_children`
-- Recovery code must query for "runs with a parentRunId that were in-flight" and restore the parent's `WorkerInfo` with the correct child count before resuming children
-- Test the restart scenario explicitly: dispatch lead + 2 children, SIGKILL daemon, restart, verify no duplicate dispatch
+- Design the partial-failure strategy before implementing decomposition: what happens when 3 of 5 nodes succeed?
+  - Option A: Commit successful node branches, mark failed nodes for re-plan (re-decompose from remaining work)
+  - Option B: Roll back all nodes and fall back to single-agent on the full issue
+  - Option C: Stop on first failure, do not execute remaining nodes
+- The fallback to single-agent must be reliable, tested, and the **default** when decomposition quality is uncertain
+- Never let partial success become permanent state without human acknowledgment — the parent issue should remain open until the full decomposed plan completes or is abandoned
+- Implement "decomposition budget": if the estimated total agent cost for the decomposed plan exceeds a threshold, require human approval before proceeding
 
 **Warning signs:**
-- `runs` table missing `parentRunId` column after "delegation is implemented"
-- Recovery tests only covering single-run restart, not lead+children restart
-- Log showing parent issue re-dispatched while children are still running after restart
+- Decomposition code with no fallback path to single-agent execution
+- `dispatchIssue` invoked for decomposed sub-tasks without a parent-level coordinator tracking overall success
+- Branches being created for sub-tasks but no merge strategy defined until after all nodes complete
 
-**Phase to address:** Phase introducing multi-agent delegation (schema + recovery wiring)
+**Phase to address:** Decomposition Engine phase and Parallel Execution / Merge phase
 
 ---
 
-### Pitfall 3: Shared Workspace Contamination Between Lead and Children
+### Pitfall 3: Orphaned Worktrees on Bootstrap Failure
 
 **What goes wrong:**
-A lead agent and its child workers all share the same workspace directory (the issue's `workspacePath` from `WorkspaceManager`). Child agent A writes to `src/feature-a.ts`. Child agent B reads the workspace to understand context — but picks up A's incomplete, mid-write files. Child B then generates code that depends on A's API before A has committed. The lead reads the final workspace and sees a broken intermediate state.
-
-The existing `WorkspaceManager.ensureWorkspace(issue.identifier)` returns the same path for all workers on the same issue. There is no per-child isolation.
+Worktree creation is not atomic. The sequence: `git worktree add`, `git checkout -b <branch>`, directory setup, agent spawn. If any step fails after `git worktree add` succeeds, the worktree directory is created and registered in Git's internal state but there is no agent running and no cleanup runs. These orphaned worktrees accumulate silently. `git worktree list` shows dozens of stale entries. On next run, `git worktree add` fails because the branch name already exists. Disk space fills from repeated failures. (This exact failure mode was found in the real-world `opencode` project — see Sources.)
 
 **Why it happens:**
-The workspace model was designed for one agent per issue. The path is keyed by `issue.identifier`, so all children of the same issue naturally share the same directory. Git branches provide some isolation for output, but the working directory files are shared during execution.
+Developers write the happy path first: create worktree, proceed. Error handling is added later and often misses early-in-sequence failures. The cleanup code runs after agent completion but not after bootstrap failure. The Node.js process crashing mid-spawn leaves no cleanup code executed.
 
 **How to avoid:**
-- Each child worker must get its own isolated workspace subdirectory: `{issueWorkspace}/children/{childId}/`
-- Alternatively, use Git worktrees: the existing repo is the parent workspace, each child gets `git worktree add {path} -b {childBranch}` — this is the pattern that Cursor and other parallel agent tools use in 2025
-- The lead reads child outputs only through their completed checkpoints (which the pipeline executor already does for DAG nodes via `resolveNodeInput`) — never from the live working directory
-- Children should not write directly to the parent workspace; they write to their own isolated area, and the lead merges on completion
-- The existing fan-in logic in `PipelineExecutor.prepareFanInBranch` is the right model — adapt it for orchestrator-level delegation
+- Wrap the entire worktree lifecycle in try/finally: if ANY step after `git worktree add` fails, call a `cleanupFailedWorktree` helper that runs `git worktree remove --force <path>` and `git branch -D <branch>` (if branch was created)
+- Register cleanup on every failure path explicitly, not just in a top-level catch — async bootstrap failures (deferred steps, `setTimeout(0)`, background promises) will not be caught by a synchronous try/catch
+- Run `git worktree prune` on daemon startup to remove stale metadata from previous crash cycles
+- Enforce a maximum worktree count: if count exceeds threshold (e.g., 20), refuse to create new ones and alert
+- Track all worktree paths in SQLite so a cleanup sweep can recover from crash-without-cleanup scenarios
+- Each worktree directory name must be unique per run, not derived from the branch name alone (branch names can collide on retry)
 
 **Warning signs:**
-- `WorkspaceManager.ensureWorkspace` called with same `identifier` for both lead and children
-- No `children/{childId}` or `worktree/` directory structure in workspace paths
-- Child agents writing directly to `{issueWorkspace}/src/` instead of an isolated area
+- `git worktree list` output growing over time without corresponding active runs
+- "branch already exists" errors on worktree creation
+- Disk usage growing between runs without new output files
+- Daemon startup not running `git worktree prune`
 
-**Phase to address:** Phase introducing multi-agent delegation (workspace isolation)
+**Phase to address:** Worktree Runtime phase
 
 ---
 
-### Pitfall 4: Conditional Branch Evaluation Breaks Static DAG Assumptions
+### Pitfall 4: Parallel Nodes Touching Shared Files Guarantee Merge Conflicts
 
 **What goes wrong:**
-The existing `PipelineExecutor` validates the entire DAG at construction time (`validateDAG`, `topologicalSort`, `collectAncestors`). These functions assume the node graph is fixed. When conditional nodes (`if/else`) are added, the actual execution path is only known at runtime — but the executor has already pre-computed topological order over all nodes, including branches that should be skipped.
-
-Concretely: the executor iterates `order` (a pre-computed topological sort of ALL nodes). A conditional `if`-branch node whose condition is false still appears in `order`. The executor checks `selection.executeNodes.has(nodeId)` to skip it, but this set is also pre-computed at construction time, not evaluated dynamically. Runtime condition evaluation can't change which nodes appear in `inFlight` scheduling.
+The LLM decomposes an issue into parallel nodes but doesn't know which files each node will touch. Node A and Node B both modify `src/config/schema.ts` (adding fields). Both succeed on their individual branches. Merge conflicts are detected only at the merging step, after both agent runs complete. The conflict requires human resolution. If the merge is automated (using `git merge -X ours`), one change silently wins and the other is lost.
 
 **Why it happens:**
-Kahn's algorithm and DFS topological sort naturally handle static DAGs. Conditional branching requires a fundamentally different execution model: the graph shape is not known until parent nodes complete and their outputs are evaluated. Developers try to bolt conditions onto the existing static executor without changing the core scheduling loop.
+Static file ownership is hard to predict before the agents run. The decomposition prompt asks the LLM to estimate scope but LLMs cannot reliably predict which files an agent will touch. Developers assume "parallel is safe" because worktrees are isolated. Isolation prevents runtime conflicts during execution but not logical conflicts at merge time.
 
 **How to avoid:**
-- The execution loop in `PipelineExecutor.execute()` must move from pre-computed `order` to a ready-queue model: nodes become eligible only when all their dependencies complete AND any conditional guard evaluates true
-- Introduce a `ConditionEvaluator` that accepts node output and returns `{ branch: 'then' | 'else' | 'skip' }` before downstream nodes are scheduled
-- The `NodeExecution.status` already has `"skipped"` — extend the `skipReason` to distinguish "skipped by condition" from "skipped by rerun selection"
-- Checkpoint hydration must skip nodes that were conditionally skipped (not just those that were ancestors of `fromNode`)
-- The `validateDAG` static check must still verify structural validity (no cycles, all deps exist) but should not validate condition reachability — conditions are runtime, not static
+- Before marking two nodes as parallelizable, use a pre-flight scope analysis: ask the LLM to list the files each node will likely modify, and flag any overlap as a sequential dependency
+- Use `--no-commit` merge strategy for node branches: merge each branch to a staging branch one at a time, check for conflicts after each merge, stop and re-plan if a conflict is detected rather than attempting automated resolution
+- Never use `git merge -X ours` or `git merge -X theirs` automatically — losing code silently is worse than failing explicitly
+- For files that multiple nodes are likely to touch (schema files, index/barrel files, config files), assign them to a "coordinator" sequential node that runs after the parallel nodes
+- Detect merge conflicts and feed the conflict description back to the LLM re-planner: "Node A and Node B both modified schema.ts — re-decompose with an explicit merge coordination node"
 
 **Warning signs:**
-- `topologicalSort` called once at the start of `execute()` and never revisited as conditions evaluate
-- Condition evaluation happens inside `executeNode` after the node has already been scheduled in `inFlight`
-- Tests only cover the "condition is always true" case, not "condition evaluates false at runtime"
+- Decomposed nodes all listed as parallel with no sequential dependencies
+- Schema files, index files, or configuration files appearing in multiple nodes' estimated scope
+- Merge step using automated conflict resolution strategies
 
-**Phase to address:** Phase introducing conditional pipeline nodes
+**Phase to address:** Parallel Execution / Merge phase
 
 ---
 
-### Pitfall 5: Loop Nodes Create Implied Cycles — DAG Invariant Is Violated
+### Pitfall 5: Rate Limit Misclassification — Real Errors Treated as Rate Limits
 
 **What goes wrong:**
-The `validateDAG` function explicitly detects cycles as errors. A `loop-until-condition` node conceptually creates a back-edge (re-run the same node or subgraph until a condition is met). Developers implement this by adding a loop node that lists its own upstream nodes in `depends_on` to re-trigger them — immediately failing the cycle detector. Alternative: the developer adds a synthetic "retry" edge from downstream back to upstream, also a cycle.
-
-Even if the loop is modeled as a counter (run node N up to K times), the current executor has no mechanism to re-schedule a node that has already moved to `"completed"` or `"failed"` status.
+The rate limit detector sees an agent exit with a non-zero code and an error message containing "limit" (e.g., "token limit exceeded" or "context length limit"). It classifies this as a rate limit and schedules a retry with workspace preservation. The actual error is a context window overflow that will never resolve by waiting. The retry fires 60 seconds later, the agent hits the same context window error, and the cycle continues indefinitely, consuming retries and wasting time.
 
 **Why it happens:**
-DAGs by definition are acyclic. Loops require cycles. The tension is architectural: you cannot add true cycles to a DAG executor without breaking its core invariant. Teams either break the DAG invariant (causing infinite loops or crashes in cycle detection), or they try to "unroll" the loop at definition time (losing the ability to decide iteration count at runtime).
+The string patterns for rate limits are ambiguous. "Rate limit", "limit exceeded", "quota exceeded", "too many requests", and "context limit" share surface-level similarity. The existing `classifyFailure` in `retry.ts` only distinguishes `completed` vs `error`, without further rate-limit sub-classification. Developers add pattern matching quickly and use broad patterns.
 
 **How to avoid:**
-- Model loops as a special node type (`LoopNode`) that the executor handles as a meta-node, not as multiple graph nodes. The loop node owns its own internal mini-executor that runs its body subgraph K times (or until condition), then reports a single `"completed"` status to the outer DAG
-- The outer DAG sees: `body-start → loop-node → downstream`, where `loop-node` is opaque to the DAG's topological sort
-- Maximum iteration count (`maxIterations`) must be a hard limit, not a soft suggestion — the executor enforces it before the condition evaluator is even called
-- Each iteration must create a new checkpoint with its iteration index, so crash recovery can resume from the last completed iteration, not from iteration 1
-- Validate that loop body subgraphs have no back-edges to nodes outside the loop — enforce loop scope
+- Classify by HTTP status code first (429 is rate limit, 400/422 is client error, 500/503 is server error) — never rely on message text alone
+- For Claude Code exit codes: research the actual exit codes vs error message patterns used by the `claude` CLI before implementing detection
+- Context window errors are client errors (400 with message containing "context length"), not rate limits — treat them as non-retryable errors, not temporary
+- Rate limit retries must have a maximum retry count with explicit handling when the limit is reached (not silent discard)
+- Add a rate limit detection confidence level to logged events: HIGH (HTTP 429 with Retry-After header), MEDIUM (HTTP 429 without header), LOW (text pattern match only)
+- Test the classifier against a set of real error strings from Claude Code and Codex before using it in production
 
 **Warning signs:**
-- `validateDAG` is disabled or modified to "allow cycles in loop nodes" instead of modeling loops differently
-- Loop iteration count is unbounded or only bounded by a timeout (not a hard iteration cap)
-- Loop body completion uses the existing node `"completed"` status, causing the next-ready-node logic to never re-schedule it
+- Rate limit classification based solely on message text patterns
+- No distinction between "context too long" and "rate limited"
+- Rate limit retry loops that never terminate
+- Retry events appearing every N seconds without any agent making progress
 
-**Phase to address:** Phase introducing conditional/loop pipeline nodes
+**Phase to address:** Rate Limit Retry phase
 
 ---
 
-### Pitfall 6: Self-Correction Loop Has No Convergence Guarantee — "Loop of Death"
+### Pitfall 6: Workspace Preservation on Rate Limit Loses Partial Work
 
 **What goes wrong:**
-The self-correction pattern is: run tests → if fail, invoke fix agent → rerun tests → repeat. The existing `runValidationLoop` already implements this for single-container runs (lines 47-100 in `src/validation/runner.ts`). The problem is extending this to pipeline-level self-correction, where the fix agent is a separate pipeline node with its own container lifecycle.
-
-Without a convergence guard, the system enters what practitioners call the "loop of death": the fix agent produces a change, the test node re-runs, the same test fails (or a different test breaks due to the fix), the fix agent runs again, ad infinitum. Each iteration spawns a full container, invokes an LLM, and writes to the workspace — burning cost and time with no progress.
-
-The existing validation loop uses `maxRetries = Math.max(...steps.map(s => s.retries))` — this is per-step, not cumulative. A self-correction pipeline loop with no analogous hard cap will iterate indefinitely.
+An agent is rate limited mid-execution. The system preserves the workspace (correct). But the workspace contains partial file modifications: the agent wrote to 3 of 10 target files before hitting the limit. On retry, the agent starts fresh in the preserved workspace, sees the 3 partially-written files, and either: (a) treats them as complete and skips them (missing the rest), or (b) overwrites them from scratch (correct but wastes the preserved work). In case (a), the output is subtly wrong.
 
 **Why it happens:**
-Self-correction is appealing because it mirrors human debugging. Teams model it as "retry until success" without specifying what "success" looks like in finite terms, or what "failure to converge" looks like. The fix agent is trusted to make progress — but LLMs can regress, reintroduce the same bugs, or loop through a cycle of fixes that cancel each other out.
+"Preserve workspace" means different things at different granularities. Preserving the directory contents is not the same as preserving a coherent checkpoint. The agent doesn't know which files were written atomically and which were interrupted mid-write. Without commit-level checkpoints in the worktree, the agent has no reliable way to distinguish completed vs incomplete file modifications.
 
 **How to avoid:**
-- Enforce a `maxIterations` hard cap on every self-correction loop — no exceptions. The existing `runValidationLoop` pattern of `while (attempt <= maxRetries)` is correct; replicate it at pipeline level
-- Track the "best score" across iterations (e.g., number of passing tests), not just the most recent result. If the latest iteration is worse than a previous one, surface the best result rather than the most recent
-- Implement a "no-progress" detector: if two consecutive fix attempts produce identical test output (same failing tests, same error messages), abort the loop — the agent is stuck
-- Assign a cumulative token/cost budget to the self-correction loop, not just the individual iterations. If the loop's total spend exceeds the budget, abort and report the last-best result
-- Write the "loop aborted: max iterations reached" event to the flight recorder with full iteration history so the human can understand what was tried
+- Before suspending a rate-limited worktree, create a git commit of the current state with a clear message: `[checkpoint: rate-limited at step X]`
+- On retry, provide the agent with the commit message and diff of what was committed, so it knows what was completed vs what remains
+- Define "workspace preservation" as preserving a committed state, not just file system state — uncommitted partial writes are worse than nothing because they mislead the agent
+- If the rate limit occurs before any meaningful work is done (first agent call), consider a clean workspace on retry instead of a partial one
 
 **Warning signs:**
-- Self-correction loop node has no `maxIterations` configuration field in its schema
-- Pipeline runs table shows the same pipeline run ID with growing `nodeStates` but no `completedAt` for hours
-- No "best result tracking" — the self-correction loop only stores the final result, not intermediate scores
-- Token cost growing linearly per-iteration with no budget enforcement on the loop as a whole
+- Rate limit retry that preserves workspace but provides no context to the agent about what was completed
+- No git commit created before suspending the workspace
+- Agent re-examining all files from scratch on every retry regardless of prior work
 
-**Phase to address:** Phase introducing pipeline self-correction
+**Phase to address:** Rate Limit Retry phase
 
 ---
 
-### Pitfall 7: Fix Agent Overwrites Test Agent's Output — Shared Git Branch Contamination
+### Pitfall 7: Outcome Learning Accumulates Noise Faster Than Signal
 
 **What goes wrong:**
-The self-correction pattern uses multiple pipeline nodes: a `test-runner` node and a `fix-agent` node. Both are git-mode (`output.mode: "git"`) nodes, each creating their own branch. The fix agent reads the workspace from the test node's branch. After fixing, it commits to its own branch. The `PipelineExecutor.mergeOutputBranchIntoHostRepo` then merges the fix branch back. On the next iteration of the loop, the test node starts fresh from the host repo's main branch — not from the cumulative state of all previous fix iterations.
-
-Worse: if both the fix node and the test node operate on the same workspace bind-mount (the default orchestrator worker path), the fix agent's intermediate uncommitted changes are visible to the test runner before the fix is committed.
+The outcome learning system records lessons from every run. After 50 runs, the lesson store contains: 12 genuinely useful patterns, 18 observations that were specific to one issue and don't generalize, 11 contradictory lessons (run 12 says "always add tests first", run 37 says "add tests after implementation"), and 9 lessons that are outdated because the codebase changed. The lesson prompt injection grows to 2,000 tokens. The agent's behavior degrades — it follows contradictory rules and ignores more specific context because the general context window is polluted.
 
 **Why it happens:**
-The existing pipeline executor's fan-in model was designed for non-looping DAGs. Each node's output is merged once, linearly. A loop introduces a recursive merge requirement: fix-iteration-2 must see the workspace state after fix-iteration-1's merge, not the initial state. The existing `mergeOutputBranchIntoHostRepo` is called once per node completion — not per loop iteration.
+It's easy to append lessons; it's hard to curate, weight, and expire them. Systems implement lesson recording in phase 1 and defer curation to "later", which never comes. The real-world failure mode (observed in production agents) is memory files growing to 6,000+ tokens of accumulated notes with duplicate observations, stale context, and outright contradictions.
 
 **How to avoid:**
-- Each self-correction loop iteration must explicitly build on the previous iteration's committed output — the "carry forward" must be explicit, not assumed
-- Use Git worktrees or isolated per-iteration workspaces so test-runner and fix-agent operate on snapshotted state, not live working directories
-- After each fix iteration, the fix agent's branch must be merged (not just accessible) before the next test-runner iteration begins
-- The loop node's internal executor should maintain its own `currentBase` branch that advances after each successful fix commit, so the test runner always sees the cumulative state
+- Assign every lesson a scope: `repository` (applies to this codebase), `workflow` (applies to this workflow type), `issue-type` (applies to issues with these labels), `global` (applies everywhere). Only inject relevant-scope lessons.
+- Implement lesson confidence decay: lessons that contradict newer lessons lose confidence; lessons unseen for 30 days lose confidence. Low-confidence lessons are not injected.
+- Hard cap total injected lesson tokens at 500 tokens per run (about 5-8 lessons). Selection: highest-confidence, highest-scope-match, least-recently-validated.
+- Never auto-inject all lessons. Use retrieval: given the current issue/workflow, retrieve the top-N most relevant lessons by similarity, not by recency.
+- Add a lesson review command: `forgectl outcomes review` that shows the current lesson store and confidence scores, so humans can prune bad lessons.
+- Flag contradictory lessons immediately on insertion: if a new lesson contradicts an existing one, mark both as conflicted rather than silently accumulating both.
 
 **Warning signs:**
-- Loop iteration N+1's test runner is launched without waiting for loop iteration N's fix agent to commit and merge
-- Git log on the repo shows fix branches from multiple iterations but only the final one merged to main
-- Test failures in iteration 3 that were fixed in iteration 1 reappear (indicating the workspace reverted)
+- Lesson store growing unboundedly with no expiry mechanism
+- All lessons injected into every run regardless of scope relevance
+- No mechanism to detect or resolve contradictory lessons
+- Agent performance degrading over time despite more accumulated lessons
+- Lesson prompt section exceeding 1,000 tokens
 
-**Phase to address:** Phase introducing pipeline self-correction
+**Phase to address:** Outcome Learning phase
 
 ---
 
-### Pitfall 8: SQLite Write Contention When Many Children Write Simultaneously
+### Pitfall 8: Dead-End Tracking Misfires on Intermittent Failures
 
 **What goes wrong:**
-A lead spawns 5 child workers. Each child runs concurrently (`void executeWorkerAndHandle(...)`). Each child writes to SQLite at the end: `runs` table update, `run_events` appends, `run_snapshots` insert, `execution_locks` release. With WAL mode, concurrent reads are fine, but concurrent writes are serialized by SQLite's writer lock. If all 5 children complete within a narrow window and each holds a `BEGIN IMMEDIATE` transaction for their batch of writes, they queue behind each other. Any writer held for >5 seconds hits the `busy_timeout` and throws "database is locked".
-
-The existing `better-sqlite3` setup has `busy_timeout` configured (from v2.0), but child workers completing simultaneously create burst write patterns that didn't exist with single-worker runs.
+The system records that "approach X failed on issue Y" as a dead end. On future issues similar to Y, it warns the agent away from approach X. But approach X failed because of a transient environment issue (Docker network blip, temp disk full), not because X is a bad approach. The agent is now permanently warned away from a valid approach based on a false signal. Over time, the dead-end store becomes a blacklist of valid approaches that failed for coincidental reasons.
 
 **Why it happens:**
-Single-worker orchestration never produced simultaneous writers — runs are dispatched one-by-one against `SlotManager`, and each run's database writes happen at completion, spaced by execution time. Multi-agent delegation creates synchronized completion windows: all 5 children launched by a lead for the same subtask batch may complete within seconds of each other.
+Dead-end tracking needs to distinguish "this approach failed because it's wrong" from "this approach failed because the environment was broken". The failure classifier in `retry.ts` currently only distinguishes `continuation` vs `error`, with no environment/approach distinction.
 
 **How to avoid:**
-- Keep SQLite write transactions as short as possible — batch all end-of-run writes into a single synchronous `db.transaction()` call rather than multiple separate inserts
-- Add jitter to child completion reporting: introduce a random 0-500ms delay before the final SQLite writes in `executeWorkerAndHandle` to desynchronize burst completions
-- Monitor `SQLITE_BUSY` errors per-run in the flight recorder — if they appear, the busy_timeout is too low or transactions are too long
-- The `execution_locks` table already uses `unique` constraint for `lockType + lockKey` — ensure lock release is in a short transaction, not holding other locks simultaneously
+- Only record a dead end after N (default: 3) failures of the same approach on different issues. Single-occurrence failures are noise.
+- Dead ends recorded at the approach level must include the failure reason. If the failure reason was infrastructure (timeout, network error, disk full), do not record a dead end.
+- Dead ends have a time-to-live (default: 60 days). Approaches that failed in an older codebase state may be valid in the current state.
+- Distinguish dead-end types: `approach-dead-end` (this pattern doesn't work in this codebase) vs `solution-dead-end` (this specific implementation was tried and rejected by validation). Only `approach-dead-end` propagates to future runs.
+- Allow agents to explicitly mark a dead end with a reason: `[DEAD END: approach failed because X]` in their output, which is more reliable than inferring from exit codes.
 
 **Warning signs:**
-- "database is locked" errors appearing only when child count exceeds 3
-- `execution_locks` lock release happening inside the same transaction as event appends and snapshot saves
-- No jitter in child completion timing — all children spawned at the same time will complete at approximately the same time
+- Dead ends recorded after a single failure
+- Infrastructure failures (timeouts, network errors) stored as approach dead ends
+- Dead-end count growing rapidly over a short time period (suggests infrastructure instability, not bad approaches)
+- No TTL or expiry on dead-end records
 
-**Phase to address:** Phase introducing multi-agent delegation (child dispatch wiring)
+**Phase to address:** Outcome Learning phase
 
 ---
 
-### Pitfall 9: Governance Gate Applied Inconsistently to Children
+### Pitfall 9: Breaking the Single-Agent Path by Adding Decomposition Middleware
 
 **What goes wrong:**
-The existing `GovernanceOpts` with `autonomy` levels (`full`/`semi`/`interactive`/`supervised`) applies a pre-approval gate and post-approval gate in `dispatchIssue` and `executeWorker`. When delegation is added, each child worker goes through `dispatchIssue` with the same governance opts as the lead. Under `supervised` autonomy, each child generates an approval request. A lead with 5 children and `supervised` autonomy generates 5 separate approval requests — one per child — before any work is done. The human receives 5 approval comment threads for what appears to be one task.
-
-Alternatively: governance is wired to the lead only, and children inherit `full` autonomy regardless of the lead's setting, allowing children to bypass oversight gates that the lead was subject to.
+Decomposition logic is added to the dispatch path as middleware that always runs. Simple, single-file issues now go through decomposition analysis before execution. The LLM is called to produce a plan, the plan is a single node, the node is dispatched as a "decomposed" task, and it executes through the new worktree path. This adds 10-30 seconds to every issue's dispatch latency, breaks the existing validation retry logic (which doesn't work the same way with worktree sub-tasks), and breaks the existing checkpoint/resume (which targets the single-agent execution model). Users with simple issues experience performance regression.
 
 **Why it happens:**
-`GovernanceOpts` was designed for top-level issue dispatch. Child workers are dispatched via the same `dispatchIssue` pathway, inheriting the same governance opts. The design didn't account for whether governance should apply per-child or once per-delegation-tree.
+Decomposition is added as a feature and "wired in" to the dispatch path because it's the exciting new capability. Developers don't think to gate it behind a threshold or keep the old path as the primary path. The existing dispatcher is complex enough that adding middleware is tempting for simplicity.
 
 **How to avoid:**
-- Define a clear governance inheritance policy: the lead's pre-approval gate fires once for the entire delegation tree. Children inherit `autonomy: "full"` by default (they're executing on behalf of an already-approved lead)
-- The post-approval gate (output review) fires once on the lead's aggregate output, not on each child's output separately
-- Optionally: allow per-child governance override via a `childAutonomy` field in the delegation plan, but default to no per-child gates
-- Implement the inheritance by passing a `parentApprovalId` on the `GovernanceOpts` for children, which the approval state machine uses to skip pre-approval when a parent approval already exists
+- Decomposition is opt-in by default: only trigger decomposition when the issue explicitly requests it (label `forge:decompose`) or when a complexity threshold is exceeded (estimated tokens > threshold, issue body > N words, or explicit config flag)
+- The single-agent path is the default. Decomposition is a named alternative path, not middleware on the default path.
+- All existing tests must pass without modification after decomposition is added. If any single-agent test fails, the integration is broken.
+- Add a `FORGECTL_SKIP_DECOMPOSITION=true` environment variable that forces single-agent execution, for debugging and rollback.
+- The existing `classifyFailure`, `scheduleRetry`, and checkpoint/resume logic should not be modified for decomposition — decomposed runs should either fully replace the worker execution or wrap it, never partially mutate it.
 
 **Warning signs:**
-- 5 separate approval comment threads created for one delegated task
-- Children dispatched with governance opts directly copied from the lead without a "child mode" flag
-- Post-approval gate fires on each child's output separately, requiring N human approvals for N children
+- Decomposition code in the main `dispatchIssue` function rather than a separate code path
+- Existing unit tests in `test/unit/` failing after decomposition is added
+- No way to force single-agent execution on an issue that would otherwise be decomposed
+- Decomposition analysis running for issues with single-line descriptions
 
-**Phase to address:** Phase introducing multi-agent delegation (governance integration)
+**Phase to address:** Decomposition Engine phase (from the first commit)
 
 ---
 
-### Pitfall 10: Conditional Node Schema Added but Executor Ignores Unknown Node Types
+### Pitfall 10: Worktree Runtime Bypassing Docker Sandbox Security
 
 **What goes wrong:**
-A `condition` field is added to `PipelineNode` in `src/pipeline/types.ts`. The YAML parser accepts it. But `PipelineExecutor.executeNode` calls `resolveRunPlan` and `executeRun` — neither of which knows about conditions. The conditional node executes as a normal agent node, ignoring the condition field entirely. No error is thrown. Users write pipelines with `if/else` branches expecting conditional behavior, but all branches always execute. The bug is invisible unless tests explicitly verify that the false-branch is skipped.
+The worktree + process runtime is designed for "trusted sub-tasks" but "trusted" is never formally defined. The worktree spawns a Node.js child process with the agent, which runs with full host filesystem access, full network access, and the same user credentials as the daemon. An agent running a malicious or buggy command (e.g., `rm -rf /`, curl to an external service, access to `~/.ssh`) has no sandbox protection. The Docker container runtime exists precisely to prevent this. The new worktree runtime silently removes it.
 
 **Why it happens:**
-TypeScript's type system won't catch this at runtime. The `PipelineNode` interface has `condition?: string` — the field exists in the type but `executeNode` doesn't check it because the node execution path (`resolveRunPlan → executeRun`) was written before conditionals existed and only knows about agent tasks.
+Worktree runtimes are added for performance (no Docker overhead). "Trusted" is assumed to mean the code is safe without verifying what "trusted" means in practice. The Docker sandbox protections (network isolation, filesystem isolation, no host credentials) are only appreciated after they prevent an incident.
 
 **How to avoid:**
-- Add a node `type` discriminant to `PipelineNode`: `type: "task" | "condition" | "loop"` — this makes the type system enforce handling of each variant
-- The executor's node dispatch must switch on `node.type` before calling `resolveRunPlan`. A `"condition"` node evaluates its expression without spawning an agent
-- Write a test that asserts: given a pipeline with `condition: "false"`, the false-branch node status is `"skipped"`, not `"completed"`
-- The YAML parser must validate that `type: "condition"` nodes have a `condition` field and no `task` field (Zod schema validation)
+- Define "trusted" formally in WORKFLOW.md as an explicit opt-in: `runtime: worktree` requires `trusted: true` in the workflow config, and `trusted: true` requires a human-reviewed whitelist of allowed operations
+- The worktree runtime must run the agent with a reduced-privilege user (not the daemon's user), in a chroot or similar namespace, with network access restricted to specific hosts
+- Default runtime is always Docker. Worktree runtime requires explicit configuration and logs a prominent warning on first use.
+- The agent's working directory in the worktree runtime must be constrained to the worktree path — the existing `WorkspaceManager` path sanitization (`src/workspace/`) must be applied
+- Test the worktree runtime with a "malicious agent" that attempts to read `~/.ssh/config` — verify it cannot
 
 **Warning signs:**
-- `PipelineNode` has optional `condition` field but no `type` discriminant
-- `executeNode` has no `switch` or `if` on node type — treats all nodes as agent tasks
-- All pipeline tests have `condition: "true"` or omit the condition field entirely
+- Worktree runtime spawning the agent with `process.env` (exposes all host environment variables including tokens)
+- No chroot, namespace, or equivalent isolation in the worktree runtime
+- Worktree runtime enabled by default without explicit configuration
+- No test verifying that the worktree agent cannot access host credentials
 
-**Phase to address:** Phase introducing conditional pipeline nodes
+**Phase to address:** Worktree Runtime phase
 
 ---
 
@@ -285,32 +270,27 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Re-use `dispatchIssue` for child workers with same GovernanceOpts | No new dispatch logic | Per-child approval gates, slot exhaustion, no budget inheritance | Never — children need a distinct dispatch path |
-| Model loop-until as repeated manual pipeline runs | No executor changes needed | No crash recovery for mid-loop state, no iteration history, manual re-trigger required | Only for prototyping, never production |
-| Track parent/child relationships in memory only (OrchestratorState) | No schema change | Relationship lost on restart, children re-dispatched, budget overrun | Never — must be persisted to SQLite |
-| Skip workspace isolation, let all children share the lead's workspace | No WorkspaceManager changes | File contamination, non-deterministic agent behavior, race conditions on shared files | Never for parallel children |
-| Implement self-correction as "try again forever" with only timeout as stop condition | Simpler initial implementation | Silent cost overrun, loop of death, no progress detection | Never — always add maxIterations hard cap |
-| Skip conditional node type discriminant, use optional `condition` field | Backward compatible schema | Executor silently ignores conditions, tests pass incorrectly | Never — type discriminant required from the start |
-| Evaluate loop condition inside the fix agent's prompt instead of code | No ConditionEvaluator needed | Agent can hallucinate convergence, condition not machine-verifiable | Never for correctness-critical loops |
+| Skip semantic validation of decomposition output | Faster implementation | Bad plans execute and produce incoherent output; harder to debug than single-agent failure | Never in production |
+| All decomposed nodes run in parallel by default | Simpler scheduling logic | High merge conflict rate; plan quality degrades silently | Never — sequential dependencies are load-bearing |
+| Store all lessons forever with no expiry | Simple implementation | Contradictory lessons degrade agent performance; prompt bloat | Never |
+| Rate limit detection via text pattern only | Quick to implement | Misclassifies context errors, disk errors, and infra failures as rate limits | Only as fallback when HTTP status is not available |
+| Worktree cleanup as best-effort fire-and-forget | Less error handling code | Orphaned worktrees accumulate; eventual disk fillup and branch name collisions | Never — cleanup must be synchronous and verified |
+| Single outcome learning store shared across all workflows | Less infrastructure | Lessons from code workflows contaminate research workflows; low signal-to-noise | Only if all workflows are semantically identical |
 
 ---
 
 ## Integration Gotchas
 
-Common mistakes when connecting the new features to existing v2.0 subsystems.
+Common mistakes when connecting new features to the existing orchestrator.
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Delegation + SlotManager | Children contend for global slots, deadlocking the lead | Two-tier slot pool: global for leads, reserved child pool per lead |
-| Delegation + executionLocks | Lead holds lock on issue workspace while children need it | Children get their own lock keys (`issue/{id}/child/{childId}`) |
-| Delegation + RunRepository | No `parentRunId` column, runs are unrelated after restart | Schema migration: add `parentRunId`, `depth`, `maxChildren`, `childrenDispatched` |
-| Delegation + GovernanceOpts | Children inherit supervised autonomy, generate N approval requests | Children default to `full` autonomy; gate fires once at lead dispatch |
-| Conditional nodes + topologicalSort | Pre-computed order schedules all nodes including false branches | Move to ready-queue model; schedule nodes when dependencies complete AND condition true |
-| Loop nodes + validateDAG | Back-edges cause cycle detection failure | Model loops as opaque meta-nodes; outer DAG sees single loop node |
-| Self-correction + PipelineCheckpoint | No per-iteration checkpoints, restart resumes from iteration 1 | Save checkpoint with `iterationIndex` after each fix commit |
-| Self-correction + mergeOutputBranch | Fix iterations don't carry forward — each iteration starts from initial state | Maintain `currentBase` branch that advances after each fix commit |
-| Child workspaces + WorkspaceManager | `ensureWorkspace(issue.identifier)` returns same path for all children | Add `ensureChildWorkspace(issueId, childId)` returning isolated subdirectory |
-| SQLite + concurrent child completions | Burst writes cause `SQLITE_BUSY` even with WAL mode | Jitter child completion writes; batch all end-of-run writes in single transaction |
+| Decomposition → existing DAG validator | Using `pipeline/dag.ts` validateDAG directly — it rejects unknown node references valid in sub-issue context | The decomposition DAG is a different type from the pipeline DAG; use a separate validator or extend DAG types |
+| Decomposition → existing dispatcher | Calling `dispatchIssue` for each decomposed node — it adds the issue to the orchestrator state as if it's a real issue | Decomposed nodes need their own dispatch mechanism that doesn't pollute `state.running` with fake issue IDs |
+| Worktree runtime → existing workspace manager | Bypassing WorkspaceManager for worktree paths — path sanitization and containment checks are in WorkspaceManager | All worktree paths must go through WorkspaceManager even if Docker is not involved |
+| Rate limit retry → existing retry scheduler | Adding a new timer for rate limit delays alongside `state.retryTimers` — two timer systems for the same issue | Extend `scheduleRetry` with a `reason` field rather than creating a parallel mechanism |
+| Outcome learning → flight recorder | Writing lessons to the flight recorder event log — events are audit trail, not retrieval source | Lessons need their own `lessons` table in SQLite with retrieval-optimized schema (scope, confidence, issue_type) |
+| Decomposition → GitHub sub-issue DAG | Conflating LLM-generated decomposition DAG with GitHub sub-issue hierarchy DAG — they have different IDs, lifetimes, and semantics | Keep them separate: sub-issue DAG uses GitHub issue numbers; decomposition DAG uses ephemeral node IDs scoped to the run |
 
 ---
 
@@ -320,11 +300,12 @@ Patterns that work at small scale but fail as usage grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Topological sort over full DAG including conditional branches | All branches evaluated even when most are skipped; CPU spike at pipeline start | Ready-queue model evaluates only ready nodes | >20 nodes with heavy branching |
-| Lead waits synchronously for all children to complete before proceeding | Lead's slot is held idle while children run; reduces effective concurrency | Lead's slot should be released after delegation, reclaimed when children report back | Leads with >3 children and long-running children |
-| No-progress detection absent in self-correction loop | Same fix attempted 20 times at $0.50/iteration = $10 wasted per stuck issue | Compare test output hash between iterations; abort if identical | First time a fix agent gets stuck on the same error |
-| Checkpoint saved after every loop iteration including failed ones | SQLite grows rapidly with partial iteration state | Checkpoint only after successful fix commits, not after failed iterations | >10 iterations per loop, >5 concurrent pipelines |
-| Fan-in merge on shared host repo within self-correction loop | Git lock contention between loop iterations running on same repo | Per-iteration worktrees; merge only at loop completion | >2 concurrent self-correction pipelines on same repo |
+| Calling LLM for decomposition on every issue regardless of complexity | Dispatch latency increases by 10-30 seconds for all issues | Gate decomposition behind complexity threshold or explicit label | Immediately, even at low volume |
+| Injecting all lessons into every run | Token costs increase linearly with lesson count; context window pressure | Cap injection at 500 tokens; use retrieval not broadcast | When lesson count exceeds ~10 entries |
+| Creating a worktree per decomposed node without cleanup on failure | Disk fills, branch names collide, `git worktree list` grows unbounded | Mandatory cleanup in try/finally; startup prune; SQLite tracking | After the first set of failures |
+| Loading full lesson history for retrieval on every dispatch | SQLite query time grows with table size; dispatch latency increases | Index on (scope, workflow, confidence); limit to top-20 rows in query | >1,000 lessons (~6 months of heavy use) |
+| Parallel merge strategy that loads all node branches simultaneously | Memory spike during merge of large codebases | Merge branches sequentially, one at a time, with conflict detection after each | Codebases >500MB or >5 parallel nodes |
+| Recording a lesson for every single failed validation step | Lessons overwhelmed with micro-failures; retrieval signal collapses | Only record lessons at run completion level, not at individual step level | After the first week of heavy use |
 
 ---
 
@@ -334,25 +315,25 @@ Domain-specific security issues beyond general web security.
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Child agents inherit parent's BYOK credentials without scope reduction | Compromised child (via prompt injection in its task) has full API access | Children receive scoped credentials; lead specifies which tools/APIs each child may use |
-| No maxChildren budget enforcement — lead can spawn unlimited agents | Runaway delegation tree exhausts Docker resources, API rate limits, and token budget | Enforce `maxChildren` at `dispatchIssue` time with atomic SQLite decrement |
-| Depth limit enforced only in lead prompt, not in code | Agent ignores the instruction and spawns depth-3 children anyway | Enforce depth check in `dispatchIssue` code path: `if (parentDepth >= 2) throw` |
-| Self-correction loop exposed to prompt injection via test output | Failing test output is fed back to the fix agent; attacker crafts output that redirects the agent | Sanitize test output before injecting into fix agent prompt; enforce container isolation |
-| Conditional evaluation using `eval()` or agent-generated code strings | Arbitrary code execution in the orchestrator process | Conditions must be a restricted expression language (JSON Path, simple comparisons) or enum predicates only |
+| Worktree agent inheriting daemon's environment variables | Agent reads `ANTHROPIC_API_KEY`, GitHub tokens, or other secrets from env | Spawn worktree agent with stripped env; pass only required variables explicitly |
+| Lesson store containing sensitive data from prior runs | Future agents read file contents, API responses, or credentials from lesson records | Scrub PII and secrets from lesson content before storage; lessons should describe patterns, not replay raw content |
+| Decomposition prompt leaking full issue body to a different LLM | If decomposition uses a separate model, the issue body (potentially containing repo context) goes to that model | Use the same LLM provider for decomposition as for execution; no cross-provider context sharing |
+| Decomposed node branches lingering after run completes | Old branches in the repo expose partial implementation details or credentials in committed files | Auto-delete node branches after successful merge; never push node branches to origin |
+| Rate limit scheduler revealing internal retry state via GitHub comments | Comments saying "retrying in 300 seconds due to rate limit" expose orchestrator internals | Use vague user-facing messages; log detailed retry state internally only |
 
 ---
 
 ## UX Pitfalls
 
-Common user experience mistakes in this domain.
+Common user experience mistakes when adding these features.
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| One GitHub comment per child worker | 8 children = 8 comments per issue; notification flood | Aggregate child results into a single summary comment on the parent issue |
-| Self-correction loop silent until complete | User has no idea how many iterations are running or their cost | Update progress comment after each iteration: "Fix attempt 2/5 — 3 tests still failing" |
-| Loop aborted with no explanation | User sees "pipeline failed" with no indication of what was tried | Write an iteration summary to the comment: "Aborted after 5 attempts. Best result: 7/10 tests passing. Final error: [...]" |
-| Conditional skip not surfaced in pipeline status | User expects a node to run; it was silently skipped by condition | Mark conditionally-skipped nodes explicitly in the pipeline run view with the condition that evaluated false |
-| Delegation tree invisible to user | Lead dispatches 5 children; user sees only the parent issue progress | Show child task list in parent issue comment: "Delegating to 3 subtasks: [list with status badges]" |
+| Showing decomposition plan as a wall of JSON in GitHub comment | User cannot understand what will be executed | Render the plan as a markdown checklist with node descriptions; use code block only for the raw JSON in a collapsed `<details>` section |
+| Posting a comment for every decomposed node start/complete | 5 nodes = 10 comments; user gets spammed | Roll up all node progress into a single comment that updates in place (existing rollup pattern from v3.0) |
+| Rate limit retry with no user-visible indication | User thinks the run is stalled/hung | Post a comment: "Rate limited by Claude API — retrying in 5 minutes. Workspace preserved." |
+| Outcome learning silently changing agent behavior | User cannot understand why the agent is now avoiding certain approaches | Expose active lessons in the progress comment: "Based on 3 prior runs, skipping X approach" |
+| Fallback to single-agent presented as a failure | User thinks decomposition failed when it gracefully fell back | Message: "Issue is simple enough to handle directly — using single-agent mode" not "Decomposition failed, falling back" |
 
 ---
 
@@ -360,17 +341,17 @@ Common user experience mistakes in this domain.
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **Child slot management:** `dispatchIssue` for children uses a separate slot pool, not the global `SlotManager` — verify `state.running.size` never blocks due to children holding parent slots
-- [ ] **Parent/child persistence:** `runs` table has `parentRunId`, `depth`, `maxChildren`, `childrenDispatched` — verify restart + recovery still knows which runs are children of which lead
-- [ ] **Workspace isolation:** Children write to `{issueWorkspace}/children/{childId}/` or a Git worktree, never directly to `{issueWorkspace}/` — verify with a two-child test writing to the same file path
-- [ ] **Depth enforcement:** `dispatchIssue` has a code-level depth check — verify a depth-3 dispatch attempt throws without reaching the agent
-- [ ] **Conditional execution:** Pipeline executor moves to ready-queue model — verify a pipeline with `condition: false` shows that branch node as `skipped` in `nodeStates`
-- [ ] **Loop hard cap:** Every loop node has a required `maxIterations` field that the executor enforces before evaluating the condition — verify the loop halts at `maxIterations` even when the condition would continue
-- [ ] **Convergence detection:** Self-correction loop compares test output between iterations — verify loop aborts when two consecutive iterations produce identical test failure output
-- [ ] **Per-iteration checkpoints:** Loop nodes save a checkpoint with `iterationIndex` after each successful fix commit — verify crash recovery resumes from the last completed iteration, not from iteration 1
-- [ ] **Fix branch carry-forward:** Self-correction loop's test runner in iteration N+1 sees the committed state from iteration N's fix — verify with a test where fix agent's change is visible to the next test run
-- [ ] **Governance inheritance:** Child workers are dispatched with `autonomy: "full"` regardless of lead's governance setting — verify no per-child approval comments are created
-- [ ] **Aggregate comment:** All child results are aggregated into a single parent issue comment — verify no N separate result comments for N children
+- [ ] **Decomposition engine:** Often missing semantic validation — verify that overlapping file scope and test-without-implementation-dependency are detected
+- [ ] **Decomposition engine:** Often missing the fallback-to-single-agent path — verify that a bad plan score triggers clean fallback with no orphaned state
+- [ ] **Worktree runtime:** Often missing cleanup on bootstrap failure — verify that a failure between `git worktree add` and agent spawn leaves no orphaned directory
+- [ ] **Worktree runtime:** Often missing startup prune — verify `git worktree prune` runs on daemon startup
+- [ ] **Parallel merge:** Often missing conflict detection — verify that a merge conflict triggers re-plan, not silent overwrite
+- [ ] **Rate limit detection:** Often missing test against real CLI error strings — verify classifier against actual Claude Code and Codex error output, not synthetic strings
+- [ ] **Rate limit retry:** Often missing the committed checkpoint before suspension — verify a git commit is created in the worktree before the workspace is preserved
+- [ ] **Outcome learning:** Often missing contradiction detection — verify that a new lesson contradicting an existing one is flagged, not silently appended
+- [ ] **Outcome learning:** Often missing lesson scoping — verify that code-workflow lessons are not injected into research-workflow runs
+- [ ] **Outcome learning:** Often missing token cap enforcement — verify that the injected lesson context never exceeds 500 tokens regardless of lesson count
+- [ ] **Backward compatibility:** Often missing after integration — verify existing `forgectl run` and `forgectl pipeline` commands complete without regression using existing tests
 
 ---
 
@@ -380,14 +361,13 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Slot deadlock (children blocking leads) | MEDIUM | Kill stalled child workers; add two-tier slot pool; re-dispatch leads |
-| Parent/child relationships lost on restart | HIGH | Query SQLite for orphaned runs with matching workspace paths; manually re-associate; add `parentRunId` migration |
-| Workspace contamination between children | MEDIUM | Identify conflicting files from git log; revert to last clean commit; re-run with isolated workspaces |
-| Loop of death (no convergence cap) | LOW | Kill the pipeline run; set `maxIterations` in config; re-dispatch |
-| Conditional branch always executing | MEDIUM | Audit pipeline run `nodeStates` for unexpected `completed` statuses; add type discriminant; re-run with fixed executor |
-| SQLite BUSY under concurrent child writes | LOW | Increase `busy_timeout`; add jitter to child completion writes; re-run (writes are idempotent) |
-| Governance gate fires N times for N children | LOW | Approve once and close the other N-1 approval comments; fix governance inheritance; re-dispatch |
-| Fix branch not carried forward, iterations repeat same fix | MEDIUM | Manually merge fix branches in order; add `currentBase` tracking to loop node; re-run from last good iteration |
+| Bad decomposition plan executed, repo in incoherent state | HIGH | Identify all node branches; delete them; re-run as single-agent; add semantic validation retroactively |
+| Orphaned worktrees filling disk | LOW | Run `git worktree prune`; manually delete orphaned directories; add startup prune to daemon |
+| Merge conflict from parallel nodes on shared file | MEDIUM | Delete the conflicting branches; re-run the decomposition with explicit file-ownership constraints in the prompt |
+| Rate limit misclassification in retry loop | LOW | Kill the stuck retry timer; add the error pattern to the misclassification blocklist; re-dispatch the issue |
+| Polluted lesson store degrading agent quality | MEDIUM | Run `forgectl outcomes review`; purge low-confidence and contradictory lessons; add automatic confidence decay retroactively |
+| Worktree agent accessed host credentials | HIGH | Rotate all exposed secrets immediately; add env stripping to worktree spawn; audit all runs that used the worktree runtime |
+| Single-agent path broken by decomposition middleware | MEDIUM | Revert decomposition middleware; restore original dispatch path; re-add decomposition as separate gated code path |
 
 ---
 
@@ -397,34 +377,37 @@ How roadmap phases should address these pitfalls.
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Slot budget exhaustion (children eat parent slots) | Multi-agent delegation: slot design | Test: lead with maxChildren=5 and global slots=5 does not deadlock |
-| Parent/child relationships lost on restart | Multi-agent delegation: schema + recovery | Test: SIGKILL daemon after child dispatch, restart, verify no duplicate dispatch |
-| Workspace contamination between children | Multi-agent delegation: workspace isolation | Test: two children write to same relative path; verify no cross-contamination |
-| Governance gate applied N times to N children | Multi-agent delegation: governance wiring | Test: supervised lead with 3 children generates exactly 1 approval request |
-| Conditional branches break static DAG assumptions | Conditional pipeline nodes: executor refactor | Test: condition=false pipeline shows branch as skipped, not completed |
-| Loop nodes violate DAG acyclicity invariant | Conditional/loop nodes: loop node model | Test: loop node does not trigger validateDAG cycle error; runs exactly maxIterations times |
-| Self-correction loop of death | Self-correction: convergence guard | Test: fix agent that never fixes causes loop to abort at maxIterations |
-| Fix branch not carried forward between iterations | Self-correction: carry-forward model | Test: fix in iteration 1 is visible to test runner in iteration 2 |
-| Concurrent child SQLite write contention | Multi-agent delegation: SQLite wiring | Load test: 5 children complete simultaneously; no SQLITE_BUSY errors |
-| Conditional node field ignored by executor | Conditional nodes: type discriminant | Test: pipeline with conditional node, condition=false, false-branch status is "skipped" |
+| Decomposition produces valid but bad plan | Decomposition Engine | Semantic validation test suite with overlapping nodes, orphaned tests, single-node plans |
+| Bad plan worse than no plan | Decomposition Engine + Parallel Execution | Integration test: partial failure triggers fallback; no orphaned state after fallback |
+| Orphaned worktrees on bootstrap failure | Worktree Runtime | Fault injection test: kill process between `worktree add` and agent spawn; verify cleanup |
+| Parallel nodes touching shared files | Parallel Execution / Merge | Integration test: two nodes modifying same file; verify conflict detection, not silent overwrite |
+| Rate limit misclassification | Rate Limit Retry | Classifier unit test with corpus of real Claude Code and Codex error strings |
+| Workspace preservation preserving incoherent state | Rate Limit Retry | Integration test: rate limit mid-agent; verify git commit exists before workspace suspension |
+| Outcome learning noise > signal | Outcome Learning | Load test: 100 lessons inserted; verify contradiction detection, token cap, scope filtering |
+| Dead-end tracking misfires on infra failures | Outcome Learning | Test: infrastructure failure recorded as dead end; verify it is not propagated to future runs |
+| Breaking single-agent path | Decomposition Engine (first phase) | All existing unit tests pass unchanged after decomposition integration |
+| Worktree runtime security bypass | Worktree Runtime | Security test: worktree agent attempts to read host credentials; verify failure |
 
 ---
 
 ## Sources
 
-- `/home/claude/forgectl-dev/src/pipeline/executor.ts` — Static topological sort, inFlight scheduling, fan-in merge, checkpoint hydration (code analysis, HIGH confidence)
-- `/home/claude/forgectl-dev/src/orchestrator/dispatcher.ts` — `dispatchIssue` fire-and-forget pattern, no child tracking, GovernanceOpts inheritance (code analysis, HIGH confidence)
-- `/home/claude/forgectl-dev/src/orchestrator/state.ts` — In-memory OrchestratorState, SlotManager slot pool (code analysis, HIGH confidence)
-- `/home/claude/forgectl-dev/src/validation/runner.ts` — Existing validation loop with `maxRetries`, restart-all-steps behavior (code analysis, HIGH confidence)
-- `/home/claude/forgectl-dev/src/storage/schema.ts` — `runs` table schema missing `parentRunId`/`depth` columns (code analysis, HIGH confidence)
-- [Multi-agent coordination strategies — Galileo AI](https://galileo.ai/blog/multi-agent-coordination-strategies) — parent-child topology, slot exhaustion patterns (MEDIUM confidence)
-- [The "Loop of Death" — Sattyam Jain, Jan 2026](https://medium.com/@sattyamjain96/the-loop-of-death-why-90-of-autonomous-agents-fail-in-production-and-how-we-solved-it-at-e98451becf5f) — step budgets, convergence failure, retry abuse (MEDIUM confidence)
-- [Self-Correcting Multi-Agent AI Systems — Soham Ghosh, Feb 2026](https://medium.com/@sohamghosh_23912/self-correcting-multi-agent-ai-systems-building-pipelines-that-fix-themselves-010786bae2db) — best-score tracking, iteration history (MEDIUM confidence)
-- [Git Worktrees for Parallel Agents — DEV Community](https://dev.to/arifszn/git-worktrees-the-power-behind-cursors-parallel-agents-19j1) — workspace isolation pattern, per-agent branches (MEDIUM confidence)
-- [I Tried Agent Self-Correction — Nexumo, Feb 2026](https://medium.com/@Nexumo_/i-tried-agent-self-correction-tool-errors-made-it-worse-d6ea76a17c1c) — self-correction backfire, tool error amplification (MEDIUM confidence)
-- [Multi-Agent System Reliability — Maxim AI](https://www.getmaxim.ai/articles/multi-agent-system-reliability-failure-patterns-root-causes-and-production-validation-strategies/) — coordination failures, retry ambiguity, duplicate actions (MEDIUM confidence)
-- [SQLite concurrent writes — Ten Thousand Meters](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/) — SQLITE_BUSY under concurrent writers, BEGIN IMMEDIATE pattern (HIGH confidence)
+- [OpenCode worktree bootstrap failure issue](https://github.com/anomalyco/opencode/issues/14648) — real-world orphaned worktree disk fillup case (HIGH confidence — direct issue report)
+- [OpenCode worktree cleanup fix PR](https://github.com/anomalyco/opencode/pull/14649) — the cleanupFailedWorktree pattern (HIGH confidence — merged production fix)
+- [OpenAI Codex worktree orphaned processes issue](https://github.com/openai/codex/issues/11090) — PPID=1 orphaned processes, multi-instance execution (HIGH confidence — direct issue report)
+- [Clash: detect git worktree conflicts before parallel agent edits](https://github.com/clash-sh/clash) — file-level conflict pre-detection for parallel agents (HIGH confidence — active tool)
+- [Git worktrees for parallel AI coding agents - Upsun](https://devcenter.upsun.com/posts/git-worktrees-for-parallel-ai-coding-agents/) — parallel execution pitfalls, cleanup best practices (MEDIUM confidence)
+- [Why your multi-agent system is failing - Towards Data Science](https://towardsdatascience.com/why-your-multi-agent-system-is-failing-escaping-the-17x-error-trap-of-the-bag-of-agents/) — error compounding in multi-agent systems (MEDIUM confidence)
+- [MAST: Multi-Agent System Failure Taxonomy](https://arxiv.org/pdf/2503.13657) — decomposition failure modes, coordination failures (HIGH confidence — peer-reviewed)
+- [Why AI agents need a database for memory, not just a flat file](https://glenrhodes.com/why-ai-agents-need-a-database-for-memory-not-just-a-flat-file-like-skill-md/) — memory contamination, lesson pollution (MEDIUM confidence)
+- [No More Stale Feedback: Co-Evolving Critics for Agent Learning](https://arxiv.org/abs/2601.06794) — stale lesson problem in agent feedback loops (HIGH confidence — peer-reviewed)
+- [AI Agents Need Memory Control Over More Context](https://arxiv.org/html/2601.11653) — transcript replay amplifies noise, retrieval selection error (HIGH confidence — peer-reviewed)
+- [Agentic AI systems don't fail suddenly — they drift over time](https://www.cio.com/article/4134051/agentic-ai-systems-dont-fail-suddenly-they-drift-over-time.html) — behavioral drift from accumulated lessons (MEDIUM confidence)
+- [OpenAI rate limit handling cookbook](https://cookbook.openai.com/examples/how_to_handle_rate_limits) — retry patterns, thundering herd, failed requests count against limits (HIGH confidence — official)
+- [How to leverage git trees for parallel agent workflows](https://elchemista.com/en/post/how-to-leverage-git-trees-for-parallel-agent-workflows) — worktree patterns, disk multiplier problem (MEDIUM confidence)
+- [Engineer agent reliability — not just prompt it](https://www.aiyan.io/blog/engineer-agent-reliability/) — structured output validation over text parsing (MEDIUM confidence)
+- Existing forgectl codebase: `src/pipeline/dag.ts`, `src/orchestrator/dispatcher.ts`, `src/orchestrator/retry.ts` — integration points for new features (HIGH confidence — direct inspection)
 
 ---
-*Pitfalls research for: forgectl v2.1 Autonomous Factory (multi-agent delegation, conditional/loop pipelines, self-correction)*
-*Researched: 2026-03-12*
+*Pitfalls research for: forgectl v5.0 Intelligent Decomposition*
+*Researched: 2026-03-14*

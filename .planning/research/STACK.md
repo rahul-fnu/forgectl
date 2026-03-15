@@ -1,211 +1,317 @@
-# Technology Stack: v2.1 Additions
+# Stack Research
 
-**Project:** forgectl v2.1 Autonomous Factory
-**Researched:** 2026-03-12
-**Scope:** NEW dependencies only for three features: (1) multi-agent delegation, (2) conditional/loop pipeline nodes, (3) pipeline self-correction. Existing stack (TypeScript, Node 20+, Commander, Fastify, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, Octokit, chalk, picomatch, keytar) is validated and excluded.
-**Confidence:** HIGH for expression evaluator recommendation; HIGH for no-new-deps conclusions on delegation/self-correction.
+**Domain:** AI agent orchestrator — intelligent task decomposition, worktree runtimes, rate limit resilience, outcome learning (v5.0)
+**Researched:** 2026-03-14
+**Confidence:** HIGH (core additions), MEDIUM (vector similarity via sqlite-vec)
+
+## Context: New Additions Only
+
+The existing stack is validated and not re-researched here. This document covers only what v5.0 adds.
+
+**Already in place (do not re-add):** TypeScript, Node.js 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest, picomatch, keytar, chalk, js-yaml, agent-relay.
 
 ---
 
 ## Recommended Stack Additions
 
-### One New Dependency: Expression Evaluator
+### Core New Dependencies
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `filtrex` | ^3.1.0 | Evaluate boolean condition expressions in YAML-defined pipeline nodes | Needed for `if/else` branch conditions and `loop-until` termination conditions in pipeline YAML. The conditions reference node output variables (exit codes, file counts, coverage percentages) — values that are not known until runtime. A safe, sandboxed DSL is required because these expressions come from user-authored YAML files and may run in a long-lived daemon. |
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `@anthropic-ai/sdk` | `^0.78.0` | LLM API calls for task decomposition — send issue content, receive structured DAG output | Official SDK with built-in retry, streaming, and typed tool-use helpers including `betaZodTool`. Already the API that Claude Code wraps; calling it directly allows structured message calls with Zod-schema-enforced responses without shelling out to `claude -p`. Throws typed `RateLimitError` with a parsed `retryAfter` field — exactly what the rate limit retry path needs. |
+| `execa` | `^9.6.0` | Lightweight process spawning for worktree agents (no Docker overhead) | Purpose-built for programmatic process execution. Typed Promise-based API, streaming stdio, graceful kill with SIGTERM→SIGKILL, configurable timeout, and IPC. Replaces raw `child_process.spawn` for agent invocations that run inside a git worktree rather than a container. Execa 9 is fully ESM-native — matches forgectl's `"type": "module"` project type. |
+| `simple-git` | `^3.27.0` | Programmatic git worktree management (add, list, remove, prune) | Typed wrapper around the git CLI with bundled TypeScript definitions (no `@types/` package needed). v3 is dual CJS+ESM. The `.raw()` escape hatch gives access to any worktree subcommand not yet in the high-level API. 6.4M weekly downloads, actively maintained. |
+| `p-queue` | `^9.1.0` | Priority queue for parallel sub-task execution with dynamic concurrency cap | Required for worktree-runtime sub-tasks that arrive dynamically and must be bounded. Unlike `p-limit` (which just gates concurrent invocations), `p-queue` supports priority ordering, pause/resume, and draining — all needed for the decomposition feedback loop where a re-plan must interrupt and replace in-flight tasks. Pure ESM, compatible with forgectl's module type. |
 
-**Why filtrex and not the alternatives:**
+### Supporting Libraries
 
-`filtrex` 3.1.0 (published October 2024) is the correct choice for forgectl's conditional node DSL because:
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| `p-limit` | `^7.3.0` | Simple concurrency cap for bounded fan-out operations | Use for one-shot bounded parallel calls where ordering does not matter and no queue state is needed — e.g., validating multiple sub-task outputs simultaneously or running decomposition pre-checks in parallel. Lighter than p-queue for these cases. Pure ESM. |
+| `sqlite-vec` | latest (verify at install) | K-nearest-neighbor vector similarity search inside the existing SQLite database | Required for outcome learning: embed the current issue text, find the semantically nearest past lessons, inject them into the decomposer's system prompt. Runs as a SQLite loadable extension via `db.loadExtension()` on the existing better-sqlite3 connection — no new service, no new database. Pure C, SIMD-accelerated cosine similarity. Active 2025 development. |
 
-1. **Truly sandboxed.** Expressions cannot access the process environment, Node.js APIs, or the global object. The library explicitly guarantees no sandbox breakout, unlike `node:vm`-based approaches (`safe-eval`, `safer-eval`) where breakouts have been demonstrated.
+### Development Tools
 
-2. **Never throws on execution.** `filtrex` will not throw during expression execution — it returns an error value instead. This is exactly the right behavior for a daemon where a user-authored condition expression must not crash the orchestrator process.
-
-3. **Boolean-first design.** forgectl's conditions are boolean predicates: `exit_code == 0`, `coverage >= 80`, `failed_tests == 0`. `filtrex` treats boolean logic as first-class (supports `and`, `or`, `not`, `==`, `!=`, `<`, `<=`, `>`, `>=`). `expr-eval` is math-first and requires more gymnastics for pure boolean use.
-
-4. **Zero dependencies.** No transitive risk. `jexl` depends on `@babel/runtime` and was last published in 2020. `expr-eval` was last published in a similar timeframe and has no maintained types.
-
-5. **ESM support.** Ships `dist/esm/filtrex.mjs` with TypeScript declarations at `dist/esm/filtrex.d.ts`. Compatible with the project's `"type": "module"` configuration.
-
-6. **Custom function injection.** The `filtrex` evaluator accepts a `functions` map at evaluation time, allowing forgectl to inject helpers like `contains(output, "PASS")` or `matches(branch, "feat/*")` that operate on node output strings — without any regex or VM risk.
-
-**What NOT to use for expressions:**
-
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| `node:vm` with raw user expressions | Not a security boundary. Sandbox breakouts are documented. The daemon is long-lived — a crash or breakout is unacceptable. | `filtrex` |
-| `eval()` | Obviously not. | `filtrex` |
-| `jexl` ^2.3.0 | Last published 2020. Depends on `@babel/runtime`. Async-first design adds unnecessary complexity for synchronous pipeline conditions. | `filtrex` |
-| `expr-eval` ^2.0.2 | Math-only DSL, no native boolean expressions, last published 2021+, no maintained TypeScript types. | `filtrex` |
-| `jsonata` ^2.1.0 | JSON transformation language — correct tool for JSON querying, wrong tool for boolean predicate conditions. Overkill, different mental model. | `filtrex` |
-
----
-
-## No New Dependencies: Multi-Agent Delegation
-
-Multi-agent delegation (lead agent decomposes issue → spawns worker agents → waits for results → synthesizes) requires zero new npm dependencies. Everything needed already exists:
-
-**What already exists that covers delegation:**
-- `executeWorker()` in `src/orchestrator/worker.ts` — the atomic unit of agent execution. A delegation service calls this for each child task.
-- `SlotManager` — controls concurrency. Child workers compete for the same slot pool, preventing runaway spawning.
-- `DrizzleORM` + `better-sqlite3` — storage for parent/child run relationships (schema addition, not a new library).
-- `Zod` — validation for delegation config (max children budget, depth limit) parsed from WORKFLOW.md front matter.
-- Existing governance/approval system — child runs inherit autonomy level from parent run context.
-
-**Schema additions needed (no new library):**
-
-The `runs` table in `src/storage/schema.ts` needs two new columns:
-- `parentRunId text` — foreign key to `runs.id` (self-referential). `null` for top-level runs.
-- `delegationDepth integer` — 0 for top-level, 1 for children, capped at 2 by application logic.
-
-Drizzle ORM supports self-referential foreign keys via `foreignKey` from `drizzle-orm/sqlite-core`. A new `delegations` table tracks per-issue child budgets:
-- `issueId text`, `parentRunId text`, `childCount integer`, `maxChildren integer`.
-
-The `DelegationService` class lives in `src/orchestrator/delegation.ts` and orchestrates the lead/worker pattern entirely using existing primitives.
-
-**Pattern rationale (supervisor/hierarchical):**
-The lead agent gets the issue, produces a decomposition (a list of subtasks as text). The `DelegationService` parses this output, creates child `TrackerIssue`-like objects, calls `executeWorker()` for each (up to `maxChildren` budget, `depth <= 2`), waits for all child results, and synthesizes a final result comment. This is the standard hierarchical/supervisor pattern for multi-agent AI systems and maps cleanly onto the existing worker/dispatcher/slot-manager architecture.
-
----
-
-## No New Dependencies: Conditional and Loop Pipeline Nodes
-
-Conditional pipeline nodes (`type: "condition"` with `if/else` branches, `type: "loop"` with `until` condition) integrate into the existing `PipelineExecutor` in `src/pipeline/executor.ts`. The only new dependency is `filtrex` (documented above) for evaluating the condition expressions.
-
-**What already exists:**
-- `PipelineNode` type in `src/pipeline/types.ts` — extend with `type?: "task" | "condition" | "loop"`, `condition?: string`, `if_branch?: string[]`, `else_branch?: string[]`, `until?: string`, `max_iterations?: number`.
-- `topologicalSort` / `validateDAG` in `src/pipeline/dag.ts` — condition and loop nodes participate in the DAG. Loop nodes self-reference (they re-queue themselves on the executor's run list when the condition is not yet met), but the static DAG is acyclic (the loop is a runtime construct, not a graph edge).
-- `NodeExecution` status enum — add `"loop-iterating"` status to express that a loop node is mid-iteration.
-- `CheckpointRef` — loop iteration checkpoints save iteration count alongside normal checkpoint data.
-
-**Expression evaluation context for `filtrex`:**
-
-The context object passed to each condition evaluation contains the upstream node's execution result:
-```typescript
-{
-  exit_code: number,      // last validation step exit code
-  output: string,         // agent stdout (trimmed)
-  passed: boolean,        // validation passed/failed
-  iteration: number,      // current loop iteration count
-  files_changed: number,  // git output files changed
-  coverage: number,       // parsed from stdout if available
-}
-```
-Custom functions injected: `contains(str, substr)`, `startsWith(str, prefix)`, `matches(str, pattern)` using `picomatch` (already in project).
-
-**Loop termination safety:** Every loop node requires `max_iterations` (required field, no default). The executor enforces this cap regardless of the `until` condition result. On cap hit, the node transitions to `failed` with a clear error message.
-
----
-
-## No New Dependencies: Pipeline Self-Correction
-
-Self-correction (test fail → fix agent → retest) is implemented as a specialised pipeline node type and/or a pre-built pipeline pattern using conditional/loop nodes. No new npm dependency is needed.
-
-**What already exists:**
-- `runValidationLoop()` in `src/validation/runner.ts` — already implements "run test, feed failures back to agent, retry". This is self-correction within a single node.
-- The new `type: "loop"` node (above) implements self-correction at the pipeline level: a loop node runs an agent task, a condition checks the result, and the loop body is re-entered if self-correction is needed.
-- `executeWorker()` accepts `validationConfig` with `on_failure: "abandon" | "output-wip" | "pause"` — self-correction loops use `on_failure: "output-wip"` (don't abandon on first failure, let the loop node decide).
-
-**Self-correction pipeline pattern (no new code beyond conditional/loop nodes):**
-
-```yaml
-nodes:
-  - id: implement
-    type: task
-    task: "Implement the feature"
-
-  - id: self-correct
-    type: loop
-    depends_on: [implement]
-    task: "Fix the failing tests. Previous test output: {{output}}"
-    until: "passed == true"
-    max_iterations: 3
-    condition_source: implement   # read condition from this node's last result
-```
-
-The `DelegationService` and the loop executor share the same `executeWorker()` invocation path, so governance gates, flight recorder events, and SQLite checkpoints all apply without additional wiring.
+No new dev tools are needed. Existing tsup, vitest, eslint, prettier, and drizzle-kit cover all new v5.0 code.
 
 ---
 
 ## Installation
 
 ```bash
-# One new production dependency
-npm install filtrex
+# New runtime dependencies for v5.0
+npm install @anthropic-ai/sdk execa simple-git p-queue p-limit
 
-# No new dev dependencies
+# sqlite-vec for outcome learning
+# Verify the current npm package name — canonical upstream is asg017/sqlite-vec
+npm install sqlite-vec
 ```
 
-**Total new production dependencies for v2.1: 1**
-**Total new dev dependencies for v2.1: 0**
+---
+
+## Feature-to-Library Mapping
+
+### LLM-Driven Task Decomposition
+
+**Use:** `@anthropic-ai/sdk` + existing `zod`
+
+Decomposition calls Claude directly via `anthropic.messages.create()` with a tool definition whose `inputSchema` is a Zod schema matching the DAG YAML structure. Claude is forced into the tool response shape — the response is always parseable, no freeform JSON extraction or regex needed. The existing Zod validation layer then validates the DAG before it enters the pipeline executor.
+
+The SDK's built-in retry (3 attempts, exponential backoff) handles transient API errors automatically. Rate limit responses surface as `Anthropic.RateLimitError` (HTTP 429) with a `retryAfter` field already parsed to seconds — wire directly into the orchestrator's existing retry queue.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { z } from 'zod';
+
+const decomposeTool = betaZodTool({
+  name: 'decompose_issue',
+  description: 'Break the issue into a DAG of focused sub-tasks',
+  inputSchema: z.object({
+    nodes: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      depends_on: z.array(z.string()),
+    })),
+  }),
+  run: async (input) => input, // return parsed structure directly
+});
+```
+
+**Do NOT use:** LangChain, LlamaIndex, or instructor-ai. The Anthropic SDK's `betaZodTool` provides structured output natively for a single-provider use case. Adding a framework creates an additional update dependency with no benefit.
+
+### Git Worktree Management
+
+**Use:** `simple-git`
+
+```typescript
+import simpleGit from 'simple-git';
+const git = simpleGit(repoRoot);
+
+// Add a worktree for a sub-task branch
+await git.raw(['worktree', 'add', worktreePath, branchName]);
+
+// List all active worktrees (porcelain for machine-readable output)
+await git.raw(['worktree', 'list', '--porcelain']);
+
+// Remove when sub-task completes
+await git.raw(['worktree', 'remove', '--force', worktreePath]);
+
+// Prune stale metadata after crash recovery
+await git.raw(['worktree', 'prune']);
+```
+
+Use `.raw()` for all worktree operations — simple-git v3.27 does not yet have a high-level `worktree()` API, but the raw command path is stable and typed. The `WorktreeManager` module in `src/worktree/` wraps these calls and adds per-worktree path locking via a SQLite row to prevent two agents colliding on the same directory.
+
+**Do NOT use:** `git-worktree` npm package (alexweininger — last updated 2022, negligible downloads) or `nodegit` (libgit2 native bindings — heavy native build dependency, overkill for what is purely CLI-passthrough work).
+
+### Lightweight Process Spawning (Worktree Agents)
+
+**Use:** `execa`
+
+```typescript
+import { execa } from 'execa';
+
+const proc = execa('claude', ['-p', prompt], {
+  cwd: worktreePath,
+  env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
+  stdout: 'pipe',
+  stderr: 'pipe',
+  timeout: timeoutMs,
+});
+
+// Stream output in real time
+proc.stdout?.on('data', (chunk) => logger.info(chunk.toString()));
+const result = await proc;
+// result.exitCode, result.stdout, result.stderr — all typed
+```
+
+Execa 9's structured subprocess object exposes stdout/stderr as separate streams, exit code, signal name, and wall-clock duration — all typed. The `timeout` option sends SIGTERM then SIGKILL, preventing orphaned agent processes if the daemon restarts.
+
+**Rate limit detection in process mode:** Claude Code exits with code 1 and writes a structured JSON error to stderr when rate-limited: `{"type":"error","error":{"type":"rate_limit_error","retry_after":N}}`. Use `stderr: 'pipe'` and accumulate the stderr buffer for parsing on process exit. Map the `retry_after` value to the same orchestrator retry queue used for API-mode rate limits.
+
+**Do NOT use:** Raw `child_process.spawn`. Execa provides typed errors, automatic cleanup on parent exit, and IPC — all required for reliable agent lifecycle management in a daemon context.
+
+### Parallel Sub-Task Execution
+
+**Use:** `p-queue` (dynamic task queue for worktree agents) + `p-limit` (bounded fan-out for simpler parallel checks)
+
+```typescript
+import PQueue from 'p-queue';
+const queue = new PQueue({ concurrency: maxWorktrees });
+
+// Enqueue sub-tasks from the decomposition DAG
+for (const node of dagNodes) {
+  queue.add(() => runWorktreeAgent(node), { priority: node.depth });
+}
+
+// Wait for all to complete before synthesizing
+await queue.onIdle();
+```
+
+`p-queue`'s `pause()` and `clear()` methods support the re-plan path: when the feedback loop decides to re-decompose, pause the queue, clear pending tasks, and enqueue the revised plan. `p-limit` handles simpler cases — like running up to N validation checks in parallel — without the overhead of a full queue.
+
+Both packages are pure ESM. Import as `import PQueue from 'p-queue'` and `import pLimit from 'p-limit'`. Compatible with forgectl's `"type": "module"` package.
+
+### Rate Limit Detection and Scheduled Retry
+
+**Use:** `@anthropic-ai/sdk` typed error classes + existing orchestrator retry queue
+
+The SDK throws `Anthropic.RateLimitError` (extends `APIError`) on HTTP 429. The error carries:
+- `status: 429`
+- `headers`: raw response headers including `retry-after` and `anthropic-ratelimit-*`
+- `retryAfter`: already parsed to an integer (seconds)
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+
+try {
+  await anthropic.messages.create({ ... });
+} catch (e) {
+  if (e instanceof Anthropic.RateLimitError) {
+    const waitMs = (e.retryAfter ?? 60) * 1000;
+    // Schedule retry in existing orchestrator retry queue, preserving workspace/checkpoint
+    await orchestrator.scheduleRetry(issueId, waitMs, currentCheckpoint);
+  }
+}
+```
+
+For process-spawned agents (execa path), parse the accumulated stderr for the JSON rate limit error and map to the same `scheduleRetry` call.
+
+**Do NOT add:** `bottleneck`, `rate-limiter-flexible`, or any third-party rate limiting library. The retry logic belongs in the existing orchestrator state machine. A separate library creates two competing retry systems and duplicates state.
+
+### Run Outcome Learning
+
+**Use:** `sqlite-vec` + existing `better-sqlite3` + `@anthropic-ai/sdk` (for text embeddings via `embeddings.create()`)
+
+Three table additions to the existing Drizzle ORM schema:
+
+1. `outcome_lessons` — text lessons extracted from completed runs (issue summary, what worked, dead ends, final sub-task count)
+2. `outcome_embeddings` — serialized float32 vectors, one per lesson, generated by the Anthropic embeddings API
+3. `vec_lessons` — sqlite-vec virtual table for KNN search over the embeddings
+
+At dispatch time: embed the incoming issue title + body, query `vec_lessons` for the top-5 nearest neighbors (cosine similarity), inject the retrieved lesson texts into the decomposer's system prompt as historical context.
+
+```typescript
+import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
+
+// Load into existing connection (no new database)
+sqliteVec.load(db);
+
+// K-nearest neighbor query at dispatch time
+const similar = db.prepare(`
+  SELECT l.lesson_text, v.distance
+  FROM vec_lessons v
+  JOIN outcome_lessons l ON l.id = v.rowid
+  WHERE v.embedding MATCH ?
+  ORDER BY v.distance
+  LIMIT 5
+`).all(new Float32Array(queryVector));
+```
+
+**Fallback when embeddings are not yet seeded:** BM25 full-text search via SQLite FTS5 on `outcome_lessons.issue_label` and `lesson_text` columns. FTS5 is already available in SQLite with no extra extension — keyword-based retrieval degrades gracefully until the vector index is populated.
+
+**Confidence on sqlite-vec: MEDIUM.** The library is actively maintained, has Node.js tutorials from early 2025, and ships pre-built platform binaries to npm. However, the exact npm package name and binary availability for the target platform (linux-x64) should be verified at install time. The canonical upstream is `asg017/sqlite-vec`; check the current npm package name before pinning in package.json.
+
+**Do NOT use:** External vector databases (Chroma, Pinecone, Qdrant, Weaviate). The project constraint is single-machine, SQLite-only. sqlite-vec runs inside the existing better-sqlite3 connection with zero additional infrastructure.
 
 ---
 
 ## Alternatives Considered
 
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Expression evaluator | `filtrex` ^3.1.0 | `jexl` ^2.3.0 | Last published 2020. Async-first (unnecessary). Depends on `@babel/runtime`. Stale. |
-| Expression evaluator | `filtrex` ^3.1.0 | `expr-eval` ^2.0.2 | Math DSL, no native booleans, no maintained types, last published 2021+. |
-| Expression evaluator | `filtrex` ^3.1.0 | `node:vm` + raw JS | Not a security boundary. Breakouts documented. Daemon cannot afford crashes from user-authored YAML. |
-| Expression evaluator | `filtrex` ^3.1.0 | Custom recursive descent parser | Correct approach if we need full control, but `filtrex` 3.1.0 covers the entire required operator set. Build vs. buy: `filtrex` has zero deps, ships types, and costs 0 maintenance burden. |
-| Delegation storage | SQLite schema extension | New `delegations` table only | Prefer adding `parentRunId`/`delegationDepth` to `runs` table (co-located, simpler joins) plus a lightweight `delegation_budgets` table for the per-issue child count. |
-| Self-correction | Loop pipeline node | Dedicated `SelfCorrectionRunner` class | The loop node pattern is more general, reusable, and composable. A dedicated class would duplicate the loop executor's core logic. |
-| Multi-agent framework | Custom delegation service | `agent-squad` / OpenAI Agents SDK | These frameworks assume you control the LLM API call. forgectl's agents are external CLI processes (`claude -p`, `codex exec`). Frameworks that expect function-calling APIs don't compose with forgectl's agent adapter model. |
+| Recommended | Alternative | Why Not |
+|-------------|-------------|---------|
+| `@anthropic-ai/sdk` direct | Shell out to `claude -p` for decomposition | No structured output enforcement; subprocess overhead; no typed error classes for rate limit detection |
+| `@anthropic-ai/sdk` direct | `@instructor-ai/instructor` | Extra dependency for what `betaZodTool` already provides in the SDK; adds its own Anthropic adapter layer |
+| `@anthropic-ai/sdk` direct | `@ai-sdk/anthropic` (Vercel AI SDK) | Vercel AI SDK adds an abstraction layer designed for multi-provider use — forgectl is Claude-only; the abstraction is unnecessary weight |
+| `execa` | Raw `child_process.spawn` | No timeout enforcement, no typed errors, no auto-cleanup on parent exit — all required for daemon-managed agent processes |
+| `execa` | `zx` | zx is a shell scripting tool, not a process-embedding library; heavier API surface designed for script authors, not programmatic embedding |
+| `simple-git` | `git-worktree` npm package | Last updated 2022, negligible downloads; abandoned |
+| `simple-git` | `isomorphic-git` | Pure JS implementation (no git binary required), but git worktrees are a binary-level feature — isomorphic-git has no worktree support |
+| `simple-git` | Direct `execa('git', [...])` calls | Possible, but simple-git adds typed return parsing, error wrapping, and the GitConfigScope enum — worth the marginal dependency |
+| `p-queue` | `bull` / `bullmq` | Requires Redis; violates the single-process, SQLite-only project constraint |
+| `p-queue` | `bee-queue` | Same Redis dependency problem |
+| `sqlite-vec` | Separate Chroma service | Adds a Python service dependency; violates single-machine constraint |
+| `sqlite-vec` | SQLite FTS5 only | FTS5 is keyword-based, not semantic; misses synonyms and paraphrased lessons — use FTS5 as fallback only, not primary |
+| `sqlite-vec` | `sqlite-vss` | Predecessor to sqlite-vec, no longer actively maintained; sqlite-vec is the designated successor |
 
 ---
 
 ## What NOT to Add
 
-| Dependency | Why Skip |
-|------------|----------|
-| `xstate` | Delegation state machine has 5 states (pending/dispatching/waiting/synthesizing/done). TypeScript discriminated union handles this cleanly. xstate is overkill. |
-| `p-limit` | Delegation concurrency is controlled by the existing `SlotManager`. Don't add a second concurrency primitive. |
-| `zod-to-json-schema` | Not needed for any v2.1 feature. Agent tool schemas are hand-authored. |
-| `vm2` | Abandoned in 2023 after critical security vulnerabilities. Do not use. |
-| `safer-eval` | Uses `node:vm` internally, which is not a true security boundary. `filtrex` is safer. |
-| Any workflow engine (Temporal, Conductor, Airflow) | All require separate server infrastructure. forgectl's loop/condition nodes are implemented in-process using SQLite state. The scope is depth-2 delegation with simple boolean conditions — not enterprise workflow orchestration. |
-| Any LLM SDK (LangChain, LlamaIndex, Vercel AI SDK) | forgectl's agents are subprocess-invoked CLI tools, not API clients. LLM SDKs assume you own the model call. This project does not. |
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| LangChain / LlamaIndex | Framework-level LLM abstractions conflict with forgectl's handcrafted orchestration; adds its own agent loop and retry logic | `@anthropic-ai/sdk` directly with `betaZodTool` |
+| `bottleneck` / `rate-limiter-flexible` | Creates a second retry system alongside the existing orchestrator retry queue; two systems diverge | Handle `Anthropic.RateLimitError` in the existing retry queue |
+| `nodegit` | Native libgit2 bindings with heavy build dependency; worktree API incomplete | `simple-git` with `.raw()` |
+| `sqlite-vss` | No longer actively maintained; superseded by sqlite-vec | `sqlite-vec` |
+| `openai` SDK | No OpenAI usage in scope; adding a second LLM vendor SDK creates version management overhead | `@anthropic-ai/sdk` only |
+| `@anthropic-ai/claude-agent-sdk` | This is the Claude Code SDK (for building agents that run inside Claude Code) — not what forgectl needs. forgectl calls the Claude API directly for decomposition. | `@anthropic-ai/sdk` |
+| `uuid` | Already covered by Node.js 20+ built-in `crypto.randomUUID()` | Built-in |
+| `cron` / `node-cron` | Existing setTimeout-chain scheduler in the orchestrator covers all retry scheduling needs | Existing orchestrator retry queue |
+
+---
+
+## Stack Patterns by Variant
+
+**If sub-task is trusted (same repo, non-destructive):**
+- Use execa + git worktree (no Docker)
+- Because worktree gives file isolation without container spin-up overhead
+
+**If sub-task is untrusted (external data sources, arbitrary shell commands):**
+- Use the existing Dockerode path
+- Because a container provides process and filesystem isolation; a worktree alone is not a security boundary
+
+**If issue is simple (single file, well-understood pattern):**
+- Skip the decomposition LLM call; dispatch directly to a single agent
+- Because LLM decomposition adds latency (~2–5s) and API cost; the single-agent fallback must remain the fast path
+
+**If sqlite-vec binary is unavailable on the target platform:**
+- Use SQLite FTS5 full-text search on `outcome_lessons` as fallback
+- BM25 keyword retrieval is better than no retrieval; the outcome learning feature degrades gracefully
 
 ---
 
 ## Version Compatibility
 
-| Package | Compatible With | Notes |
-|---------|-----------------|-------|
-| `filtrex` ^3.1.0 | Node.js 20+, ESM | Ships `.mjs` entry, TypeScript declarations. No known conflicts with existing stack. Zero deps. |
+| Package | Node.js Requirement | ESM/CJS | Notes |
+|---------|---------------------|---------|-------|
+| `@anthropic-ai/sdk@^0.78.0` | Node 18+ | Dual ESM+CJS | Uses built-in `fetch` in Node 18+; no polyfill needed |
+| `execa@^9.6.0` | Node 18.19.0 or 20.5.0+ | Pure ESM | forgectl targets Node 20+ — fully compatible |
+| `simple-git@^3.27.0` | Node 14+ | CJS + ESM + TS | Bundled typings; no `@types/simple-git` needed |
+| `p-queue@^9.1.0` | Node 18+ | Pure ESM | Do not require() it; import only |
+| `p-limit@^7.3.0` | Node 18+ | Pure ESM | Same constraint as p-queue |
+| `sqlite-vec` | Any (native binaries) | CJS (via better-sqlite3) | Loads as a SQLite extension; platform binary (linux-x64) must be present |
 
 ---
 
-## Integration Points
+## Integration Points with Existing Stack
 
-| Existing Subsystem | How v2.1 Touches It |
-|-------------------|---------------------|
-| `src/pipeline/types.ts` | Add `type`, `condition`, `if_branch`, `else_branch`, `until`, `max_iterations`, `condition_source` fields to `PipelineNode`. Add `"loop-iterating"` to `NodeExecution.status`. |
-| `src/pipeline/executor.ts` | Add `executeConditionNode()` and `executeLoopNode()` methods. Import `filtrex` for condition evaluation. |
-| `src/pipeline/dag.ts` | `validateDAG` must accept loop nodes without treating them as cycles. Condition nodes with `if_branch`/`else_branch` reference other node IDs — validate those references exist. |
-| `src/storage/schema.ts` | Add `parentRunId`, `delegationDepth` columns to `runs` table. Add `delegationBudgets` table. |
-| `src/orchestrator/worker.ts` | `executeWorker` is called by delegation service unchanged. No modification to the function signature — delegation is a caller-level concern. |
-| `src/orchestrator/dispatcher.ts` | Extend to handle delegated child runs: check depth, check budget, call `DelegationService`. |
-| `src/validation/runner.ts` | No changes. `runValidationLoop` is the within-node correction primitive. The loop pipeline node calls `executeWorker` (which calls `runValidationLoop`) on each iteration. |
-| `src/governance/autonomy.ts` | Child runs inherit autonomy from parent context. `GovernanceOpts` passed through to child `executeWorker` calls. |
+| Existing | New | Integration |
+|----------|-----|-------------|
+| `src/pipeline/` DAG executor | `@anthropic-ai/sdk` decomposer | Decomposer outputs a DAG YAML struct; parsed and fed into existing pipeline DAG types |
+| `src/orchestrator/` retry queue | `Anthropic.RateLimitError` | Catch in dispatch loop; `retryAfter` maps to existing `scheduleRetry(issueId, waitMs)` |
+| `src/storage/` Drizzle schema | sqlite-vec + `outcome_lessons` | New tables added to existing schema.ts; sqlite-vec loaded on the existing better-sqlite3 `db` instance |
+| `src/agent/` Claude Code adapter | `execa` | Worktree runtime path uses execa instead of Dockerode; same adapter interface, different spawn mechanism |
+| `src/workspace/` WorkspaceManager | `simple-git` WorktreeManager | New `src/worktree/` module manages worktree lifecycle; WorkspaceManager retains Docker-based workspace ownership |
+| Existing `p-queue` (if used) | `p-queue@9` | If any prior code used p-queue, confirm it is already on v9 or update; only one version should be present |
 
 ---
 
 ## Sources
 
-- [filtrex on npm](https://www.npmjs.com/package/filtrex) — v3.1.0, published 2024-10-14, zero deps, ESM + TypeScript
-- [filtrex GitHub](https://github.com/joewalnes/filtrex) — boolean expression DSL, safety guarantees, custom function injection
-- [jexl on npm](https://www.npmjs.com/package/jexl) — v2.3.0, last published 2020-09-15 (stale, not recommended)
-- [expr-eval on npm](https://www.npmjs.com/package/expr-eval) — v2.0.2, math DSL (wrong fit for boolean conditions)
-- [Drizzle ORM self-referential FK](https://gebna.gg/blog/self-referencing-foreign-key-typescript-drizzle-orm) — verified pattern for `runs.parentRunId`
-- [Drizzle ORM relations v2](https://orm.drizzle.team/docs/relations-v2) — current docs for relational queries
-- [Azure AI Agent Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns) — supervisor/hierarchical pattern rationale
-- [AWS prescriptive guidance: evaluator reflect-refine loop](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html) — self-correction loop patterns
-- npm registry (`npm info`) — version and publish date verification for all packages listed above
+- [anthropics/anthropic-sdk-typescript GitHub](https://github.com/anthropics/anthropic-sdk-typescript) — tool-use helpers, typed error classes, streaming (HIGH confidence)
+- [@anthropic-ai/sdk on npm](https://www.npmjs.com/package/@anthropic-ai/sdk) — version 0.78.0 verified (HIGH confidence)
+- [sindresorhus/execa GitHub](https://github.com/sindresorhus/execa) — v9.6.x, ESM-native, Node 20 compatible, stdio streaming (HIGH confidence)
+- [execa@9.6.1 jsDocs.io](https://www.jsdocs.io/package/execa) — TypeScript types confirmed (HIGH confidence)
+- [steveukx/git-js GitHub](https://github.com/steveukx/git-js) — simple-git v3.27, TypeScript bundled, `.raw()` API (HIGH confidence)
+- [sindresorhus/p-queue GitHub](https://github.com/sindresorhus/p-queue) — v9.1.0, pure ESM, pause/resume/priority/drain (HIGH confidence)
+- [sindresorhus/p-limit GitHub](https://github.com/sindresorhus/p-limit) — v7.3.0, pure ESM (HIGH confidence)
+- [asg017/sqlite-vec GitHub](https://github.com/asg017/sqlite-vec) — K-NN, cosine similarity, SQLite extension, active 2025 (MEDIUM confidence — verify npm package name at install time)
+- [sqlite-vec Node.js tutorial (DEV Community, 2025)](https://dev.to/stephenc222/how-to-use-sqlite-vec-to-store-and-query-vector-embeddings-58mf) — Node.js integration confirmed (MEDIUM confidence)
 
 ---
-*Stack research for: forgectl v2.1 — multi-agent delegation, conditional/loop pipeline nodes, pipeline self-correction*
-*Researched: 2026-03-12*
+
+*Stack research for: forgectl v5.0 Intelligent Decomposition*
+*Researched: 2026-03-14*

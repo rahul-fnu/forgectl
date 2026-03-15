@@ -61,7 +61,7 @@ describe("Governance wiring", () => {
         slotManager: { availableTopLevelSlots: vi.fn().mockReturnValue(3) } as any,
         config: { tracker: { terminal_states: [] }, orchestrator: { poll_interval_ms: 1000 } } as unknown as ForgectlConfig,
         promptTemplate: "test",
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
         metrics: { recordDispatch: vi.fn(), recordCompletion: vi.fn() } as any,
         runRepo: mockRunRepo,
         autonomy: "semi",
@@ -99,7 +99,7 @@ describe("Governance wiring", () => {
         slotManager: { availableTopLevelSlots: vi.fn().mockReturnValue(3) } as any,
         config: { tracker: { terminal_states: [] }, orchestrator: { poll_interval_ms: 1000 } } as unknown as ForgectlConfig,
         promptTemplate: "test",
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
         metrics: { recordDispatch: vi.fn(), recordCompletion: vi.fn() } as any,
         // No runRepo, autonomy, autoApprove
       };
@@ -132,7 +132,7 @@ describe("Governance wiring", () => {
           tracker: { terminal_states: [] },
         } as unknown as ForgectlConfig,
         promptTemplate: "test",
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
         runRepo: mockRunRepo,
         autonomy: "interactive",
         autoApprove: { label: "safe" },
@@ -173,7 +173,7 @@ describe("Governance wiring", () => {
           tracker: { terminal_states: [] },
         } as unknown as ForgectlConfig,
         promptTemplate: "test",
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
         // No runRepo
       });
 

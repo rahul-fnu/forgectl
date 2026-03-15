@@ -326,6 +326,10 @@ describe("executeWorker", () => {
 
     vi.mocked(createAgentSession).mockReturnValue(mockSession as any);
     vi.mocked(cleanupRun).mockResolvedValue(undefined);
+    vi.mocked(collectGitOutput).mockResolvedValue({
+      mode: "git", branch: "forge/test/branch", sha: "abc123",
+      filesChanged: 0, insertions: 0, deletions: 0,
+    } as any);
   });
 
   it("calls workspaceManager.ensureWorkspace with issue identifier", async () => {

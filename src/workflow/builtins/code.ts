@@ -37,4 +37,5 @@ If issues exist, list them numbered. Only flag real problems, not style preferen
   },
   cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

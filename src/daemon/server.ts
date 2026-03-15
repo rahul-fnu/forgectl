@@ -25,6 +25,7 @@ import { BoardEngine } from "../board/engine.js";
 import { BoardStore, resolveBoardStateDir } from "../board/store.js";
 import { PipelineRunService } from "./pipeline-service.js";
 import { Orchestrator } from "../orchestrator/index.js";
+import { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { createTrackerAdapter } from "../tracker/registry.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { loadWorkflowFile } from "../workflow/workflow-file.js";
@@ -87,11 +88,16 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
 
   // Orchestrator initialization (when enabled or forced via CLI)
   let orchestrator: Orchestrator | null = null;
+  let subIssueCache: SubIssueCache | undefined;
   let watcher: WorkflowFileWatcher | null = null;
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
   if (orchestratorEnabled && config.tracker) {
     try {
-      const tracker = createTrackerAdapter(config.tracker);
+      subIssueCache = new SubIssueCache();
+      const { createGitHubAdapter } = await import("../tracker/github.js");
+      const tracker = config.tracker.kind === "github"
+        ? createGitHubAdapter(config.tracker, subIssueCache)
+        : createTrackerAdapter(config.tracker);
       const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
       const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
 
@@ -117,6 +123,9 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
         runRepo,
         autonomy: wf?.config?.autonomy,
         autoApprove: wf?.config?.auto_approve,
+        subIssueCache,
+        skills: wf?.config?.skills,
+        validationConfig: wf?.config?.validation,
       });
       await orchestrator.start();
 
@@ -196,9 +205,23 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
           });
         },
         resumeRun,
+        subIssueCache,
       });
 
       registerGitHubRoutes(app, ghAppService);
+
+      // Wire GitHub context into orchestrator for polling rollup (SUBISSUE-05, SUBISSUE-06)
+      if (orchestrator && config.tracker?.repo && config.github_app.installation_id) {
+        try {
+          const [ghOwner, ghRepo] = config.tracker.repo.split("/");
+          const installationOctokit = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
+          orchestrator.setGitHubContext({ octokit: installationOctokit, repo: { owner: ghOwner, repo: ghRepo } });
+          daemonLogger.info("daemon", "GitHub context set on orchestrator for polling rollup");
+        } catch (err) {
+          daemonLogger.warn("daemon", `Failed to set GitHub context on orchestrator (rollup disabled): ${err}`);
+        }
+      }
+
       daemonLogger.info("daemon", "GitHub App initialized, webhook route registered");
     } catch (err) {
       daemonLogger.error("daemon", `Failed to initialize GitHub App: ${err}`);

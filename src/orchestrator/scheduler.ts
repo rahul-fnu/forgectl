@@ -8,6 +8,8 @@ import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { DelegationManager } from "./delegation.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
+import type { GitHubContext } from "./dispatcher.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 
@@ -27,6 +29,14 @@ export interface TickDeps {
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
   delegationManager?: DelegationManager;
+  /** Optional sub-issue cache for populating terminalIssueIds (SUBISSUE-03). */
+  subIssueCache?: SubIssueCache;
+  /** Optional GitHub context for triggering parent rollup on polling-dispatched issues (SUBISSUE-05, SUBISSUE-06). */
+  githubContext?: GitHubContext;
+  /** Skills from WORKFLOW.md to mount into agent containers. */
+  skills?: string[];
+  /** Validation config from WORKFLOW.md. */
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
 }
 
 /**
@@ -46,6 +56,15 @@ export async function tick(deps: TickDeps): Promise<void> {
     return;
   }
 
+  // Step 1.5: Drain stale claims — release any claimed issues that aren't running.
+  // This guards against claims that weren't released due to async errors.
+  for (const claimedId of [...state.claimed]) {
+    if (!state.running.has(claimedId)) {
+      logger.info("scheduler", `Releasing stale claim on ${claimedId} (not running)`);
+      state.claimed.delete(claimedId);
+    }
+  }
+
   // Step 2: Validate config (tracker must be defined)
   if (!config.tracker) {
     logger.warn("scheduler", "No tracker configured, skipping dispatch");
@@ -62,10 +81,22 @@ export async function tick(deps: TickDeps): Promise<void> {
     return;
   }
 
-  // Step 4: Filter candidates (terminalIds from config)
-  const terminalIds = new Set<string>(); // Built from recent reconciliation data
+  // Step 4: Build terminalIssueIds from SubIssueCache (SUBISSUE-03), then filter candidates
+  const terminalIds = new Set<string>();
+  if (deps.subIssueCache) {
+    const terminalStates = new Set(deps.config.tracker?.terminal_states ?? ["closed"]);
+    for (const entry of deps.subIssueCache.getAllEntries()) {
+      for (const [childId, childState] of entry.childStates) {
+        if (terminalStates.has(childState)) {
+          terminalIds.add(childId);
+        }
+      }
+    }
+  }
   const doneLabel = config.tracker?.done_label;
   const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
+
+  logger.info("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
 
   // Step 5: Sort candidates
   const sorted = sortCandidates(eligible);
@@ -80,7 +111,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 8: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, undefined, deps.delegationManager);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig);
   }
 }
 

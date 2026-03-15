@@ -100,50 +100,50 @@
 
 ---
 
-## Milestone: v2.1 — Autonomous Factory
+## Milestone: v3.0 — E2E GitHub Integration
 
 **Shipped:** 2026-03-14
-**Phases:** 5 | **Plans:** 11 | **Tests:** 1,211
+**Phases:** 6 | **Plans:** 11 | **Tests:** 1,162
 
 ### What Was Built
-- Conditional pipeline nodes: filtrex expression evaluation, ready-queue executor, cascade skip, else_node branching, dry-run annotations
-- Loop pipeline nodes: loop-until iteration, GLOBAL_MAX_ITERATIONS safety cap, per-iteration checkpointing, crash recovery
-- Multi-agent delegation: lead agent decomposition, concurrent child dispatch, two-tier slot pool, failure retry, aggregate synthesis
-- Self-correction integration: test-fail/fix/retest loops, no-progress detection, exclusion enforcement, coverage-aware termination
-- Schema foundation: migration 0005 (delegations table, 5 new runs columns), extended PipelineNode types
+- GitHub sub-issue DAG dependencies: TTL cache, cycle detection, blocked_by enrichment, dependency-aware dispatch
+- Skill/config bind-mounting: read-only mounts of CLAUDE.md, skills/, agents/ with credential exclusion and --add-dir injection
+- Agent teams: CLAUDE_NUM_TEAMMATES env var, memory scaling (1GB/teammate), weighted slot management, checkpoint bypass
+- Sub-issue progress rollup: markdown checklist comments on parent issues with in-place editing and synthesizer-gated auto-close
+- Composition wiring: SubIssueCache singleton shared between adapter and orchestrator, githubContext in polling path
 
 ### What Worked
-- Foundation phase (20) as a dependency-free base unblocked all subsequent phases — all 4 behavioral phases could start immediately after
-- filtrex evaluator reuse: condition evaluator from Phase 21 reused directly for loop until expressions in Phase 22 — zero additional code needed
-- Gap closure pattern continued from v1.0/v2.0: DELEG-02 wiring gap caught by verifier, fixed in a single 2-line commit (2b94996)
-- Standalone module extraction (checkExclusionViolations) solved test coverage gap cleanly — real git repos instead of mocking execSync
-- Milestone completed in 2 days (fastest yet) with 11 plans — phases were well-scoped and dependencies clear
+- Milestone audit pattern caught 2 critical composition bugs (dual cache, undefined githubContext) that unit tests missed — led to two focused gap-closure phases (29, 30)
+- Zero new npm dependencies — all features built on existing Octokit, Dockerode, Zod patterns
+- Rapid milestone: 6 phases, 11 plans, 69 commits in 2 days
+- Optional injection pattern (from v2.0) scaled cleanly — SubIssueCache and githubContext are optional throughout, Notion adapter unaffected
+- Re-verification after gap closure confirmed fixes without regressions
 
 ### What Was Inefficient
-- ROADMAP.md plan checkboxes still out of sync (Phases 22, 23, 24-03 show `[ ]` despite being complete on disk) — persistent issue across all 3 milestones
-- Nyquist validation never completed — all 5 phases have VALIDATION.md scaffolds but none are nyquist_compliant:true (same pattern as v1.0 and v2.0)
-- SUMMARY.md `requirements-completed` frontmatter only filled in 1 of 11 SUMMARYs (21-02) — automated extraction mostly failed
-- Phase 23 VERIFICATION.md documents gaps_found status but gap was fixed post-verification; artifact never updated
-- DELEG-02 gap (delegationManager not in this.deps) could have been caught by a type-level check rather than runtime verification
+- Three audit rounds needed (initial → Phase 29 → Phase 30) — each found new integration bugs at the next composition layer
+- SUMMARY.md `requirements_completed` frontmatter was incomplete for many plans (10/16 requirements missing from frontmatter despite being satisfied in VERIFICATION.md)
+- SUMMARY.md `one_liner` frontmatter missing from all plans — automated accomplishment extraction returned null
+- Integration checker found orchestrated-path gaps (team/skills in mapFrontMatterToConfig) that individual phase verifications rated as "passed" — phase verification scope is too narrow for cross-phase config flow
+- ROADMAP.md plan checkboxes again out of sync with actual completion
 
 ### Patterns Established
-- Ready-queue drain loop with inFlight Map + Promise.race for bounded parallelism in DAG execution
-- Pipeline state object wrapper to prevent TypeScript literal-type narrowing in async closures
-- Crash-safe row-before-dispatch pattern for delegation persistence
-- extractCoverage returns -1 sentinel (not null) for safe numeric filtrex comparisons
-- Standalone module extraction pattern for testability (inline git/filesystem → standalone module with real repo tests)
+- Singleton injection via factory parameter (`createGitHubAdapter(config, externalCache?)`) for shared state
+- Live-mutation of deps object (`setGitHubContext` mutates `this.deps.githubContext` in-place) for late-binding configuration
+- Marker-based comment upsert (hidden HTML comments for idempotent update-or-create)
+- Synthesizer-gated close (label-based workflow: `forge:synthesize` → dispatch → outcome handler)
+- `handleSynthesizerOutcome` extraction for testability (pure refactor of inline fire-and-forget logic)
 
 ### Key Lessons
-1. Foundation phases that provide only schema/types are extremely efficient — Phase 20 took 12min and unblocked everything
-2. Expression evaluator reuse across features (conditions → loop until) validates the "compose primitives" architecture
-3. The ROADMAP checkbox tracking problem is now confirmed across 3 milestones — rely on disk artifacts, never checkboxes
-4. Nyquist validation is consistently skipped — consider making it opt-in rather than opt-out
-5. VERIFICATION.md artifacts should be re-generated after gap fixes, not left stale
+1. Composition wiring bugs cascade: fixing the cache singleton revealed the githubContext gap — expect each gap-closure phase to uncover the next layer
+2. Phase-level verification is necessary but insufficient — cross-phase integration checking must trace config flow from WORKFLOW.md through mapFrontMatterToConfig to runtime execution
+3. The orchestrated (daemon) path and CLI (`forgectl run`) path diverge at `mapFrontMatterToConfig` and `buildOrchestratedRunPlan` — any new WORKFLOW.md config field must be mapped in both
+4. Three audit rounds (initial + 2 gap closures) may be the norm for milestones with deep composition wiring — budget accordingly
+5. SUMMARY.md frontmatter needs `one_liner` and complete `requirements_completed` fields to support automated milestone completion
 
 ### Cost Observations
-- Model mix: balanced profile, primarily Opus for planning/execution, Sonnet for integration checking
-- Sessions: ~11 planning + execution sessions across 2 days
-- Notable: fastest milestone yet — well-defined phase boundaries and clear dependency graph
+- Model mix: balanced profile, Opus for planning/verification, Sonnet for execution and integration checking
+- Sessions: ~12 sessions across 2 days (including 3 audit rounds and 2 gap closure phases)
+- Notable: gap closure phases (29, 30) averaged ~4min execution each — very efficient targeted fixes
 
 ---
 
@@ -155,7 +155,7 @@
 |-----------|--------|-------|------------|
 | v1.0 | 9 | 24 | Initial milestone — established audit + gap closure pattern |
 | v2.0 | 10 | 22 | Scaled gap closure to 4 phases (16-19), backward-compat injection pattern |
-| v2.1 | 5 | 11 | Foundation-first architecture, expression evaluator reuse, fastest milestone (2 days) |
+| v3.0 | 6 | 11 | 3 audit rounds, 2 gap closure phases (29-30), singleton injection pattern |
 
 ### Cumulative Quality
 
@@ -163,14 +163,13 @@
 |-----------|-------|-----------|------------|
 | v1.0 | 667 | 11,413 | 12,848 |
 | v2.0 | 1,021 | 14,700 | 19,082 |
-| v2.1 | 1,211 | 17,026 | 22,248 |
+| v3.0 | 1,162 | 16,662 | 21,299 |
 
 ### Top Lessons (Verified Across Milestones)
 
-1. Milestone audits with cross-phase integration checking catch wiring bugs that unit tests miss (confirmed v1.0 + v2.0 + v2.1)
-2. Small, focused gap closure phases are more efficient than broad rework (confirmed v1.0 + v2.0 + v2.1)
-3. Backward-compatible optional parameters prevent cascading breakage when adding cross-cutting concerns (v2.0)
-4. Two audit rounds is the norm, not the exception — budget for it (v1.0 + v2.0)
-5. ROADMAP.md checkboxes are unreliable — verify completion against disk artifacts (v1.0 + v2.0 + v2.1)
-6. Foundation phases (schema/types only) are extremely efficient and unblock multiple downstream phases simultaneously (v2.1)
-7. Composing primitives (condition evaluator reused for loop until) validates architecture better than building monoliths (v2.1)
+1. Milestone audits with cross-phase integration checking catch wiring bugs that unit tests miss (confirmed v1.0 + v2.0 + v3.0)
+2. Small, focused gap closure phases are more efficient than broad rework (confirmed v1.0 + v2.0 + v3.0)
+3. Backward-compatible optional parameters prevent cascading breakage when adding cross-cutting concerns (v2.0 + v3.0)
+4. Multiple audit rounds are the norm — v3.0 needed 3 rounds, each uncovering the next composition layer (v1.0 + v2.0 + v3.0)
+5. ROADMAP.md checkboxes are unreliable — verify completion against disk artifacts (v1.0 + v2.0 + v3.0)
+6. Orchestrated path and CLI path diverge at config mapping — new WORKFLOW.md fields must be wired in both (v3.0)

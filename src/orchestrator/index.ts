@@ -8,6 +8,7 @@ import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { RepoContext } from "../github/types.js";
 import type { DelegationRepository } from "../storage/repositories/delegations.js";
 import type { DelegationManager } from "./delegation.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { recoverDelegations } from "./reconciler.js";
 import { createState, type OrchestratorState, TwoTierSlotManager, createTwoTierSlotManager } from "./state.js";
 import { clearAllRetries } from "./retry.js";
@@ -33,6 +34,11 @@ export interface OrchestratorOptions {
   autoApprove?: AutoApproveRule;
   delegationRepo?: DelegationRepository;
   delegationManager?: DelegationManager;
+  subIssueCache?: SubIssueCache;
+  /** Skills from WORKFLOW.md front matter (e.g. ["gsd", "get-shit-done"]). */
+  skills?: string[];
+  /** Validation config from WORKFLOW.md front matter. */
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
 }
 
 /**
@@ -52,6 +58,10 @@ export class Orchestrator {
   private readonly autoApprove?: AutoApproveRule;
   private readonly delegationRepo?: DelegationRepository;
   private readonly delegationManager?: DelegationManager;
+  private readonly subIssueCache?: SubIssueCache;
+  private readonly skills: string[];
+  private readonly validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
+  private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
@@ -69,6 +79,9 @@ export class Orchestrator {
     this.autoApprove = opts.autoApprove;
     this.delegationRepo = opts.delegationRepo;
     this.delegationManager = opts.delegationManager;
+    this.subIssueCache = opts.subIssueCache;
+    this.skills = opts.skills ?? [];
+    this.validationConfig = opts.validationConfig;
   }
 
   /**
@@ -101,6 +114,10 @@ export class Orchestrator {
       autonomy: this.autonomy,
       autoApprove: this.autoApprove,
       delegationManager: this.delegationManager,
+      subIssueCache: this.subIssueCache,
+      githubContext: this.githubContext,
+      skills: this.skills,
+      validationConfig: this.validationConfig,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -278,6 +295,9 @@ export class Orchestrator {
       governance,
       githubContext,
       this.delegationManager,
+      this.subIssueCache,
+      this.skills,
+      this.validationConfig,
     );
   }
 
@@ -305,6 +325,16 @@ export class Orchestrator {
       "orchestrator",
       `Config reloaded (max=${newMax}, poll=${config.orchestrator.poll_interval_ms}ms)`,
     );
+  }
+
+  /**
+   * Set the GitHub context for polling-dispatched issues.
+   * Enables triggerParentRollup and auto-close for issues dispatched via scheduler ticks.
+   * Call this after start() once the GitHub App is initialized.
+   */
+  setGitHubContext(ctx: GitHubContext): void {
+    this.githubContext = ctx;
+    this.deps.githubContext = ctx;
   }
 
   /**

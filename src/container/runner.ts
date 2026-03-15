@@ -107,7 +107,7 @@ export async function destroyContainer(container: Docker.Container): Promise<voi
   try { await container.remove({ force: true }); } catch { /* ignore */ }
 }
 
-function parseMemory(mem: string): number {
+export function parseMemory(mem: string): number {
   const match = mem.match(/^(\d+)(g|m)$/i);
   if (!match) return 4 * 1024 * 1024 * 1024; // default 4GB
   const val = parseInt(match[1], 10);

@@ -9,6 +9,21 @@ import {
   type IssueState,
 } from "../../src/orchestrator/state.js";
 
+/** Helper to create a minimal WorkerInfo with slotWeight */
+function makeWorkerInfo(slotWeight: number): WorkerInfo {
+  return {
+    issueId: "test",
+    identifier: "TEST-1",
+    issue: {} as any,
+    session: null,
+    cleanup: { tempDirs: [], secretCleanups: [] },
+    startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    attempt: 1,
+    slotWeight,
+  };
+}
+
 describe("OrchestratorState", () => {
   let state: OrchestratorState;
 
@@ -58,7 +73,7 @@ describe("OrchestratorState", () => {
 
     it("removes from running Map", () => {
       claimIssue(state, "issue-1");
-      state.running.set("issue-1", {} as WorkerInfo);
+      state.running.set("issue-1", makeWorkerInfo(1));
       releaseIssue(state, "issue-1");
       expect(state.running.has("issue-1")).toBe(false);
     });
@@ -95,33 +110,81 @@ describe("SlotManager", () => {
     expect(sm.availableSlots(running)).toBe(5);
   });
 
-  it("availableSlots returns max - running.size", () => {
+  it("availableSlots sums slotWeight instead of counting workers", () => {
     const sm = new SlotManager(3);
     const running = new Map<string, WorkerInfo>();
-    running.set("a", {} as WorkerInfo);
-    running.set("b", {} as WorkerInfo);
+    running.set("a", makeWorkerInfo(1));
+    running.set("b", makeWorkerInfo(1));
     expect(sm.availableSlots(running)).toBe(1);
   });
 
-  it("hasAvailableSlots returns false when running.size >= max", () => {
+  it("hasAvailableSlots returns false when weight sum >= max", () => {
     const sm = new SlotManager(2);
     const running = new Map<string, WorkerInfo>();
-    running.set("a", {} as WorkerInfo);
-    running.set("b", {} as WorkerInfo);
+    running.set("a", makeWorkerInfo(1));
+    running.set("b", makeWorkerInfo(1));
     expect(sm.hasAvailableSlots(running)).toBe(false);
   });
 
   it("availableSlots returns 0 when at capacity", () => {
     const sm = new SlotManager(1);
     const running = new Map<string, WorkerInfo>();
-    running.set("a", {} as WorkerInfo);
+    running.set("a", makeWorkerInfo(1));
     expect(sm.availableSlots(running)).toBe(0);
   });
 
   it("hasAvailableSlots returns true when slots available", () => {
     const sm = new SlotManager(3);
     const running = new Map<string, WorkerInfo>();
-    running.set("a", {} as WorkerInfo);
+    running.set("a", makeWorkerInfo(1));
     expect(sm.hasAvailableSlots(running)).toBe(true);
+  });
+
+  describe("weighted slot management", () => {
+    it("team worker with weight 3 consumes 3 slots", () => {
+      const sm = new SlotManager(5);
+      const running = new Map<string, WorkerInfo>();
+      running.set("team-a", makeWorkerInfo(3));
+      expect(sm.availableSlots(running)).toBe(2);
+    });
+
+    it("mixed solo and team workers sum correctly", () => {
+      const sm = new SlotManager(5);
+      const running = new Map<string, WorkerInfo>();
+      running.set("solo-a", makeWorkerInfo(1));
+      running.set("team-b", makeWorkerInfo(3));
+      expect(sm.availableSlots(running)).toBe(1); // 5 - (1+3) = 1
+    });
+
+    it("returns 0 when weight sum equals max", () => {
+      const sm = new SlotManager(3);
+      const running = new Map<string, WorkerInfo>();
+      running.set("team-a", makeWorkerInfo(3));
+      expect(sm.availableSlots(running)).toBe(0);
+    });
+
+    it("returns 0 when weight sum exceeds max (clamped by Math.max)", () => {
+      const sm = new SlotManager(3);
+      const running = new Map<string, WorkerInfo>();
+      running.set("team-a", makeWorkerInfo(4));
+      expect(sm.availableSlots(running)).toBe(0);
+    });
+
+    it("hasAvailableSlots returns false when weight sum >= max", () => {
+      const sm = new SlotManager(3);
+      const running = new Map<string, WorkerInfo>();
+      running.set("team-a", makeWorkerInfo(3));
+      expect(sm.hasAvailableSlots(running)).toBe(false);
+    });
+
+    it("backward compat: solo workers with weight 1 behave as before", () => {
+      const sm = new SlotManager(3);
+      const running = new Map<string, WorkerInfo>();
+      running.set("a", makeWorkerInfo(1));
+      running.set("b", makeWorkerInfo(1));
+      // 2 solo workers at weight 1 each = 2 used, 1 available
+      expect(sm.availableSlots(running)).toBe(1);
+      expect(sm.hasAvailableSlots(running)).toBe(true);
+    });
   });
 });

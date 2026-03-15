@@ -20,6 +20,7 @@ export interface WorkerInfo {
   startedAt: number;
   lastActivityAt: number;
   attempt: number;
+  slotWeight: number; // 1 for solo runs, team.size for team runs
 }
 
 /**
@@ -86,9 +87,14 @@ export class SlotManager {
 
   /**
    * Returns the number of available slots given the current running workers.
+   * Uses weight summation so team runs (slotWeight > 1) consume proportional slots.
    */
   availableSlots(running: Map<string, WorkerInfo>): number {
-    return Math.max(0, this.maxConcurrent - running.size);
+    const usedWeight = [...running.values()].reduce(
+      (sum, w) => sum + w.slotWeight,
+      0,
+    );
+    return Math.max(0, this.maxConcurrent - usedWeight);
   }
 
   /**

@@ -36,6 +36,19 @@ export async function collectGitOutput(
 
   logger.info("output", `Creating branch: ${branch}`);
 
+  // Pre-check: verify .git exists in the container workspace
+  try {
+    await execInContainer(container, [
+      "git", "rev-parse", "--is-inside-work-tree",
+    ], { workingDir: "/workspace" });
+  } catch {
+    throw new Error(
+      `No .git directory found in container at /workspace. ` +
+      `The workspace was not initialized as a git repository. ` +
+      `Configure a workspace after_create hook to clone the repo.`,
+    );
+  }
+
   // Trust the workspace mount regardless of ownership.
   // The container runs as root but /workspace is bind-mounted from a temp dir owned
   // by the host user (e.g. uid=node), so git refuses all operations without this.
@@ -70,6 +83,15 @@ export async function collectGitOutput(
   const hasAgentCommits = logResult.stdout.trim().length > 0;
 
   // Also check for any unstaged/untracked changes the agent left behind (without committing)
+  // Use exclude patterns to avoid committing build artifacts (node_modules, target, dist)
+  const excludePatterns = plan.input.exclude ?? [];
+  if (excludePatterns.length > 0) {
+    // Ensure .gitignore contains exclude patterns before staging
+    const ignoreLines = excludePatterns.join("\n");
+    await execInContainer(container, [
+      "sh", "-c", `echo '${ignoreLines}' >> /workspace/.gitignore`,
+    ], { workingDir: "/workspace" });
+  }
   await execInContainer(container, ["git", "add", "-A"], {
     workingDir: "/workspace",
   });
@@ -153,6 +175,18 @@ export async function collectGitOutput(
         env: pushEnv,
       });
       logger.info("output", `Branch ${branch} pushed to remote`);
+
+      // Advance host repo's local main to include this work so subsequent
+      // issues in the same shared workspace build on accumulated changes.
+      // Only advance locally — don't push to remote, so PRs still have diffs.
+      try {
+        execSync(`git checkout main`, { cwd: hostRepo, stdio: "pipe" });
+        execSync(`git merge "${branch}" --ff-only`, { cwd: hostRepo, stdio: "pipe" });
+        logger.info("output", `Local main advanced to include ${branch}`);
+      } catch (mergeErr) {
+        const mergeMsg = mergeErr instanceof Error ? (mergeErr as any).stderr?.toString() || mergeErr.message : String(mergeErr);
+        logger.warn("output", `Could not advance local main (non-fatal): ${mergeMsg}`);
+      }
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? (pushErr as any).stderr?.toString() || pushErr.message : String(pushErr);
       logger.warn("output", `Failed to push branch (continuing): ${msg}`);

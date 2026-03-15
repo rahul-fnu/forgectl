@@ -36,4 +36,5 @@ If issues exist, list them numbered.`,
   },
   cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

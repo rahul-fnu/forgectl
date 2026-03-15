@@ -212,4 +212,71 @@ describe("workflow resolver", () => {
       expect(plan.agent.timeout).toBe(3600000);
     });
   });
+
+  describe("team configuration", () => {
+    it("team size propagated to RunPlan when workflow has team config", () => {
+      const configWithTeam = ConfigSchema.parse({
+        container: { resources: { memory: "4g" } },
+      });
+      const plan = resolveRunPlan(configWithTeam, makeOptions({ workflow: "code", teamSize: 3 }));
+      expect(plan.team?.size).toBe(3);
+      expect(plan.team?.slotWeight).toBe(3);
+    });
+
+    it("memory scaled correctly for team run (4g base + 2 teammates = 6g)", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code", teamSize: 3 }));
+      expect(plan.container.resources.memory).toBe("6g");
+    });
+
+    it("skipCheckpoints set to true for team runs", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code", teamSize: 3 }));
+      expect(plan.skipCheckpoints).toBe(true);
+    });
+
+    it("solo run (no team): no team fields, original memory", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.team).toBeUndefined();
+      expect(plan.skipCheckpoints).toBeUndefined();
+      expect(plan.container.resources.memory).toBe("4g");
+    });
+
+    it("--no-team (options.team=false): no team, original memory, noTeam=true", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({
+        workflow: "code",
+        teamSize: 3,
+        team: false,
+      }));
+      expect(plan.noTeam).toBe(true);
+      expect(plan.team).toBeUndefined();
+      expect(plan.skipCheckpoints).toBeUndefined();
+      expect(plan.container.resources.memory).toBe("4g");
+    });
+
+    it("--team-size override uses CLI value over workflow team size", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({
+        workflow: "code",
+        teamSize: 4,
+      }));
+      expect(plan.team?.size).toBe(4);
+      // 4g base + 3 teammates = 7g
+      expect(plan.container.resources.memory).toBe("7g");
+    });
+
+    it("memory scaling edge case: 4096m base correctly scales to 6g for 2 teammates", () => {
+      const configWith4096m = ConfigSchema.parse({
+        container: { resources: { memory: "4096m" } },
+      });
+      const plan = resolveRunPlan(configWith4096m, makeOptions({ workflow: "code", teamSize: 3 }));
+      expect(plan.container.resources.memory).toBe("6g");
+    });
+
+    it("memory scaling: 2g base + 4 teammates (teamSize=5) = 6g", () => {
+      const configWith2g = ConfigSchema.parse({
+        container: { resources: { memory: "2g" } },
+      });
+      const plan = resolveRunPlan(configWith2g, makeOptions({ workflow: "code", teamSize: 5 }));
+      // 2g + 4 teammates * 1GB = 6g
+      expect(plan.container.resources.memory).toBe("6g");
+    });
+  });
 });

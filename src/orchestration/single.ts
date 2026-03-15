@@ -15,6 +15,7 @@ import { createIsolatedNetwork, applyFirewall } from "../container/network.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
+import { prepareSkillMounts } from "../skills/mount.js";
 import { runValidationLoop } from "../validation/runner.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
@@ -86,6 +87,14 @@ export async function prepareExecution(
   // 3. Prepare credentials and build direct env vars (no shell subcommands)
   const agentEnv: string[] = [];
 
+  // Warn if team config is present but agent is not claude-code
+  if (plan.team && !plan.noTeam && plan.agent.type !== "claude-code") {
+    logger.warn(
+      "prepare",
+      `Team mode is only supported for claude-code agent; ignoring team config for ${plan.agent.type}`,
+    );
+  }
+
   if (plan.agent.type === "claude-code") {
     const auth = await getClaudeAuth();
     if (!auth) throw new Error("No Claude Code credentials configured");
@@ -99,6 +108,11 @@ export async function prepareExecution(
       agentEnv.push(`${k}=${v}`);
     }
     agentEnv.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
+    // Team mode: set CLAUDE_NUM_TEAMMATES if team configured and not disabled
+    if (!plan.noTeam && plan.team && plan.team.size > 1) {
+      const teammates = plan.team.size - 1;
+      agentEnv.push(`CLAUDE_NUM_TEAMMATES=${teammates}`);
+    }
   } else if (plan.agent.type === "browser-use") {
     // Browser-use needs LLM credentials -- try Claude first (forgectl is Claude-first), fall back to OpenAI
     try {
@@ -136,20 +150,31 @@ export async function prepareExecution(
     }
   }
 
-  // 4. Create network (only for allowlist mode)
+  // 4. Skill mounts (Claude Code only)
+  let skillAddDirFlags: string[] = [];
+  if (plan.agent.type === "claude-code") {
+    const { mounts: skillMounts, addDirFlags } = prepareSkillMounts(
+      plan.workflow.skills ?? [],
+      plan.noSkills ?? false,
+    );
+    binds.push(...skillMounts.binds);
+    skillAddDirFlags = addDirFlags;
+  }
+
+  // 5. Create network (only for allowlist mode)
   if (plan.container.network.mode === "allowlist") {
     logger.info("prepare", "Creating isolated network...");
     await createIsolatedNetwork(plan.container.network.dockerNetwork);
     cleanup.networkName = plan.container.network.dockerNetwork;
   }
 
-  // 5. Create container with resolved image
+  // 6. Create container with resolved image
   logger.info("prepare", "Starting container...");
   const resolvedPlan = { ...plan, container: { ...plan.container, image: resolvedImage } };
   const container = await createContainer(resolvedPlan, binds);
   cleanup.container = container;
 
-  // 6. Apply firewall (only for allowlist mode)
+  // 7. Apply firewall (only for allowlist mode)
   if (plan.container.network.mode === "allowlist" && plan.container.network.allow) {
     logger.info("prepare", "Applying network firewall...");
     await applyFirewall(container, plan.container.network.allow);
@@ -164,7 +189,7 @@ export async function prepareExecution(
     model: plan.agent.model,
     maxTurns: plan.agent.maxTurns,
     timeout: plan.agent.timeout,
-    flags: plan.agent.flags,
+    flags: [...plan.agent.flags, ...skillAddDirFlags],
     workingDir: plan.input.mountPath,
   };
 
@@ -199,7 +224,7 @@ export async function executeSingleAgent(
   try {
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
 
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
@@ -221,7 +246,7 @@ export async function executeSingleAgent(
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
     }
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
 
     // --- Phase: Validate ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "validate" } });
@@ -230,7 +255,7 @@ export async function executeSingleAgent(
     const validationResult = await runValidationLoop(
       container, plan, adapter, agentOptions, agentEnv, logger
     );
-    if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
+    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
     // --- Phase: Collect Output ---
     if (validationResult.passed || plan.validation.onFailure === "output-wip") {
@@ -238,7 +263,7 @@ export async function executeSingleAgent(
 
       logger.info("output", `Collecting ${plan.output.mode} output...`);
       const output = await collectOutput(container, plan, logger);
-      if (snapshotRepo) saveCheckpoint(snapshotRepo, plan.runId, "output");
+      if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "output");
 
       // --- Post-execution approval gate ---
       const autonomy = plan.workflow.autonomy ?? "full";

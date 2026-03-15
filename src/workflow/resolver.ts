@@ -6,6 +6,7 @@ import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import { getWorkflow } from "./registry.js";
 import { parseDuration } from "../utils/duration.js";
+import { parseMemory } from "../container/runner.js";
 
 export interface WorkflowOverrides {
   autonomy?: AutonomyLevel;
@@ -28,6 +29,23 @@ export interface CLIOptions {
   noCleanup?: boolean;
   dryRun?: boolean;
   config?: string;
+  // Commander sets skills=false when --no-skills is passed, undefined when omitted
+  skills?: boolean;
+  // Commander sets team=false when --no-team is passed, undefined when omitted
+  team?: boolean;
+  // Numeric override from --team-size
+  teamSize?: number;
+}
+
+/**
+ * Scale base memory string by 1GB per teammate (teammates = teamSize - 1).
+ * Returns a string like "6g" using ceiling division to nearest GB.
+ */
+function scaleMemoryForTeam(baseMemory: string, teammateCount: number): string {
+  const baseBytes = parseMemory(baseMemory);
+  const extraBytes = teammateCount * 1024 ** 3;
+  const totalGB = Math.ceil((baseBytes + extraBytes) / 1024 ** 3);
+  return `${totalGB}g`;
 }
 
 /**
@@ -107,6 +125,13 @@ export function resolveRunPlan(
   const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 
+  // Team config: CLI --team-size overrides workflow, --no-team disables entirely
+  const resolvedNoTeam = options.team === false;
+  const effectiveTeamSize = resolvedNoTeam
+    ? undefined
+    : options.teamSize ?? workflow.team?.size;
+  const hasTeam = effectiveTeamSize !== undefined && effectiveTeamSize >= 2;
+
   // Determine input sources
   const inputSources: string[] = [];
   if (workflow.input.mode === "repo" || workflow.input.mode === "both") {
@@ -140,7 +165,9 @@ export function resolveRunPlan(
       dockerfile: config.container.dockerfile,
       network: resolveNetwork(workflow, config, agentType, runId),
       resources: {
-        memory: config.container.resources.memory,
+        memory: hasTeam
+          ? scaleMemoryForTeam(config.container.resources.memory, effectiveTeamSize! - 1)
+          : config.container.resources.memory,
         cpus: config.container.resources.cpus,
       },
     },
@@ -184,5 +211,9 @@ export function resolveRunPlan(
       author: config.commit.author,
       sign: config.commit.sign,
     },
+    noSkills: options.skills === false,
+    noTeam: resolvedNoTeam || undefined,
+    skipCheckpoints: hasTeam || undefined,
+    team: hasTeam ? { size: effectiveTeamSize!, slotWeight: effectiveTeamSize! } : undefined,
   };
 }

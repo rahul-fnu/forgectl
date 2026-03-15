@@ -9,6 +9,7 @@ import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
 import type { DelegationManager } from "./delegation.js";
+import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
 import { executeWorker } from "./worker.js";
@@ -17,6 +18,11 @@ import { emitRunEvent } from "../logging/events.js";
 import { needsPreApproval } from "../governance/autonomy.js";
 import { enterPendingApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
+import {
+  upsertRollupComment,
+  buildSubIssueProgressComment,
+  allChildrenTerminal,
+} from "../github/sub-issue-rollup.js";
 
 /** GitHub context passed from webhook handler (octokit + repo). */
 export interface GitHubContext {
@@ -131,6 +137,104 @@ export function sortCandidates(issues: TrackerIssue[]): TrackerIssue[] {
 }
 
 /**
+ * Trigger a rollup comment update on the parent issue after a child issue completes.
+ *
+ * Finds the parent via SubIssueCache.getAllEntries() scan, builds ChildStatus[] from
+ * cached childStates, and calls upsertRollupComment. If all children are terminal,
+ * adds the forge:synthesize label to the parent.
+ *
+ * All errors are caught, warned, and swallowed — this never throws.
+ */
+export async function triggerParentRollup(
+  childIssue: TrackerIssue,
+  subIssueCache: SubIssueCache,
+  tracker: TrackerAdapter,
+  githubContext: GitHubContext,
+  config: ForgectlConfig,
+  logger: Logger,
+): Promise<void> {
+  const { owner, repo } = githubContext.repo;
+
+  // Find the parent entry by scanning all cache entries
+  const allEntries = subIssueCache.getAllEntries();
+  const parentEntry = allEntries.find((entry) => entry.childIds.includes(childIssue.id));
+
+  if (!parentEntry) {
+    // Not a sub-issue or not in cache — silently skip
+    return;
+  }
+
+  // Update child state in-place to reflect completion
+  parentEntry.childStates.set(childIssue.id, "closed");
+
+  try {
+    // Build ChildStatus[] from entry
+    const children = parentEntry.childIds.map((childId) => {
+      const rawState = parentEntry.childStates.get(childId) ?? "open";
+      const mappedState: "completed" | "pending" =
+        rawState === "closed" ? "completed" : "pending";
+      const url = `https://github.com/${owner}/${repo}/issues/${childId}`;
+      const title = childId === childIssue.id ? childIssue.title : `#${childId}`;
+      return { id: childId, title, url, state: mappedState };
+    });
+
+    const parentIssueNumber = Number(parentEntry.parentId);
+    const body = buildSubIssueProgressComment(parentIssueNumber, children);
+    await upsertRollupComment(githubContext.octokit as any, owner, repo, parentIssueNumber, body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("dispatcher", `Failed to upsert rollup comment for parent ${parentEntry.parentId}: ${msg}`);
+    return;
+  }
+
+  // Check if all children are now terminal
+  const terminalStates = new Set(config.tracker?.terminal_states ?? ["closed"]);
+  const allTerminal = allChildrenTerminal(parentEntry.childStates, terminalStates);
+
+  if (allTerminal) {
+    tracker
+      .updateLabels(parentEntry.parentId, ["forge:synthesize"], [])
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to add forge:synthesize label to parent ${parentEntry.parentId}: ${msg}`);
+      });
+  }
+}
+
+/**
+ * Handle the synthesizer outcome for an issue tagged with forge:synthesize.
+ *
+ * Success: closes the issue and removes the forge:synthesize label (best-effort).
+ * Failure: posts an error comment but does NOT close the issue (parent remains open).
+ *
+ * All tracker calls are fire-and-forget (.catch()), never throwing.
+ */
+export function handleSynthesizerOutcome(
+  issue: TrackerIssue,
+  outcome: "success" | "failure",
+  tracker: TrackerAdapter,
+  logger: Logger,
+): void {
+  if (outcome === "success") {
+    tracker.updateState(issue.id, "closed").catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to close synthesizer parent ${issue.identifier}: ${msg}`);
+    });
+    tracker.updateLabels(issue.id, [], ["forge:synthesize"]).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to remove forge:synthesize label for ${issue.identifier}: ${msg}`);
+    });
+  } else {
+    tracker
+      .postComment(
+        issue.id,
+        `Synthesizer run failed for ${issue.identifier}. Parent issue remains open.`,
+      )
+      .catch(() => {});
+  }
+}
+
+/**
  * Dispatch an issue: claim it, start a worker in the background,
  * and handle completion with retry logic.
  */
@@ -146,6 +250,9 @@ export function dispatchIssue(
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
   delegationManager?: DelegationManager,
+  subIssueCache?: SubIssueCache,
+  skills?: string[],
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -175,6 +282,9 @@ export function dispatchIssue(
     governance,
     githubContext,
     delegationManager,
+    subIssueCache,
+    skills,
+    validationConfig,
   );
 }
 
@@ -190,6 +300,9 @@ async function executeWorkerAndHandle(
   governance?: GovernanceOpts,
   githubContext?: GitHubContext,
   delegationManager?: DelegationManager,
+  subIssueCache?: SubIssueCache,
+  skills?: string[],
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -204,6 +317,7 @@ async function executeWorkerAndHandle(
 
   // Add WorkerInfo to running map
   const startedAt = Date.now();
+  const slotWeight = config.team?.size ?? 1;
   state.running.set(issue.id, {
     issueId: issue.id,
     identifier: issue.identifier,
@@ -213,6 +327,7 @@ async function executeWorkerAndHandle(
     startedAt,
     lastActivityAt: Date.now(),
     attempt,
+    slotWeight,
   });
 
   // Record dispatch metrics and emit SSE event
@@ -319,9 +434,10 @@ async function executeWorkerAndHandle(
       attempt,
       logger,
       onActivity,
-      undefined,
+      validationConfig,
       githubDeps,
       governanceWithRunId,
+      skills,
     );
 
     // Remove from running
@@ -341,6 +457,21 @@ async function executeWorkerAndHandle(
           },
         );
       }
+    }
+
+    // Trigger parent rollup if this issue is a sub-issue (best-effort)
+    if (subIssueCache && githubContext) {
+      await triggerParentRollup(
+        issue,
+        subIssueCache,
+        tracker,
+        githubContext,
+        config,
+        logger,
+      ).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Rollup callback error for ${issue.identifier}: ${msg}`);
+      });
     }
 
     // Post comment (best-effort)
@@ -376,32 +507,43 @@ async function executeWorkerAndHandle(
     );
 
     if (failureType === "continuation") {
-      // Auto-close issue when configured
-      if (config.tracker?.auto_close) {
-        tracker.updateState(issue.id, "closed").catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("dispatcher", `Failed to auto-close ${issue.identifier}: ${msg}`);
-        });
+      // Synthesizer-gated close: if this issue has the forge:synthesize label, it is
+      // a synthesizer run. Close the parent and remove the label instead of the
+      // normal auto_close / done_label path.
+      const isSynthesizerRun = issue.labels.includes("forge:synthesize");
+
+      if (isSynthesizerRun) {
+        handleSynthesizerOutcome(issue, "success", tracker, logger);
+      } else {
+        // Auto-close issue when configured
+        if (config.tracker?.auto_close) {
+          tracker.updateState(issue.id, "closed").catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn("dispatcher", `Failed to auto-close ${issue.identifier}: ${msg}`);
+          });
+        }
+
+        // Add done label when configured
+        if (config.tracker?.done_label) {
+          tracker.updateLabels(issue.id, [config.tracker.done_label], [orchestratorConfig.in_progress_label]).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
+          });
+        }
       }
 
-      // Add done label when configured
-      if (config.tracker?.done_label) {
-        tracker.updateLabels(issue.id, [config.tracker.done_label], [orchestratorConfig.in_progress_label]).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
-        });
-      }
-
-      // Re-dispatch after short delay
-      scheduleRetry(
-        issue.id,
-        orchestratorConfig.continuation_delay_ms,
-        () => {
-          releaseIssue(state, issue.id);
-        },
-        state,
-      );
+      // Release immediately — the issue is done (closed + done-labeled).
+      // The continuation delay was designed for multi-turn re-dispatch of the
+      // same issue, but completed+closed issues don't need re-dispatch.
+      logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
+      releaseIssue(state, issue.id);
+      logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
     } else {
+      // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
+      const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
+      if (isSynthesizerFailure) {
+        handleSynthesizerOutcome(issue, "failure", tracker, logger);
+      }
       // Error — check retry budget
       const currentAttempts = (state.retryAttempts.get(issue.id) ?? 0) + 1;
       state.retryAttempts.set(issue.id, currentAttempts);
