@@ -97,7 +97,7 @@ describe("OrchestratorOptions.subIssueCache wiring", () => {
   });
 
   describe("Test 2: dispatchIssue() passes subIssueCache to dispatchIssueImpl", () => {
-    it("calls dispatchIssueImpl with subIssueCache as 11th argument", async () => {
+    it("calls dispatchIssueImpl with subIssueCache as 12th argument", async () => {
       const cache = new SubIssueCache();
       const opts = { ...makeBaseOpts(), subIssueCache: cache };
       const orchestrator = new Orchestrator(opts);
@@ -123,8 +123,8 @@ describe("OrchestratorOptions.subIssueCache wiring", () => {
 
       expect(dispatchIssueImpl).toHaveBeenCalledOnce();
       const args = vi.mocked(dispatchIssueImpl).mock.calls[0];
-      // args[9] = githubContext (undefined), args[10] = subIssueCache
-      expect(args[10]).toBe(cache);
+      // args[9] = githubContext, args[10] = delegationManager, args[11] = subIssueCache
+      expect(args[11]).toBe(cache);
 
       await orchestrator.stop();
     });
