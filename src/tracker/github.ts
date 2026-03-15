@@ -231,6 +231,35 @@ async function resolveAndMerge(
         execSync(`git add "${file}"`, { cwd: tmpDir, stdio: "pipe" });
       }
 
+      // Post-resolve verification: ask Claude to review the merge result
+      try {
+        const { writeFileSync: writeSyncVerify } = await import("node:fs");
+        const diffOutput = execSync(`git diff --cached --stat`, { cwd: tmpDir, encoding: "utf-8" });
+        const changedFiles = conflicts.join(", ");
+        const verifyPrompt = [
+          `You just resolved merge conflicts in: ${changedFiles}`,
+          `Here is the staged diff summary:\n${diffOutput}`,
+          `Review the resolved files for these problems:`,
+          `1. Markdown code fences (\`\`\`) that don't belong in source code`,
+          `2. Duplicate function/struct/mod declarations`,
+          `3. Missing imports or module declarations`,
+          `4. Syntax errors (unclosed braces, missing semicolons)`,
+          `5. Conflict markers (<<<<<<, ======, >>>>>>)`,
+          ``,
+          `For each file, run: cat <file> and check.`,
+          `If you find problems, fix them and run: git add <file>`,
+          `If everything looks clean, just say "LGTM".`,
+        ].join("\n");
+        const verifyFile = join(tmpDir, ".forgectl-verify-prompt.txt");
+        writeSyncVerify(verifyFile, verifyPrompt);
+        execSync(
+          `cat "${verifyFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 5`,
+          { cwd: tmpDir, encoding: "utf-8", timeout: 120000 },
+        );
+      } catch {
+        // Verification is best-effort — don't block the merge
+      }
+
       execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
     }
 
