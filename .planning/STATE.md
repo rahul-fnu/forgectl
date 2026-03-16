@@ -1,49 +1,44 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Durable Runtime
-status: shipped
-stopped_at: Milestone v2.0 archived
-last_updated: "2026-03-12T04:55:00.000Z"
-last_activity: 2026-03-12 -- Milestone v2.0 Durable Runtime shipped
+milestone: v5.0
+milestone_name: Intelligent Decomposition
+status: active
+stopped_at: null
+last_updated: "2026-03-14T06:00:00.000Z"
+last_activity: 2026-03-14 -- Milestone v5.0 started
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 22
-  completed_plans: 22
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-12)
+See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Continuously pull work from issue trackers, dispatch AI agents, validate, report back -- zero human intervention.
-**Current focus:** Planning next milestone
+**Current focus:** v5.0 Intelligent Decomposition
 
 ## Current Position
 
-Milestone v2.0 Durable Runtime shipped.
-Next: `/gsd:new-milestone` to define v2.1 or v3.0.
-
-## Accumulated Context
-
-### Decisions
-
-All v2.0 decisions archived in PROJECT.md Key Decisions table and phase SUMMARY.md files.
-
-### Pending Todos
-
-None.
-
-### Blockers/Concerns
-
-None.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-14 — Milestone v5.0 started
 
 ## Session Continuity
 
-Last session: 2026-03-12
-Stopped at: Milestone v2.0 archived
+Last session: 2026-03-14T06:00:00.000Z
+Stopped at: null
 Resume file: None
+
+## Accumulated Context
+
+- v3.0 shipped: sub-issue DAG, skill mounting, agent teams, rollup
+- v2.0 shipped: SQLite, flight recorder, governance, GitHub App, browser-use
+- v1.0 shipped: tracker adapters, orchestrator state machine, workflow system
+- Tech debt carried: mapFrontMatterToConfig missing team/skills, duplicate GitHubContext type, console.warn in cycle detection

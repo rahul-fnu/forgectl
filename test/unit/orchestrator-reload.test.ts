@@ -22,9 +22,9 @@ describe("SlotManager.setMax", () => {
   it("updates availableSlots calculation", () => {
     const sm = new SlotManager(3);
     const running = new Map();
-    running.set("a", {} as any);
-    running.set("b", {} as any);
-    running.set("c", {} as any);
+    running.set("a", { slotWeight: 1 } as any);
+    running.set("b", { slotWeight: 1 } as any);
+    running.set("c", { slotWeight: 1 } as any);
     expect(sm.availableSlots(running)).toBe(0);
     sm.setMax(5);
     expect(sm.availableSlots(running)).toBe(2);

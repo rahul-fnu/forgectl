@@ -4,7 +4,7 @@ import type { OrchestratorState } from "../../src/orchestrator/state.js";
 import type { ForgectlConfig } from "../../src/config/schema.js";
 import type { WorkspaceManager } from "../../src/workspace/manager.js";
 import type { Logger } from "../../src/logging/logger.js";
-import { createState, SlotManager } from "../../src/orchestrator/state.js";
+import { createState, TwoTierSlotManager } from "../../src/orchestrator/state.js";
 import { MetricsCollector } from "../../src/orchestrator/metrics.js";
 
 // Mock reconciler
@@ -67,7 +67,7 @@ function makeDeps(overrides: Partial<TickDeps> = {}): TickDeps {
     state: createState(),
     tracker: makeTracker(),
     workspaceManager: {} as unknown as WorkspaceManager,
-    slotManager: new SlotManager(3),
+    slotManager: new TwoTierSlotManager(3, 0),
     config: {
       orchestrator: {
         enabled: true,
@@ -152,7 +152,7 @@ describe("tick", () => {
 
   it("dispatches nothing when no slots available", async () => {
     const deps = makeDeps({
-      slotManager: new SlotManager(0),
+      slotManager: new TwoTierSlotManager(0, 0),
     });
     const issues = [makeIssue("1")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
@@ -166,11 +166,110 @@ describe("tick", () => {
 
   it("handles reconcile errors gracefully", async () => {
     const deps = makeDeps();
-    vi.mocked(reconcile).mockRejectedValue(new Error("reconcile failed"));
+    vi.mocked(reconcile).mockRejectedValueOnce(new Error("reconcile failed"));
 
     // Should not throw
     await expect(tick(deps)).resolves.toBeUndefined();
     expect(deps.logger.error).toHaveBeenCalled();
+  });
+
+  describe("subIssueCache integration (SUBISSUE-03)", () => {
+    it("populates terminalIssueIds from subIssueCache entries with terminal states", async () => {
+      const { SubIssueCache } = await import("../../src/tracker/sub-issue-cache.js");
+      const cache = new SubIssueCache();
+
+      // Set up cache: parent issue 10 has children 20 (closed) and 21 (open)
+      const childStates = new Map([["20", "closed"], ["21", "open"]]);
+      cache.set({
+        parentId: "10",
+        childIds: ["20", "21"],
+        childStates,
+        fetchedAt: Date.now(),
+      });
+
+      const deps = makeDeps({ subIssueCache: cache });
+      await tick(deps);
+
+      // filterCandidates should be called with a Set containing "20" (closed) but not "21" (open)
+      const callArgs = vi.mocked(filterCandidates).mock.calls[0];
+      const terminalIds = callArgs[2] as Set<string>;
+      expect(terminalIds.has("20")).toBe(true);
+      expect(terminalIds.has("21")).toBe(false);
+    });
+
+    it("uses empty terminalIssueIds when subIssueCache is not provided (backward compat)", async () => {
+      const deps = makeDeps(); // no subIssueCache
+      await tick(deps);
+
+      const callArgs = vi.mocked(filterCandidates).mock.calls[0];
+      const terminalIds = callArgs[2] as Set<string>;
+      expect(terminalIds.size).toBe(0);
+    });
+
+    it("uses empty terminalIssueIds when cache has entries but none are terminal", async () => {
+      const { SubIssueCache } = await import("../../src/tracker/sub-issue-cache.js");
+      const cache = new SubIssueCache();
+
+      // All children are open (not terminal)
+      const childStates = new Map([["20", "open"], ["21", "open"]]);
+      cache.set({
+        parentId: "10",
+        childIds: ["20", "21"],
+        childStates,
+        fetchedAt: Date.now(),
+      });
+
+      const deps = makeDeps({ subIssueCache: cache });
+      await tick(deps);
+
+      const callArgs = vi.mocked(filterCandidates).mock.calls[0];
+      const terminalIds = callArgs[2] as Set<string>;
+      expect(terminalIds.size).toBe(0);
+    });
+
+    it("supports custom terminal_states from config", async () => {
+      const { SubIssueCache } = await import("../../src/tracker/sub-issue-cache.js");
+      const cache = new SubIssueCache();
+
+      const childStates = new Map([["20", "done"], ["21", "open"]]);
+      cache.set({
+        parentId: "10",
+        childIds: ["20", "21"],
+        childStates,
+        fetchedAt: Date.now(),
+      });
+
+      const deps = makeDeps({
+        subIssueCache: cache,
+        config: {
+          orchestrator: {
+            enabled: true,
+            max_concurrent_agents: 3,
+            poll_interval_ms: 100,
+            stall_timeout_ms: 600000,
+            max_retries: 5,
+            max_retry_backoff_ms: 300000,
+            drain_timeout_ms: 30000,
+            continuation_delay_ms: 1000,
+            in_progress_label: "in-progress",
+          },
+          tracker: {
+            kind: "github",
+            token: "test-token",
+            active_states: ["open"],
+            terminal_states: ["done", "closed"],
+            poll_interval_ms: 30000,
+            auto_close: false,
+          },
+        } as unknown as import("../../src/config/schema.js").ForgectlConfig,
+      });
+      await tick(deps);
+
+      const callArgs = vi.mocked(filterCandidates).mock.calls[0];
+      const terminalIds = callArgs[2] as Set<string>;
+      expect(terminalIds.has("20")).toBe(true); // "done" is terminal
+      expect(terminalIds.has("21")).toBe(false); // "open" is not terminal
+    });
   });
 });
 

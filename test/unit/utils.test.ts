@@ -87,10 +87,15 @@ describe("parseDuration", () => {
     expect(parseDuration("30m")).toBe(1800000);
   });
 
+  it("parses days", () => {
+    expect(parseDuration("7d")).toBe(604800000);
+    expect(parseDuration("1d")).toBe(86400000);
+  });
+
   it("throws on invalid input", () => {
     expect(() => parseDuration("abc")).toThrow("Invalid duration");
     expect(() => parseDuration("30")).toThrow("Invalid duration");
-    expect(() => parseDuration("30d")).toThrow("Invalid duration");
+    expect(() => parseDuration("30w")).toThrow("Invalid duration");
     expect(() => parseDuration("")).toThrow("Invalid duration");
   });
 });

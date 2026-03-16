@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const duration = z.string().regex(/^\d+(s|m|h)$/, "Must be a duration like 30s, 5m, 1h");
+const duration = z.string().regex(/^\d+(s|m|h|d)$/, "Must be a duration like 30s, 5m, 1h, 7d");
 
 export const AgentType = z.enum(["claude-code", "codex", "browser-use"]);
 export type AgentType = z.infer<typeof AgentType>;
@@ -68,8 +68,20 @@ export const WorkflowSchema = z.object({
     enabled: z.boolean().default(false),
     system: z.string().default(""),
   }).default({}),
+  cache: z.object({
+    enabled: z.boolean().default(true),
+    ttl: duration.default("7d"),
+  }).default({}),
+  budget: z.object({
+    max_cost_per_run: z.number().positive().optional(),
+    max_cost_per_day: z.number().positive().optional(),
+  }).optional(),
   autonomy: AutonomyLevelEnum.default("full"),
+  skills: z.array(z.string()).default([]),
   auto_approve: AutoApproveRuleSchema,
+  team: z.object({
+    size: z.number().int().min(2).max(5),
+  }).optional(),
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
 
@@ -83,6 +95,7 @@ export const OrchestratorConfigSchema = z.object({
   drain_timeout_ms: z.number().int().positive().default(30000),
   continuation_delay_ms: z.number().int().min(0).default(1000),
   in_progress_label: z.string().default("in-progress"),
+  child_slots: z.number().int().min(0).default(0),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
@@ -115,6 +128,8 @@ export const ConfigSchema = z.object({
     }).default({}),
     exclude: z.array(z.string()).default([
       "node_modules/", "dist/", "build/", "*.log", ".env", ".env.*",
+      "target/", "*.rlib", "*.o", "*.so", "*.dylib", "*.exe", "*.dll",
+      "*.class", "__pycache__/", "*.pyc", ".next/", "coverage/",
     ]),
   }).default({}),
 
@@ -160,6 +175,10 @@ export const ConfigSchema = z.object({
   }).default({}),
 
   github_app: GitHubAppConfigSchema.optional(),
+
+  team: z.object({
+    size: z.number().int().min(2).max(5),
+  }).optional(),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

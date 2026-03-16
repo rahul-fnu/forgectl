@@ -4,6 +4,7 @@
 
 - ✅ **v1.0 Core Orchestrator** — Phases 1-9 (shipped 2026-03-09)
 - ✅ **v2.0 Durable Runtime** — Phases 10-19 (shipped 2026-03-12)
+- ✅ **v3.0 E2E GitHub Integration** — Phases 25-30 (shipped 2026-03-14)
 
 ## Phases
 
@@ -42,6 +43,20 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
+<details>
+<summary>✅ v3.0 E2E GitHub Integration (Phases 25-30) — SHIPPED 2026-03-14</summary>
+
+- [x] Phase 25: Sub-Issue DAG Dependencies (2/2 plans) — completed 2026-03-13
+- [x] Phase 26: Skill/Config Bind-Mounting (2/2 plans) — completed 2026-03-13
+- [x] Phase 27: Agent Teams (2/2 plans) — completed 2026-03-13
+- [x] Phase 28: Sub-Issue Advanced Features (3/3 plans) — completed 2026-03-14
+- [x] Phase 29: Wire SubIssueCache Composition (1/1 plan) — completed 2026-03-14
+- [x] Phase 30: Fix Cache Singleton + Polling Context (1/1 plan) — completed 2026-03-14
+
+Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
+
+</details>
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -65,3 +80,9 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 | 17. Wire Governance Gates | v2.0 | 1/1 | Complete | 2026-03-11 |
 | 18. Wire GitHub App Utils | v2.0 | 3/3 | Complete | 2026-03-12 |
 | 19. Wire Post-Gate Worker | v2.0 | 1/1 | Complete | 2026-03-12 |
+| 25. Sub-Issue DAG | v3.0 | 2/2 | Complete | 2026-03-13 |
+| 26. Skill Mounting | v3.0 | 2/2 | Complete | 2026-03-13 |
+| 27. Agent Teams | v3.0 | 2/2 | Complete | 2026-03-13 |
+| 28. Sub-Issue Advanced | v3.0 | 3/3 | Complete | 2026-03-14 |
+| 29. Wire SubIssueCache | v3.0 | 1/1 | Complete | 2026-03-14 |
+| 30. Fix Cache Singleton | v3.0 | 1/1 | Complete | 2026-03-14 |

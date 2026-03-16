@@ -44,5 +44,7 @@ for f in glob.glob('/output/data/*'):
   },
   output: { mode: "files", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

@@ -16,6 +16,24 @@ export const runs = sqliteTable("runs", {
   approvalContext: text("approval_context"), // JSON-serialized
   approvalAction: text("approval_action"),
   githubCommentId: integer("github_comment_id"),
+  parentRunId: text("parent_run_id"),
+  role: text("role"),
+  depth: integer("depth").default(0),
+  maxChildren: integer("max_children"),
+  childrenDispatched: integer("children_dispatched").default(0),
+});
+
+export const delegations = sqliteTable("delegations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  parentRunId: text("parent_run_id").notNull(),
+  childRunId: text("child_run_id"),
+  taskSpec: text("task_spec").notNull(),
+  status: text("status").notNull().default("pending"),
+  result: text("result"),
+  retryCount: integer("retry_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: text("created_at").notNull(),
+  completedAt: text("completed_at"),
 });
 
 export const pipelineRuns = sqliteTable("pipeline_runs", {
@@ -41,6 +59,17 @@ export const runSnapshots = sqliteTable("run_snapshots", {
   stepName: text("step_name").notNull(),
   timestamp: text("timestamp").notNull(),
   state: text("state").notNull(), // JSON-serialized
+});
+
+export const runCosts = sqliteTable("run_costs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  agentType: text("agent_type").notNull(),
+  model: text("model"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  costUsd: text("cost_usd").notNull().default("0"), // stored as string for precision
+  timestamp: text("timestamp").notNull(),
 });
 
 export const executionLocks = sqliteTable(

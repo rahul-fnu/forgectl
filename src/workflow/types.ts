@@ -47,11 +47,18 @@ export interface WorkflowFileConfig {
     steps: ValidationStep[];
     on_failure: "abandon" | "output-wip" | "pause";
   };
+  delegation?: {
+    max_children?: number;
+  };
   autonomy?: "full" | "interactive" | "semi" | "supervised";
+  skills?: string[];
   auto_approve?: {
     label?: string;
     workflow_pattern?: string;
     max_cost?: number;
+  };
+  team?: {
+    size?: number;
   };
 }
 
@@ -136,4 +143,11 @@ export interface RunPlan {
     review: ReviewConfig;
   };
   commit: CommitConfig;
+  noSkills?: boolean;
+  noTeam?: boolean;
+  skipCheckpoints?: boolean;
+  team?: {
+    size: number;
+    slotWeight: number;
+  };
 }

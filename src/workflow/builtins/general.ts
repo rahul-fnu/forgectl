@@ -15,5 +15,7 @@ Complete the task as instructed.`,
   validation: { steps: [], on_failure: "output-wip" },
   output: { mode: "files", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },
+  cache: { enabled: true, ttl: "7d" },
   autonomy: "full",
+  skills: [],
 };

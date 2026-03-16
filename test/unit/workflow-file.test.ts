@@ -151,6 +151,63 @@ describe("WorkflowFrontMatterSchema", () => {
     expect(result.validation?.steps[1].retries).toBe(5);
     expect(result.validation?.on_failure).toBe("output-wip");
   });
+
+  it("accepts skills array in front matter", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      skills: ["code-review", "testing"],
+    });
+    expect(result.skills).toEqual(["code-review", "testing"]);
+  });
+
+  it("returns undefined for skills when not specified", () => {
+    const result = WorkflowFrontMatterSchema.parse({});
+    expect(result.skills).toBeUndefined();
+  });
+
+  it("strict() does NOT reject skills key", () => {
+    // This is the key correctness check — skills must be in schema before .strict()
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ skills: ["a", "b"] }),
+    ).not.toThrow(ZodError);
+  });
+
+  it("accepts team config in front matter", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 3 },
+    });
+    expect(result.team?.size).toBe(3);
+  });
+
+  it("accepts team size at min boundary (2)", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 2 },
+    });
+    expect(result.team?.size).toBe(2);
+  });
+
+  it("accepts team size at max boundary (5)", () => {
+    const result = WorkflowFrontMatterSchema.parse({
+      team: { size: 5 },
+    });
+    expect(result.team?.size).toBe(5);
+  });
+
+  it("rejects team size below 2", () => {
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ team: { size: 1 } }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects team size above 5", () => {
+    expect(() =>
+      WorkflowFrontMatterSchema.parse({ team: { size: 6 } }),
+    ).toThrow(ZodError);
+  });
+
+  it("accepts front matter without team (optional)", () => {
+    const result = WorkflowFrontMatterSchema.parse({});
+    expect(result.team).toBeUndefined();
+  });
 });
 
 describe("loadWorkflowFile", () => {

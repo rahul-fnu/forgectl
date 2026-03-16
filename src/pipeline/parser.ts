@@ -2,6 +2,7 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
 import type { PipelineDefinition } from "./types.js";
+import { expandShorthands } from "./condition.js";
 
 const PipelineNodeSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "Node IDs must be lowercase alphanumeric with hyphens"),
@@ -16,6 +17,16 @@ const PipelineNodeSchema = z.object({
   context: z.array(z.string()).optional(),
   pipe: z.object({
     mode: z.enum(["branch", "files", "context"]),
+  }).optional(),
+  node_type: z.enum(["task", "condition", "loop"]).optional(),
+  condition: z.string().optional(),
+  else_node: z.string().optional(),
+  if_failed: z.string().optional(),
+  if_passed: z.string().optional(),
+  loop: z.object({
+    until: z.string(),
+    max_iterations: z.number().int().positive().optional(),
+    body: z.array(z.string()).optional(),
   }).optional(),
 });
 
@@ -45,5 +56,6 @@ export function parsePipeline(filePath: string): PipelineDefinition {
 /** Parse and validate pipeline YAML content */
 export function parsePipelineYaml(yamlContent: string): PipelineDefinition {
   const data = load(yamlContent);
-  return PipelineSchema.parse(data) as PipelineDefinition;
+  const parsed = PipelineSchema.parse(data) as PipelineDefinition;
+  return expandShorthands(parsed);
 }

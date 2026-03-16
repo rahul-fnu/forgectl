@@ -1,963 +1,701 @@
-# Architecture Patterns
+# Architecture Research: v5.0 Intelligent Decomposition
 
-**Domain:** Durable AI agent runtime with persistent storage, event sourcing, governance, GitHub App integration, and browser-use agent adapter
-**Researched:** 2026-03-09
-
-## Recommended Architecture
-
-The v2.0 architecture layers new capabilities onto the existing v1.0 foundation without replacing it. Each new subsystem integrates at well-defined seams in the current codebase. The guiding principle: **existing in-memory state becomes a cache of persistent state**, not the other way around.
-
-```
-                   INTERACTION SURFACES
-        ┌──────────────────┬──────────────────┐
-        │  GitHub App      │  Existing         │
-        │  /webhooks/github│  REST API + UI    │
-        │  (Fastify routes)│  (unchanged)      │
-        └────────┬─────────┴────────┬──────────┘
-                 │                  │
-        ┌────────▼──────────────────▼──────────┐
-        │        GOVERNANCE LAYER               │
-        │  Autonomy enforcement, approval gates │
-        │  Budget pre-flight checks             │
-        │  (wraps dispatcher, new middleware)    │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     DURABLE ORCHESTRATOR              │
-        │  Extended state machine:              │
-        │    + waiting_for_input                │
-        │    + paused, checkpointed             │
-        │  Session persistence + resume         │
-        │  Execution locks via SQLite           │
-        │  (modifies src/orchestrator/)         │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     FLIGHT RECORDER                   │
-        │  Append-only event ledger             │
-        │  Subscribes to RunEvent emitter       │
-        │  Persists to events table             │
-        │  State reconstruction from events     │
-        │  (new src/audit/, hooks into logging) │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     IDENTITY LAYER                    │
-        │  Company + Agent entities             │
-        │  Budget scoping, attribution          │
-        │  (new src/company/, extends agent/)   │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     STORAGE LAYER                     │
-        │  SQLite + Drizzle ORM                 │
-        │  Repository pattern per entity        │
-        │  Migrations via drizzle-kit           │
-        │  (new src/storage/)                   │
-        └────────┬─────────────────────────────┘
-                 │
-        ┌────────▼─────────────────────────────┐
-        │     V1.0 FOUNDATION                   │
-        │  Docker sandbox, validation loop,     │
-        │  agent sessions, tracker adapters,    │
-        │  workspace manager, WORKFLOW.md       │
-        └──────────────────────────────────────┘
-```
-
-### Component Boundaries
-
-| Component | Directory | New/Modified | Responsibility | Communicates With |
-|-----------|-----------|-------------|----------------|-------------------|
-| Storage Layer | `src/storage/` | **NEW** | SQLite connection, Drizzle schema, migrations, repository functions | Everything above it |
-| Company/Identity | `src/company/` | **NEW** | Company CRUD, agent identity, roles, budget scopes | Storage, Orchestrator, Governance |
-| Agent Identity | `src/agent/identity.ts` | **NEW file in existing dir** | Agent entity model, lifecycle states | Storage, Company |
-| Flight Recorder | `src/audit/` | **NEW** | Append-only event persistence, state snapshots, query API | Storage, Logging (events.ts) |
-| Durable Orchestrator | `src/orchestrator/` | **MODIFIED** | Extended state machine, checkpointing, pause/resume, execution locks | Storage, Audit, Agent sessions |
-| Governance | `src/governance/` | **NEW** | Approval gates, autonomy enforcement, budget checks | Storage, Orchestrator, WORKFLOW.md |
-| Cost Tracking | `src/costs/` | **NEW** | CostEvent recording, budget enforcement, period resets | Storage, Governance, Agent sessions |
-| GitHub App | `src/github-app/` | **NEW** | Webhook receiver, slash commands, reactions, check runs | Fastify daemon, Orchestrator, Governance |
-| Browser-Use Adapter | `src/agent/browser-use.ts` | **NEW file in existing dir** | Sidecar process management, HTTP bridge to Python service | Agent session interface, Container |
-| Daemon Server | `src/daemon/server.ts` | **MODIFIED** | Initialize storage on startup, register webhook routes, pass db to services | Storage, all services |
-| Daemon Routes | `src/daemon/routes.ts` | **MODIFIED** | Add webhook route group, audit trail API endpoints | GitHub App, Flight Recorder |
-| Config Schema | `src/config/schema.ts` | **MODIFIED** | Add autonomy, budget_cap, triggers fields | Governance, Workflow |
-| Workflow Types | `src/workflow/types.ts` | **MODIFIED** | Add autonomy, budget_cap, triggers to WorkflowFileConfig | Governance |
-| RunEvent/RunLog | `src/logging/events.ts`, `run-log.ts` | **MODIFIED** | Extended event types, flight recorder subscription | Audit |
+**Domain:** LLM-driven task decomposition, worktree-based lightweight runtimes, rate limit retry scheduling, run outcome learning integrated into an existing AI agent orchestrator
+**Researched:** 2026-03-14
+**Confidence:** HIGH
 
 ---
 
-## Integration Point 1: SQLite/Drizzle Storage Layer
+## Context: What Exists
 
-### Where It Plugs In
-
-**New directory:** `src/storage/` with the following structure:
+v5.0 adds four new capabilities to the forgectl orchestrator stack that shipped in v3.0 (16,662 LOC, 1,162 tests):
 
 ```
-src/storage/
-  db.ts          # SQLite connection singleton (better-sqlite3 + drizzle)
-  schema.ts      # Drizzle table definitions
-  migrate.ts     # Migration runner (drizzle-kit)
-  repositories/
-    runs.ts      # Run CRUD
-    events.ts    # Append-only event store
-    agents.ts    # Agent identity CRUD
-    companies.ts # Company CRUD
-    approvals.ts # Approval gate CRUD
-    costs.ts     # Cost event recording
-    sessions.ts  # Durable session state
+Existing layers (DO NOT REPLACE):
+  GitHub App webhooks → Orchestrator (scheduler/dispatcher/worker/reconciler)
+  → Agent sessions (oneshot/appserver/browser-use) → Docker containers (dockerode)
+  Pipeline DAG executor (topological sort, parallel slots)
+  SQLite + Drizzle ORM (runs, events, locks, snapshots, pipelines)
+  Flight recorder (append-only events)
+  Governance (autonomy levels, approval state machine)
+  Sub-issue DAG with TTL cache + cycle detection
 ```
 
-### What It Replaces vs. What It Preserves
+The v5.0 features are entirely **additive** — no existing subsystem needs replacement, only extension.
 
-| Current | v2.0 |
-|---------|------|
-| `OrchestratorState` (in-memory Sets/Maps) | In-memory state **backed by** SQLite; rebuilt from DB on daemon restart |
-| `RunLog` saved as JSON files via `saveRunLog()` | Run metadata in `runs` table; JSON log files **still written** for backward compat |
-| `RunEvent` emitted to EventEmitter only | Events **also** persisted to `events` table by flight recorder subscriber |
-| `MetricsCollector` (in-memory counters) | Metrics computed from persistent events; in-memory collector becomes a cache |
-| Retry attempts tracked in `state.retryAttempts` Map | Attempt count stored in `runs` table, loaded on recovery |
+---
 
-### Connection Initialization
+## System Overview: v5.0 Integration Points
 
-The database initializes **once** at daemon startup, before any services start:
+```
+                     ┌──────────────────────────────────────────────┐
+                     │          EXISTING INTERACTION LAYER          │
+                     │  GitHub webhooks  │  REST API  │  Dashboard   │
+                     └────────────────────────────────┬─────────────┘
+                                                      │
+                     ┌────────────────────────────────▼─────────────┐
+                     │           EXISTING GOVERNANCE LAYER           │
+                     │   Autonomy enforcement, approval gates,       │
+                     │   budget checks  (src/governance/)            │
+                     └────────────────────────────────┬─────────────┘
+                                                      │
+    NEW: Rate Limit               ┌───────────────────▼──────────────────┐
+    Retry Scheduler ─────────────►│     ORCHESTRATOR  (src/orchestrator/) │
+    (src/rate-limit/)             │  scheduler / dispatcher / worker      │
+                                  │  reconciler / retry                   │
+                                  │                                       │
+                                  │  [MODIFIED] Dispatcher gains          │
+                                  │    RateLimitError detection path →    │
+                                  │    schedule-for-resume, preserve ws   │
+                                  └────────────────┬─────────────────────┘
+                                                   │
+    NEW: Decomposition            ┌────────────────▼─────────────────────┐
+    Engine ──────────────────────►│         WORKER  (src/orchestrator/)   │
+    (src/decomposition/)          │  [MODIFIED] DetectsDecomposable flag  │
+                                  │  → DecompositionEngine.analyze()      │
+                                  │  → emits sub-issue DAG or fallback    │
+                                  └──────┬──────────────────┬─────────────┘
+                                         │                  │
+                        ┌────────────────▼───┐      ┌───────▼──────────────┐
+                        │  Docker Runtime     │      │  Worktree Runtime     │
+                        │  (existing)         │      │  (NEW)               │
+                        │  src/container/     │      │  src/worktree/       │
+                        │  Full isolation for │      │  Lightweight for      │
+                        │  decomposition pass │      │  parallel sub-tasks   │
+                        └────────────────────┘      └──────────────────────┘
+                                                              │
+                                         ┌────────────────────▼─────────────────┐
+                                         │    OUTCOME LEARNER  (src/learning/)   │
+                                         │  Persists lessons, dead-ends,         │
+                                         │  playbook hints per issue/workflow     │
+                                         │  → feeds context/prompt.ts on next    │
+                                         │    run for same repo/issue type       │
+                                         └───────────────────────────────────────┘
+                                                              │
+                     ┌────────────────────────────────────────▼─────────────┐
+                     │              EXISTING STORAGE LAYER                  │
+                     │  SQLite + Drizzle ORM (src/storage/)                 │
+                     │  [SCHEMA EXTENSION] + decomposition_plans,           │
+                     │    rate_limit_state, outcome_lessons tables           │
+                     └──────────────────────────────────────────────────────┘
+```
+
+---
+
+## New vs Modified Components
+
+| Component | Directory | Status | Responsibility |
+|-----------|-----------|--------|----------------|
+| Decomposition Engine | `src/decomposition/` | **NEW** | LLM-driven issue analysis, DAG output, validation, fallback |
+| Worktree Runtime | `src/worktree/` | **NEW** | git worktree lifecycle, branch-per-task, process spawn, merge, conflict detection |
+| Rate Limit Retry Scheduler | `src/rate-limit/` | **NEW** | Detect LLM 429/rate errors, schedule deferred retry, preserve workspace |
+| Outcome Learner | `src/learning/` | **NEW** | Persist run outcomes, dead-end tracking, lesson injection |
+| Worker | `src/orchestrator/worker.ts` | **MODIFIED** | Detect decomposable issues, invoke DecompositionEngine, route to worktree or Docker |
+| Dispatcher | `src/orchestrator/dispatcher.ts` | **MODIFIED** | Handle RateLimitError from worker, schedule resume with preserved workspace |
+| Retry scheduler | `src/orchestrator/retry.ts` | **MODIFIED** | Gain RateLimitRetry entry type (scheduled_at, preserved_workspace_path) |
+| Context/prompt builder | `src/context/prompt.ts` | **MODIFIED** | Inject outcome lessons and dead-end hints from OutcomeLearner |
+| Storage schema | `src/storage/schema.ts` | **MODIFIED** | Add decomposition_plans, rate_limit_retries, outcome_lessons tables |
+| Config schema | `src/config/schema.ts` | **MODIFIED** | Add decomposition, worktree, learning config sections |
+| Workflow types | `src/workflow/types.ts` | **MODIFIED** | Add decompose: true/false and learning: enabled fields |
+
+---
+
+## Component 1: Decomposition Engine
+
+### Responsibility
+
+When a worker picks up a complex issue, the Decomposition Engine runs first inside a Docker container: an LLM call analyzes the issue body and codebase index, then outputs a structured DAG of sub-tasks. That DAG either gets approved (human gate or auto-approve) and executed in parallel worktrees, or falls back to single-agent execution.
+
+### Architecture: Two-Pass Flow
+
+```
+Worker picks up issue #42 (marked decompose:true or heuristic triggers)
+  │
+  ├─ Pass 1: DECOMPOSITION AGENT (runs in Docker container, full isolation)
+  │    • Prompt: issue body + repo context + file index
+  │    • Output: JSON DAG { nodes: [{id, task, depends_on, files_hint}] }
+  │    • Schema-validated with Zod (reject malformed output)
+  │    • Cycle detection reused from src/tracker/sub-issue-dag.ts
+  │
+  ├─ Validation Gate:
+  │    • Node count ≤ maxNodes (configurable, default 8)
+  │    • No cycles (DFS from existing detectIssueCycles())
+  │    • Autonomy check: if supervised/interactive → human approval gate
+  │    • Auto-approve if cost estimate < threshold
+  │
+  ├─ APPROVED → emit sub-issue DAG → WorktreeRuntime (parallel)
+  │
+  └─ REJECTED / FALLBACK → single-agent execution (existing Docker path)
+```
+
+### Key Design Decisions
+
+**Use the existing Docker container for decomposition, not a new process.** The decomposition agent needs codebase access (files, git log) to produce a meaningful task split. Spinning up a container for decomposition is consistent with the existing pattern for trusted, isolated work.
+
+**Output format is the existing PipelineNode shape.** The decomposition produces a `PipelineDefinition`-compatible structure, reusing `src/pipeline/dag.ts`'s `validateDAG()` and `topologicalSort()`. No new DAG format needed.
+
+**Fallback is always available.** If decomposition produces too many nodes, cycles, or the LLM output fails schema validation, the worker silently falls back to single-agent execution. This keeps the system resilient without human intervention.
+
+### Directory Structure
+
+```
+src/decomposition/
+  engine.ts       # DecompositionEngine class: analyze(), validate(), emit()
+  prompt.ts       # Decomposition prompt template (issue + repo context → DAG JSON)
+  validator.ts    # Zod schema for DAG JSON output, cycle detection, node count check
+  approval.ts     # Human approval gate (reuses governance/approval.ts patterns)
+  fallback.ts     # Conditions that trigger single-agent fallback
+  types.ts        # DecompositionPlan, SubTask, DecompositionResult types
+```
+
+### Integration Points
+
+- **Worker** (`src/orchestrator/worker.ts`): checks `issue.labels.includes('decompose')` or `workflowConfig.decompose === true` before calling `DecompositionEngine.analyze(issue, container)`
+- **Pipeline DAG** (`src/pipeline/dag.ts`): reuse `topologicalSort()` and `validateDAG()` — decomposition produces PipelineNode[] directly
+- **Governance** (`src/governance/approval.ts`): decomposition approval gate uses the same `enterPendingApproval()` / `evaluateAutoApprove()` as the existing pre-dispatch gate
+- **Storage** (`src/storage/schema.ts`): new `decomposition_plans` table persists the generated DAG for audit and re-planning
+
+---
+
+## Component 2: Worktree Runtime
+
+### Responsibility
+
+For approved decomposition plans, the Worktree Runtime creates one `git worktree` per DAG node, spawns a Node.js `claude-code` CLI process (not Docker) per worktree, manages concurrency (slot-weighted), and merges results back into a single branch with conflict detection.
+
+### Why Worktrees (Not Docker) for Sub-tasks
+
+Docker containers have ~2-5 second startup overhead per container plus memory allocation. For sub-tasks that split a single issue into 4-6 parallel slices, that overhead adds up to 10-30 seconds before any agent work begins. Worktrees with a spawned process start in under 500ms, share the host `.git` directory (no clone), and produce lightweight branches that merge cleanly via `git merge-tree`.
+
+The trade-off: worktrees are trusted execution paths only. The decomposition agent (first pass) runs in full Docker isolation to analyze the codebase. The sub-task agents run in worktrees because the task scope is already validated and constrained by the decomposition plan.
+
+### Architecture: Branch-Per-Node with Merge
+
+```
+DecompositionPlan { nodes: [A, B, C] } where B depends on A
+  │
+  ├─ Topological sort → execution layers: [ [A], [B, C] ]
+  │
+  ├─ Layer 1: node A
+  │    • git worktree add /tmp/forgectl-ws-42-A feature/issue-42-A
+  │    • spawn: claude -p "<task A prompt>" in /tmp/forgectl-ws-42-A
+  │    • await completion
+  │    • git merge-tree base A → detect conflicts (dry run)
+  │    • if clean: merge to integration branch
+  │    • if conflict: record conflict, trigger re-plan or manual resolution
+  │
+  ├─ Layer 2: nodes B and C (parallel, both depend on A output)
+  │    • git worktree add /tmp/forgectl-ws-42-B feature/issue-42-B
+  │    • git worktree add /tmp/forgectl-ws-42-C feature/issue-42-C
+  │    • spawn B and C concurrently (Promise.all with slot limit)
+  │    • intermediate merge after each completes
+  │
+  └─ Final: git merge-tree on integration branch → PR
+```
+
+### Conflict Detection Strategy
+
+Use `git merge-tree <base> <branch-A> <branch-B>` in dry-run mode before merging. This is a three-way merge simulation with no side effects on the working tree. If `git merge-tree` exits non-zero, conflict markers are present in the output — parse to identify conflicted files.
+
+On conflict: post a structured comment on the parent issue listing conflicted files and which sub-tasks produced them, then either (a) re-plan just the conflicted nodes or (b) fall back to sequential execution for those nodes.
+
+### Worktree Cleanup
+
+Worktrees are removed after merge via `git worktree remove --force <path>`. This is registered as an `afterHook` equivalent — cleanup runs whether the sub-task succeeds or fails. Cleanup failures are warned and logged but do not fail the run.
+
+### Directory Structure
+
+```
+src/worktree/
+  manager.ts      # WorktreeManager: create, remove, list, cleanup on crash
+  executor.ts     # WorktreeExecutor: spawn agent process in worktree, stream output
+  merger.ts       # WorktreeMerger: merge-tree dry run, conflict detection, integration branch
+  scheduler.ts    # Parallel sub-task scheduler: slot management, concurrency limits
+  types.ts        # WorktreeHandle, SubTaskResult, MergeResult, ConflictReport
+```
+
+### Integration Points
+
+- **Agent spawn** (`src/agent/`): WorktreeExecutor spawns `claude` or `codex` CLI directly as a Node.js child process (no Docker). Uses the same `agentConfig.type`, `agentConfig.model`, `agentConfig.flags` from the existing config.
+- **Workspace manager** (`src/workspace/manager.ts`): worktrees live under the existing workspace path — `wsInfo.path/worktrees/<nodeId>` — so they survive daemon restarts and get picked up by crash recovery.
+- **Slot management** (`src/orchestrator/scheduler.ts`): WorktreeScheduler respects the same `config.orchestrator.max_concurrent_slots` limit. Each active worktree counts as one slot.
+- **Flight recorder** (`src/storage/repositories/events.ts`): each sub-task emits `worktree_started`, `worktree_completed`, `merge_clean`, `merge_conflict` events to the existing RunEvent infrastructure.
+
+---
+
+## Component 3: Rate Limit Retry Scheduler
+
+### Responsibility
+
+When an agent invocation hits an LLM provider rate limit (HTTP 429, `Retry-After` header, or provider-specific error shapes), the run must not fail immediately. Instead: preserve the workspace, record the retry schedule, release the concurrency slot, and wake the dispatcher when the rate limit window expires.
+
+### Detection Points
+
+Rate limit errors can surface in three locations within the existing stack:
+
+1. **Agent CLI invocation** (`src/agent/oneshot-session.ts`): Claude Code exits with a non-zero code and stderr containing "rate limit" or "429". The existing `AgentResult.status === 'failed'` path already captures this, but it's currently treated as a generic error for retry.
+
+2. **Tracker adapter fetch** (`src/tracker/github.ts`): Already handles GitHub API rate limits via `rateLimitRemaining` state. No new detection needed here — this is tracker-level, not LLM-level.
+
+3. **Validation commands** (`src/validation/runner.ts`): Validation steps that call external APIs can hit rate limits. Less common but must be caught.
+
+### Architecture: Rate-Limit-Aware Retry Path
+
+```
+Worker catches AgentResult { status: 'failed', stderr: '...' }
+  │
+  ├─ RateLimitDetector.classify(agentResult)
+  │    → checks: exit code, stderr patterns, process exit signals
+  │    → returns: { isRateLimit: bool, retryAfterMs: number | null }
+  │
+  ├─ if isRateLimit:
+  │    • DO NOT delete workspace (preserve for resume)
+  │    • UPDATE runs SET status='rate_limited', retry_at=<timestamp>
+  │    • releaseIssue(state, issue.id)  ← frees the slot immediately
+  │    • RateLimitRetryScheduler.schedule(issue, retryAfterMs)
+  │         → setTimeout (or recoverable timer in SQLite) for retryAfterMs
+  │         → on wake: re-add issue to candidate queue (does NOT create new workspace)
+  │
+  └─ if not rate limit: existing error retry path (exponential backoff)
+```
+
+### Workspace Preservation
+
+When a run is rate-limited, the workspace is preserved at `wsInfo.path`. On resume:
+- The same `WorkspaceManager.ensureWorkspace(issue.identifier)` returns the existing path (no new clone)
+- The agent is re-invoked with the existing workspace state — partial work is preserved
+- The dispatcher increments `attempt` but does not reset `retryAttempts` for this specific failure mode (rate limits don't count toward max_retries by default)
+
+### Timer Durability
+
+For rate limit retry timers, the `Retry-After` value can be 60-3600 seconds. The in-memory `setTimeout` approach from `src/orchestrator/retry.ts` is fine for short windows, but crashes lose timers. Solution: persist the scheduled retry in the new `rate_limit_retries` table. On daemon restart, `startupRecovery()` queries this table and restores any pending rate-limit retry timers.
+
+### Directory Structure
+
+```
+src/rate-limit/
+  detector.ts    # RateLimitDetector: classify AgentResult as rate-limited vs other error
+  scheduler.ts   # RateLimitRetryScheduler: schedule resume, persist timer, restore on crash
+  types.ts       # RateLimitEntry: issueId, retryAt, workspacePath, attemptCount
+```
+
+### Integration Points
+
+- **Worker** (`src/orchestrator/worker.ts`): calls `RateLimitDetector.classify(agentResult)` after agent invocation; returns `{ isRateLimit: true }` to the dispatcher via an extended `WorkerResult` field
+- **Dispatcher** (`src/orchestrator/dispatcher.ts`): new branch in `executeWorkerAndHandle()` checks `result.isRateLimit` and delegates to `RateLimitRetryScheduler` instead of the standard retry path
+- **Existing retry** (`src/orchestrator/retry.ts`): `cancelRetry()` / `scheduleRetry()` reused by the rate limit scheduler; the new `RateLimitRetryScheduler` wraps these with persistence
+- **Storage schema**: new `rate_limit_retries` table — minimal: `(issue_id, workspace_path, retry_at, attempt_count)`
+- **Startup recovery** (`src/orchestrator/index.ts` or daemon startup): query `rate_limit_retries WHERE retry_at > now()` and re-arm timers
+
+---
+
+## Component 4: Outcome Learner
+
+### Responsibility
+
+After each run completes (success or failure), the Outcome Learner persists structured lessons to SQLite. Those lessons are injected into future agent prompts for the same repository and issue type — dead ends are flagged, successful approaches are noted. Over time, the agent gets domain-specific context it didn't have on the first run.
+
+### Architecture: Closed-Loop Feedback
+
+```
+Run completes (success or failure)
+  │
+  ├─ OutcomeLearner.record(runId, issue, agentResult, validationResult)
+  │    • classifies outcome: success | partial | failure | dead_end
+  │    • extracts signals:
+  │        - which validation steps passed/failed
+  │        - agent stderr patterns (dead-end markers)
+  │        - files touched (from git diff summary)
+  │        - cost (tokens, dollars)
+  │    • persists outcome_lessons row:
+  │        { repo, issue_type_labels, outcome_class, lesson_text, files_pattern }
+  │
+  └─ On NEXT run for same repo:
+       OutcomeLearner.query(repo, issue.labels) → RelevantLessons[]
+       → prompt.ts injects lessons as a "Prior experience" context block:
+           "In previous runs on this repo:
+            - Approach X failed (validation: test-suite). Avoid.
+            - Files matching src/payment/** require extra care (3 prior failures).
+            - Dead end: 'modify package.json version' alone is insufficient."
+```
+
+### Lesson Classification
+
+| Outcome Class | Trigger | Lesson Type |
+|---------------|---------|-------------|
+| `success` | `agentResult.status === 'completed'` AND all validation passes | Positive hint: what worked |
+| `partial` | Agent completed but ≥1 validation step failed | Warning: partial approach |
+| `failure` | Agent failed or max retries exhausted | Negative hint: what to avoid |
+| `dead_end` | Repeated failures on same issue after 2+ attempts, same file set | Strong warning: mark this approach as exhausted |
+
+### Dead-End Detection
+
+A dead end is detected when: (a) the same issue has been attempted 2+ times, (b) the agent is writing to the same set of files each time, and (c) validation keeps failing with the same error. The `dead_end` lesson is highest priority — injected first into the prompt context block.
+
+**Confidence:** MEDIUM. Dead-end detection via file-set overlap is a heuristic that works well for deterministic validation (build/test failures) but may miss semantic dead-ends (the agent writing different code that produces the same logical error). This is acceptable for v5.0; semantic dead-end detection requires LLM-assisted lesson analysis (out of scope).
+
+### Schema Addition
 
 ```typescript
-// src/storage/db.ts
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from './schema.js';
-
-let _db: ReturnType<typeof drizzle> | null = null;
-
-export function initDb(path: string = '~/.forgectl/forgectl.db') {
-  const sqlite = new Database(resolvedPath, { /* WAL mode for concurrent reads */ });
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('busy_timeout = 5000');
-  _db = drizzle(sqlite, { schema });
-  return _db;
-}
-
-export function getDb() {
-  if (!_db) throw new Error('Database not initialized — call initDb() first');
-  return _db;
-}
-```
-
-**Modified file:** `src/daemon/server.ts` adds `initDb()` call before `new Orchestrator()`:
-
-```typescript
-// In startDaemon():
-import { initDb, runMigrations } from '../storage/db.js';
-
-const db = initDb();
-await runMigrations(db);
-// ... then create orchestrator, register routes, etc.
-```
-
-### Schema Design (Key Tables)
-
-```typescript
-// src/storage/schema.ts
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
-
-export const companies = sqliteTable('companies', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  config: text('config'),  // JSON blob
-  createdAt: text('created_at').notNull(),
-});
-
-export const agents = sqliteTable('agents', {
-  id: text('id').primaryKey(),
-  companyId: text('company_id').references(() => companies.id),
-  name: text('name').notNull(),
-  role: text('role').notNull(),
-  status: text('status').notNull(), // pending_approval | idle | running | paused | waiting_for_input | terminated
-  reportsTo: text('reports_to'),
-  budgetCents: integer('budget_cents'),
-  budgetPeriod: text('budget_period'), // monthly | weekly
-  createdAt: text('created_at').notNull(),
-});
-
-export const runs = sqliteTable('runs', {
-  id: text('id').primaryKey(),
-  agentId: text('agent_id').references(() => agents.id),
-  issueId: text('issue_id'),
-  issueIdentifier: text('issue_identifier'),
-  trackerKind: text('tracker_kind'),
-  status: text('status').notNull(), // queued | running | paused | waiting_for_input | completed | failed | abandoned
-  attempt: integer('attempt').notNull().default(1),
-  checkpointData: text('checkpoint_data'), // JSON: serialized execution state
-  costCents: integer('cost_cents').default(0),
-  startedAt: text('started_at'),
-  completedAt: text('completed_at'),
-  createdAt: text('created_at').notNull(),
-});
-
-export const events = sqliteTable('events', {
+// In src/storage/schema.ts:
+export const outcomeLessons = sqliteTable('outcome_lessons', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  type: text('type').notNull(),
-  data: text('data').notNull(), // JSON
+  runId: text('run_id').notNull(),
+  repo: text('repo').notNull(),            // "owner/repo" for scoping
+  issueLabels: text('issue_labels'),        // JSON: string[] for matching
+  outcomeClass: text('outcome_class').notNull(), // 'success'|'partial'|'failure'|'dead_end'
+  lessonText: text('lesson_text').notNull(),
+  filesPattern: text('files_pattern'),      // JSON: string[] of touched file paths
+  validationFailures: text('validation_failures'), // JSON: failed step names
+  costCents: integer('cost_cents'),
   createdAt: text('created_at').notNull(),
 });
+```
 
-export const approvals = sqliteTable('approvals', {
+### Lesson Injection in Prompt Builder
+
+**Modified file:** `src/context/prompt.ts`
+
+```typescript
+// After existing context assembly:
+if (config.learning?.enabled !== false) {
+  const lessons = await outcomeLearner.query(repo, issue.labels);
+  if (lessons.length > 0) {
+    context.priorExperience = formatLessons(lessons);
+    // Injected as a distinct section before the task:
+    // "Prior experience on this repository: ..."
+  }
+}
+```
+
+### Directory Structure
+
+```
+src/learning/
+  learner.ts     # OutcomeLearner: record(), query(), detectDeadEnd()
+  classifier.ts  # Outcome classification logic
+  formatter.ts   # Format lessons into prompt context block
+  types.ts       # Lesson, OutcomeClass, LessonQuery types
+```
+
+### Integration Points
+
+- **Worker** (`src/orchestrator/worker.ts`): calls `OutcomeLearner.record()` after run completes — fire-and-forget, errors swallowed (same pattern as EventRecorder)
+- **Prompt builder** (`src/context/prompt.ts`): calls `OutcomeLearner.query()` during `buildPrompt()` to inject prior lessons
+- **Flight recorder** (`src/storage/repositories/events.ts`): outcome recording emits a `lesson_persisted` event to the audit trail
+- **Storage schema**: new `outcome_lessons` table (see above)
+
+---
+
+## Data Flow: Full v5.0 Path
+
+### Path A: Standard Issue (No Decomposition)
+
+```
+Tracker poll / GitHub webhook → issue #42
+  → OrchestratorScheduler: candidate selection, slot claim
+  → OutcomeLearner.query(repo, issue.labels) → [RelevantLessons]
+  → prompt.ts: inject lessons into agent prompt
+  → Worker → Docker container → Claude Code agent
+  → AgentResult:
+      if rate_limited:
+          → RateLimitDetector.classify() → true
+          → RateLimitRetryScheduler.schedule(issue, retryAfterMs)
+          → workspace preserved, slot released
+      else:
+          → validation loop → output collection
+          → OutcomeLearner.record(runId, outcome)
+          → GitHub comment / PR creation
+```
+
+### Path B: Decomposable Issue
+
+```
+Tracker poll → issue #42 (label: decompose OR heuristic triggers)
+  → Worker: detect decomposable → run DecompositionEngine
+  → DecompositionEngine:
+      → Docker container (isolated): LLM call → DAG JSON
+      → Zod validate → cycle detection (detectIssueCycles())
+      → Approval gate (governance): auto or human
+      → APPROVED → DecompositionPlan { nodes: [A, B, C] }
+  → WorktreeRuntime:
+      → topologicalSort() → [[A], [B, C]]
+      → Layer 1: worktree A → spawn claude → await
+          → merge-tree dry run → clean → merge to integration branch
+      → Layer 2: worktrees B and C in parallel
+          → merge-tree per node → detect conflicts → record
+      → Final integration branch → PR
+  → OutcomeLearner.record(runId, decomposition outcome)
+```
+
+### Path C: Rate Limit Recovery
+
+```
+Worker: rate limit detected during agent invocation
+  → WorkerResult { isRateLimit: true, retryAfterMs: 60000 }
+  → Dispatcher: RateLimitRetryScheduler.schedule(issue, 60000)
+      → UPDATE rate_limit_retries SET retry_at = now + 60s
+      → releaseIssue(state, issue.id) — slot freed
+      → setTimeout(60000, () => requeueIssue(issue))
+  [60 seconds later]
+  → Scheduler: requeueIssue(issue) → candidate queue
+  → Worker: WorkspaceManager.ensureWorkspace() → same path (no re-clone)
+  → OutcomeLearner: prior lesson "rate limited on attempt 1" injected
+  → Normal agent execution continues
+```
+
+---
+
+## Schema Extensions (Additive)
+
+All additions to `src/storage/schema.ts` are new tables only — no changes to existing table columns.
+
+```typescript
+// New table 1: Decomposition plans (audit + re-planning)
+export const decompositionPlans = sqliteTable('decomposition_plans', {
   id: text('id').primaryKey(),
-  runId: text('run_id').references(() => runs.id),
-  type: text('type').notNull(), // plan_review | expensive_run | deploy | custom
-  status: text('status').notNull(), // pending | approved | rejected | revision_requested
-  requestedBy: text('requested_by'),
-  decidedBy: text('decided_by'),
-  reason: text('reason'),
+  runId: text('run_id').notNull(),
+  issueId: text('issue_id').notNull(),
+  status: text('status').notNull(), // 'pending_approval' | 'approved' | 'rejected' | 'fallback'
+  planJson: text('plan_json').notNull(), // JSON: PipelineDefinition (nodes + deps)
+  nodeCount: integer('node_count').notNull(),
+  approvedBy: text('approved_by'),
+  fallbackReason: text('fallback_reason'),
   createdAt: text('created_at').notNull(),
-  decidedAt: text('decided_at'),
 });
 
-export const costEvents = sqliteTable('cost_events', {
+// New table 2: Rate limit retry state (for crash-safe timer recovery)
+export const rateLimitRetries = sqliteTable('rate_limit_retries', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  agentId: text('agent_id').references(() => agents.id),
-  provider: text('provider').notNull(), // anthropic | openai
-  model: text('model').notNull(),
-  inputTokens: integer('input_tokens').notNull(),
-  outputTokens: integer('output_tokens').notNull(),
-  cents: real('cents').notNull(),
-  createdAt: text('created_at').notNull(),
+  issueId: text('issue_id').notNull(),
+  workspacePath: text('workspace_path').notNull(),
+  retryAt: text('retry_at').notNull(),    // ISO timestamp
+  attemptCount: integer('attempt_count').notNull().default(1),
+  resolvedAt: text('resolved_at'),        // null until retried or cancelled
 });
 
-export const conversations = sqliteTable('conversations', {
+// New table 3: Outcome lessons
+export const outcomeLessons = sqliteTable('outcome_lessons', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  runId: text('run_id').references(() => runs.id),
-  role: text('role').notNull(), // agent | human
-  content: text('content').notNull(),
-  source: text('source'), // github_comment | notion_comment | cli
-  externalId: text('external_id'), // GitHub comment ID, etc.
+  runId: text('run_id').notNull(),
+  repo: text('repo').notNull(),
+  issueLabels: text('issue_labels'),
+  outcomeClass: text('outcome_class').notNull(),
+  lessonText: text('lesson_text').notNull(),
+  filesPattern: text('files_pattern'),
+  validationFailures: text('validation_failures'),
+  costCents: integer('cost_cents'),
   createdAt: text('created_at').notNull(),
 });
-```
-
-### Backward Compatibility
-
-The `saveRunLog()` function in `src/logging/run-log.ts` continues to write JSON files. A new `persistRunLog()` function writes to both the `runs` table and the JSON file. Existing `forgectl run` commands see no difference. The database is an additive layer.
-
----
-
-## Integration Point 2: GitHub App Webhook Receiver in Fastify Daemon
-
-### Where It Plugs In
-
-**New directory:** `src/github-app/` with the following structure:
-
-```
-src/github-app/
-  webhook.ts        # Fastify route plugin for /webhooks/github
-  verify.ts         # HMAC-SHA256 signature verification
-  events.ts         # Event handlers (issue labeled, comment created, reaction, etc.)
-  commands.ts       # Slash command parser
-  bot.ts            # Bot comment formatting (templates)
-  auth.ts           # GitHub App JWT + installation token management
-  types.ts          # Event payload types
-```
-
-### Integration with Fastify Daemon
-
-The webhook receiver is a **Fastify plugin** registered on the existing app instance. This follows Fastify's encapsulation model.
-
-**Modified file:** `src/daemon/server.ts`
-
-```typescript
-// After existing registerRoutes():
-import { registerGitHubAppRoutes } from '../github-app/webhook.js';
-
-if (config.githubApp) {
-  registerGitHubAppRoutes(app, {
-    appId: config.githubApp.appId,
-    privateKey: config.githubApp.privateKey,
-    webhookSecret: config.githubApp.webhookSecret,
-    orchestrator,
-    governance,  // approval/budget system
-    db,
-  });
-}
-```
-
-**Modified file:** `src/daemon/routes.ts` -- the webhook route group is separate, NOT added here. It gets its own plugin for encapsulation.
-
-### Webhook Flow
-
-```
-GitHub POST /webhooks/github
-  → verify.ts: HMAC-SHA256 signature check (preValidation hook)
-  → webhook.ts: route handler, parse event type from X-GitHub-Event header
-  → events.ts: dispatch to handler by event type
-    → issues.labeled → check trigger rules → enqueue into orchestrator via dispatchIssue()
-    → issue_comment.created → check for slash command → commands.ts parser
-    → pull_request_review → feed back to agent session
-    → check_run.rerequested → re-trigger run
-```
-
-### Key Design Decision: Webhook Events Enqueue, Don't Execute
-
-Webhook handlers do NOT execute runs synchronously. They either:
-1. Call `orchestrator.triggerTick()` to wake the scheduler (for new work)
-2. Post to an internal event bus for the governance system (for approvals)
-3. Resume a paused run by updating the `runs` table status and waking the scheduler
-
-This keeps webhook response times under 1 second (GitHub expects a response within 10 seconds).
-
-### Authentication: @octokit/auth-app + @octokit/webhooks
-
-Use `@octokit/app` which bundles auth-app, webhooks, and Octokit REST client. This is the official GitHub SDK for GitHub Apps.
-
-```typescript
-// src/github-app/auth.ts
-import { App } from '@octokit/app';
-
-export function createGitHubApp(config: GitHubAppConfig) {
-  return new App({
-    appId: config.appId,
-    privateKey: config.privateKey,
-    webhooks: { secret: config.webhookSecret },
-  });
-}
-```
-
-Webhook signature verification uses the Octokit webhooks library's `verify()` function, wrapped as a Fastify `preValidation` hook. This requires `@fastify/raw-body` to access the raw request body for signature computation.
-
-### Relationship to Existing Tracker Adapter
-
-The GitHub App does NOT replace the existing `TrackerAdapter`. The tracker adapter handles **polling** for candidate issues. The GitHub App handles **push events** (webhooks). They coexist:
-
-- **Without GitHub App:** Polling-only mode (existing v1 behavior, unchanged)
-- **With GitHub App:** Webhooks trigger immediate dispatch; polling is fallback/reconciliation
-
-When a webhook arrives for an issue event, the handler calls `orchestrator.triggerTick()` which re-runs the normal candidate selection pipeline. The webhook just makes it faster (seconds instead of poll interval).
-
----
-
-## Integration Point 3: Event-Sourced Flight Recorder Under RunEvent/RunLog
-
-### Where It Plugs In
-
-**New directory:** `src/audit/`
-
-```
-src/audit/
-  recorder.ts    # Flight recorder: subscribes to RunEvent, persists to DB
-  snapshots.ts   # State snapshot creation at step boundaries
-  query.ts       # Query API: run history, filter, replay
-  writeback.ts   # Rich write-back formatting for GitHub/Notion comments
-```
-
-### How It Layers Under Existing Logging
-
-The existing `RunEvent` emitter (`src/logging/events.ts`) is the **source**. The flight recorder is a **subscriber** that persists events to SQLite. This is purely additive -- no existing code changes except adding the subscription.
-
-```
-  Agent/Worker/Orchestrator
-         │
-         ▼
-  emitRunEvent(event)          ← existing, unchanged
-         │
-    ┌────┴────────────────┐
-    ▼                     ▼
-  SSE listeners       FlightRecorder.onEvent(event)   ← NEW subscriber
-  (existing)               │
-                           ▼
-                    INSERT INTO events (run_id, type, data, created_at)
-```
-
-**Modified file:** `src/logging/events.ts` -- extend the `RunEvent.type` union to include new event types:
-
-```typescript
-export interface RunEvent {
-  runId: string;
-  type: "started" | "phase" | "validation" | "retry" | "output" | "completed" | "failed"
-    | "dispatch" | "reconcile" | "stall" | "orch_retry"
-    // v2.0 additions:
-    | "checkpoint" | "paused" | "resumed" | "waiting_for_input" | "input_received"
-    | "approval_requested" | "approval_decided" | "cost_event"
-    | "agent_tool_call" | "container_lifecycle";
-  timestamp: string;
-  data: Record<string, unknown>;
-}
-```
-
-**Modified file:** `src/daemon/server.ts` -- initialize the recorder after db:
-
-```typescript
-import { FlightRecorder } from '../audit/recorder.js';
-
-const recorder = new FlightRecorder(db);
-recorder.start(); // Subscribes to runEvents emitter
-```
-
-### State Reconstruction
-
-The flight recorder enables reconstructing any run's state by replaying its events. This powers:
-- `forgectl run inspect <run-id>` CLI command
-- Dashboard run detail view
-- Crash recovery (rebuild in-memory state from events on daemon restart)
-
-### Append-Only Guarantee
-
-Events are INSERT-only into the `events` table. No UPDATE or DELETE. Corrections are new compensating events. The table has no unique constraint on (run_id, type) -- duplicates are valid (multiple retries produce multiple events).
-
----
-
-## Integration Point 4: Durable Execution Extending Orchestrator State Machine
-
-### What Changes in `src/orchestrator/`
-
-**Modified file:** `src/orchestrator/state.ts`
-
-The `IssueState` type gains new states:
-
-```typescript
-export type IssueState =
-  | "claimed"
-  | "running"
-  | "retry_queued"
-  | "released"
-  // v2.0 additions:
-  | "paused"              // Human requested pause via slash command
-  | "waiting_for_input"   // Agent asked a clarification question
-  | "checkpointed";       // Saved state, container may be reclaimed
-```
-
-The `OrchestratorState` changes from ephemeral to **persistent-backed**:
-
-```typescript
-export interface OrchestratorState {
-  // Existing (now backed by DB):
-  claimed: Set<string>;
-  running: Map<string, WorkerInfo>;
-  retryTimers: Map<string, ReturnType<typeof setTimeout>>;
-  retryAttempts: Map<string, number>;
-  // v2.0 additions:
-  paused: Map<string, PausedRunInfo>;
-  waitingForInput: Map<string, WaitingRunInfo>;
-}
-
-export interface PausedRunInfo {
-  issueId: string;
-  runId: string;
-  checkpointId: string;  // References state snapshot in DB
-  pausedAt: number;
-  reason: string;
-}
-
-export interface WaitingRunInfo {
-  issueId: string;
-  runId: string;
-  checkpointId: string;
-  question: string;       // What the agent asked
-  askedAt: number;
-  timeoutMs: number;      // When to mark as stalled
-}
-```
-
-### Execution Locks via SQLite
-
-Replace the in-memory `claimed` Set with SQLite-backed atomic claims using `BEGIN IMMEDIATE`:
-
-```typescript
-// src/orchestrator/locks.ts
-export function atomicClaim(db: DB, issueId: string, workerId: string): boolean {
-  return db.transaction(() => {
-    const existing = db.select().from(runs)
-      .where(and(eq(runs.issueId, issueId), inArray(runs.status, ['running', 'paused', 'waiting_for_input'])))
-      .get();
-    if (existing) return false;
-    // Insert new run record
-    db.insert(runs).values({ id: newRunId(), issueId, status: 'running', ... }).run();
-    return true;
-  })();
-}
-```
-
-### Crash Recovery
-
-**Modified file:** `src/orchestrator/index.ts` -- the `startupRecovery()` method expands:
-
-```typescript
-private async startupRecovery(): Promise<void> {
-  // Existing: clean terminal workspaces (unchanged)
-
-  // NEW: Recover interrupted runs from DB
-  const interruptedRuns = db.select().from(runs)
-    .where(eq(runs.status, 'running'))
-    .all();
-
-  for (const run of interruptedRuns) {
-    if (run.checkpointData) {
-      // Has checkpoint: mark as checkpointed, scheduler will resume
-      db.update(runs).set({ status: 'checkpointed' }).where(eq(runs.id, run.id)).run();
-    } else {
-      // No checkpoint: mark as failed with crash reason
-      db.update(runs).set({ status: 'failed', completedAt: now() }).where(eq(runs.id, run.id)).run();
-      this.recorder.emit({ runId: run.id, type: 'failed', data: { reason: 'daemon_crash_recovery' } });
-    }
-  }
-
-  // Rebuild in-memory state from DB
-  this.state = rebuildStateFromDb(db);
-}
-```
-
-### Checkpoint/Resume Flow
-
-```
-Agent working on issue #42
-  → Step boundary reached (e.g., after validation pass)
-  → Checkpoint: serialize { prompt history, workspace state hash, step index, context }
-  → INSERT INTO state_snapshots (run_id, data, created_at)
-  → If daemon crashes...
-  → On restart: find checkpointed runs
-  → Restore workspace (already persisted on disk)
-  → Rebuild agent context from checkpoint + audit trail events
-  → Resume agent from last step
-```
-
----
-
-## Integration Point 5: Governance/Autonomy Extending WORKFLOW.md Contract
-
-### What Changes in WORKFLOW.md
-
-**Modified file:** `src/workflow/types.ts` -- `WorkflowFileConfig` gains:
-
-```typescript
-export interface WorkflowFileConfig {
-  // ... existing fields ...
-
-  // v2.0 additions:
-  autonomy?: 'full' | 'semi' | 'interactive' | 'supervised';
-  budget_cap?: number;    // Max cost in dollars per run
-  triggers?: {
-    github_labels?: string[];
-    notion_status?: string;
-  };
-}
-```
-
-**Modified file:** `src/config/schema.ts` -- `ConfigSchema` gains governance section:
-
-```typescript
-export const ConfigSchema = z.object({
-  // ... existing fields ...
-
-  governance: z.object({
-    default_autonomy: z.enum(['full', 'semi', 'interactive', 'supervised']).default('semi'),
-    budget: z.object({
-      default_cap_cents: z.number().int().default(500),  // $5.00
-      period: z.enum(['monthly', 'weekly', 'per_run']).default('per_run'),
-    }).default({}),
-    auto_approve: z.object({
-      max_cost_cents: z.number().int().default(100),
-      max_files_changed: z.number().int().default(10),
-      labels: z.array(z.string()).default([]),
-    }).default({}),
-  }).default({}),
-});
-```
-
-### Governance Enforcement Points
-
-The governance system inserts checks at three points in the existing dispatch flow:
-
-```
-Candidate selected (dispatcher.ts)
-  → PRE-DISPATCH: Budget pre-flight check (governance)
-    → If over budget: reject, post comment, skip
-  → DISPATCH: executeWorker() begins
-  → IN-FLIGHT: Agent produces plan
-    → If autonomy != 'full': pause, post plan for review
-    → Wait for approval (waiting_for_input state)
-  → POST-COMPLETION: Cost recording
-    → Update budget spent, emit cost_event
-```
-
-**New middleware pattern** -- governance wraps the dispatcher, not replaces it:
-
-```typescript
-// src/governance/enforcement.ts
-export async function governedDispatch(
-  issue: TrackerIssue,
-  config: ForgectlConfig,
-  governance: GovernanceEngine,
-  originalDispatch: DispatchFn,
-): Promise<void> {
-  // 1. Budget pre-flight
-  const budgetOk = await governance.checkBudget(issue, config);
-  if (!budgetOk) {
-    await governance.rejectOverBudget(issue);
-    return;
-  }
-
-  // 2. Autonomy check — does this need pre-approval?
-  const autonomy = config.governance.default_autonomy; // or from WORKFLOW.md
-  if (autonomy === 'supervised') {
-    await governance.requestPlanApproval(issue);
-    return; // Don't dispatch yet; wait for approval webhook/reaction
-  }
-
-  // 3. Proceed with normal dispatch
-  originalDispatch(issue);
-}
-```
-
-**Modified file:** `src/orchestrator/dispatcher.ts` -- the `dispatchIssue()` function wraps with governance check before calling `executeWorkerAndHandle()`.
-
----
-
-## Integration Point 6: Browser-Use as Third Agent Adapter
-
-### Architecture: Python Sidecar in Docker Container
-
-Browser-use is a Python library with no official REST API. The integration pattern is a **sidecar process** running inside the same Docker container as the agent, with a thin HTTP bridge.
-
-```
-┌─────────────────── Docker Container ───────────────────┐
-│                                                         │
-│  ┌──────────────┐     HTTP (localhost:9222)    ┌──────┐│
-│  │ browser-use  │◄────────────────────────────►│bridge││
-│  │ Python agent │     POST /task               │(Node)││
-│  │ + Playwright │     GET /status              │      ││
-│  └──────────────┘     POST /stop               └──┬───┘│
-│                                                    │    │
-│                                            stdio/exec   │
-│                                                    │    │
-└────────────────────────────────────────────────────┘    │
-                                                     │
-                                              forgectl daemon
-                                              (BrowserUseSession)
-```
-
-### Why Sidecar, Not External Service
-
-1. **Sandboxing:** Browser-use runs inside the container, inheriting all Docker isolation (network, filesystem, resources)
-2. **Lifecycle:** Container start/stop manages the browser-use process -- no external service to manage
-3. **Security:** The browser can't escape the container sandbox
-4. **Consistency:** Same model as Claude Code (CLI in container) and Codex (subprocess in container)
-
-### Implementation
-
-**New file:** `src/agent/browser-use.ts`
-
-```typescript
-import type Docker from 'dockerode';
-import type { AgentSession, AgentResult, InvokeOptions } from './session.js';
-
-/**
- * BrowserUseSession runs a Python browser-use agent inside the Docker container.
- * Communication via HTTP to a thin bridge server inside the container.
- */
-export class BrowserUseSession implements AgentSession {
-  private container: Docker.Container;
-  private bridgePort = 9222;
-  private alive = false;
-
-  constructor(container: Docker.Container, options: BrowserUseOptions) {
-    this.container = container;
-  }
-
-  async invoke(prompt: string, options?: InvokeOptions): Promise<AgentResult> {
-    // 1. Start bridge + browser-use if not running
-    if (!this.alive) {
-      await this.startSidecar();
-    }
-
-    // 2. POST task to bridge
-    const exec = await this.container.exec({
-      Cmd: ['curl', '-s', '-X', 'POST', `http://localhost:${this.bridgePort}/task`,
-        '-H', 'Content-Type: application/json',
-        '-d', JSON.stringify({ task: prompt, timeout: options?.timeout })],
-      AttachStdout: true, AttachStderr: true,
-    });
-
-    // 3. Poll status until complete
-    // 4. Return AgentResult
-  }
-
-  isAlive(): boolean { return this.alive; }
-  async close(): Promise<void> { /* stop sidecar */ }
-}
-```
-
-### Container Image
-
-Browser-use requires a Docker image with Python, Playwright, and Chromium. This is a **separate base image** from the default Node.js agent image:
-
-```dockerfile
-# Dockerfile.browser-use
-FROM mcr.microsoft.com/playwright/python:v1.50.0
-RUN pip install browser-use
-COPY bridge/ /opt/bridge/
-CMD ["python", "/opt/bridge/server.py"]
-```
-
-The bridge server is a minimal FastAPI/Flask app (~50 lines) that wraps browser-use's Agent class with HTTP endpoints.
-
-### Agent Registry Integration
-
-**Modified file:** `src/agent/registry.ts` -- add browser-use adapter:
-
-```typescript
-// Existing:
-const adapters: Record<string, AgentAdapter> = {
-  'claude-code': claudeCodeAdapter,
-  'codex': codexAdapter,
-};
-
-// v2.0:
-// browser-use doesn't use the AgentAdapter interface (shell command builder)
-// because it uses a sidecar HTTP pattern, not CLI invocation.
-// Instead, it's handled in createAgentSession():
-```
-
-**Modified file:** `src/agent/session.ts` -- extend `createAgentSession()`:
-
-```typescript
-export function createAgentSession(
-  agentType: string,
-  container: Docker.Container,
-  agentOptions: AgentOptions,
-  env: string[],
-  sessionOptions?: AgentSessionOptions,
-): AgentSession {
-  if (agentType === 'browser-use') {
-    return new BrowserUseSession(container, agentOptions, env);
-  }
-  if (agentType === 'codex' && sessionOptions?.useAppServer) {
-    return new AppServerSession(container, agentOptions, env, sessionOptions);
-  }
-  const adapter = getAgentAdapter(agentType);
-  return new OneShotSession(container, adapter, agentOptions, env, sessionOptions);
-}
-```
-
-**Modified file:** `src/config/schema.ts` -- extend AgentType:
-
-```typescript
-export const AgentType = z.enum(['claude-code', 'codex', 'browser-use']);
-```
-
-### When to Use Browser-Use
-
-Browser-use is for tasks that require web interaction: scraping, form filling, web research, testing web UIs. It is NOT a general-purpose coding agent. The WORKFLOW.md specifies when to use it:
-
-```yaml
----
-name: web-research
-agent: browser-use
-autonomy: semi
-validation:
-  steps:
-    - name: output-exists
-      command: test -f /workspace/output/results.json
----
-```
-
----
-
-## Data Flow Changes
-
-### v1.0 Data Flow (Current)
-```
-Tracker poll → candidates → filter → sort → dispatch → worker → agent CLI → validation → output → comment
-                                                  ↓
-                                           RunEvent emitter → SSE → dashboard
-                                                  ↓
-                                           saveRunLog() → JSON file
-```
-
-### v2.0 Data Flow (New)
-```
-Tracker poll ──────────────┐
-GitHub webhook ────────────┤
-                           ▼
-                     candidates → governance pre-flight → filter → sort → dispatch
-                                                                           ↓
-                     ┌───────────────────────────────────────── worker ─────────────┐
-                     │                                                              │
-                     │  autonomy check → [if supervised: pause, await approval]     │
-                     │  agent session (Claude/Codex/browser-use) → validation       │
-                     │  [if clarification needed: pause, ask question, wait]        │
-                     │  checkpoint at step boundaries                               │
-                     │                                                              │
-                     └──────────────────────────┬───────────────────────────────────┘
-                                                ↓
-                                         RunEvent emitter
-                                           ↓       ↓        ↓
-                                     SSE stream   Flight    Rich write-back
-                                     (existing)   Recorder  (GitHub comment /
-                                                  (→ DB)    Notion update)
-                                                    ↓
-                                              Cost recording
-                                              Budget update
 ```
 
 ---
 
 ## Patterns to Follow
 
-### Pattern 1: Repository Pattern for Storage
+### Pattern 1: Additive Subscriber for Outcome Recording
 
-**What:** Each entity (runs, events, agents, approvals) gets a typed repository module with query/mutation functions. No raw SQL or Drizzle calls outside `src/storage/repositories/`.
+**What:** `OutcomeLearner.record()` is called at the end of `executeWorkerAndHandle()` as a fire-and-forget side effect, matching the EventRecorder pattern.
 
-**When:** All database access.
-
-**Example:**
+**Why:** Outcome recording must never block or fail the worker's main path. Swallowed errors, same as the EventRecorder.
 
 ```typescript
-// src/storage/repositories/runs.ts
-import { eq, desc } from 'drizzle-orm';
-import { getDb } from '../db.js';
-import { runs } from '../schema.js';
-
-export function createRun(data: NewRun): Run {
-  return getDb().insert(runs).values(data).returning().get();
-}
-
-export function getRunById(id: string): Run | undefined {
-  return getDb().select().from(runs).where(eq(runs.id, id)).get();
-}
-
-export function getRunsByIssue(issueId: string): Run[] {
-  return getDb().select().from(runs).where(eq(runs.issueId, issueId)).orderBy(desc(runs.createdAt)).all();
+// In dispatcher.ts executeWorkerAndHandle():
+if (outcomeLearner) {
+  outcomeLearner
+    .record(runId, issue, result.agentResult, result.validationResult)
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('dispatcher', `Outcome recording failed (ignored): ${msg}`);
+    });
 }
 ```
 
-### Pattern 2: Event Subscriber for Cross-Cutting Concerns
+### Pattern 2: Decomposition Engine as Pre-Worker Step in Existing Worker
 
-**What:** New subsystems (flight recorder, cost tracking, write-back) subscribe to the existing `runEvents` EventEmitter rather than being called directly from the orchestrator.
+**What:** DecompositionEngine runs as the first step inside `executeWorker()`, before `prepareExecution()` for sub-tasks. It decides the execution path (worktree vs Docker single-agent).
 
-**When:** Adding observability or side-effects that shouldn't couple to the core dispatch loop.
-
-**Why:** The orchestrator stays clean. Subscribers can fail independently without blocking the main flow.
-
-### Pattern 3: Fastify Plugin Encapsulation for Route Groups
-
-**What:** Each new route group (webhooks, audit API, governance API) is a separate Fastify plugin with its own prefix and dependencies.
-
-**When:** Adding new API surface area.
-
-**Example:**
+**Why:** Keeping decomposition inside the worker maintains the existing claim/release lifecycle. The scheduler doesn't need to know about decomposition — it just dispatches issues.
 
 ```typescript
-// src/github-app/webhook.ts
-import type { FastifyInstance } from 'fastify';
-
-export async function registerGitHubAppRoutes(app: FastifyInstance, deps: WebhookDeps) {
-  app.register(async (instance) => {
-    instance.addHook('preValidation', verifyWebhookSignature(deps.webhookSecret));
-    instance.post('/webhooks/github', async (request, reply) => { /* ... */ });
-  });
+// In worker.ts executeWorker():
+if (shouldDecompose(issue, workflowConfig)) {
+  const decompositionResult = await decompositionEngine.analyze(issue, container, logger);
+  if (decompositionResult.approved) {
+    return await worktreeRuntime.execute(decompositionResult.plan, workspaceManager, logger);
+  }
+  // fallback: continue to existing single-agent path
 }
 ```
 
-### Pattern 4: Governance as Middleware Wrapper
+### Pattern 3: Rate Limit as a First-Class Worker Exit Code
 
-**What:** Governance checks wrap existing dispatch functions rather than being embedded inside them. The core orchestrator doesn't know about approvals or budgets -- it just dispatches. Governance intercepts before dispatch.
+**What:** `WorkerResult` gains an `isRateLimit` boolean. The dispatcher's error handler branch checks this first before entering the standard retry logic.
 
-**When:** Adding policy enforcement without contaminating the execution engine.
+**Why:** Rate limit retries are fundamentally different from agent errors. They preserve workspace state, release slots immediately (not after backoff), and respect the provider's `Retry-After`. Treating them as generic errors wastes the retry budget.
+
+```typescript
+// Extended WorkerResult:
+export interface WorkerResult {
+  agentResult: AgentResult;
+  comment: string;
+  isRateLimit?: boolean;    // NEW
+  rateLimitRetryMs?: number; // NEW: Retry-After value from provider
+  // ... existing fields
+}
+```
+
+### Pattern 4: Lessons as Prompt Context Section (Not System Prompt Injection)
+
+**What:** Prior lessons are injected as a dedicated `## Prior Experience` section in the task prompt, not into the system prompt.
+
+**Why:** System prompts are static per-workflow. Lessons are dynamic per-issue and per-repo. Injecting lessons into the task context keeps the system prompt clean and makes lessons visible in the audit trail (they're part of the logged prompt).
+
+### Pattern 5: Optional Dependency Injection for New Components
+
+**What:** `OutcomeLearner`, `DecompositionEngine`, and `RateLimitRetryScheduler` are passed as optional parameters through `dispatchIssue()`, matching the existing pattern for `SubIssueCache`, `governance`, and `githubContext`.
+
+**Why:** This maintains backward compatibility. Existing tests and `forgectl run` command don't need these components — they just work without them. The daemon initializes them when the features are enabled in config.
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Replacing In-Memory State Entirely with DB Queries
+### Anti-Pattern 1: Spawning Docker Containers for Worktree Sub-Tasks
 
-**What:** Making every state check a database query.
+**What:** Using full Docker containers for each parallel sub-task in a decomposition plan.
 
-**Why bad:** SQLite is fast but not free. The scheduler tick runs every 30 seconds and checks running workers, retry queues, and slot availability. Making this all DB queries adds unnecessary latency and complexity.
+**Why it's wrong:** Docker startup overhead (~2-5s per container) defeats the purpose of parallel decomposition for sub-tasks that take 30-60 seconds each. Plus, container-per-sub-task requires managing N container lifecycles, networks, and credential mounts simultaneously.
 
-**Instead:** Keep in-memory state as the primary working set. Persist to DB at state transitions. Rebuild from DB only on startup recovery. The in-memory state is the "cache" of the persistent state.
+**Do this instead:** Docker for decomposition analysis (full isolation, codebase access). Node.js child process in git worktree for sub-task execution (trusted context, 500ms startup).
 
-### Anti-Pattern 2: Synchronous Webhook Processing
+### Anti-Pattern 2: Building a New DAG Engine for Decomposition Plans
 
-**What:** Executing a full agent run inside a webhook handler.
+**What:** Creating a parallel task DAG executor separate from the existing `src/pipeline/` infrastructure.
 
-**Why bad:** GitHub expects webhook responses within 10 seconds. Agent runs take minutes.
+**Why it's wrong:** The pipeline module already has `topologicalSort()`, `validateDAG()`, `PipelineNode` types, and parallel slot management. Building a parallel implementation doubles maintenance.
 
-**Instead:** Webhook handlers enqueue work and return 202 immediately. The scheduler picks up enqueued work on the next tick.
+**Do this instead:** Decomposition produces `PipelineNode[]`. WorktreeRuntime uses the existing `topologicalSort()` and runs nodes in layers. The pipeline module's executor isn't reused directly (it's Docker-based), but its DAG logic is.
 
-### Anti-Pattern 3: Coupling Agent Adapter Interface to CLI Pattern
+### Anti-Pattern 3: Persisting Full Prompt/Response in Outcome Lessons
 
-**What:** Forcing browser-use into the `AgentAdapter.buildShellCommand()` interface designed for Claude Code's CLI.
+**What:** Storing the full agent prompt and response in the `outcome_lessons` table for "rich context."
 
-**Why bad:** Browser-use is not a CLI tool. It's a Python library that needs a sidecar HTTP bridge. Forcing it into the shell command pattern creates ugly workarounds.
+**Why it's wrong:** Full agent responses are 10-100KB each. Storing them for every run balloons the SQLite database. The signal-to-noise ratio is low: 95% of the response is code changes that are irrelevant to the lesson.
 
-**Instead:** The `AgentSession` interface (invoke/isAlive/close) is the right abstraction level. Each session implementation (OneShotSession, AppServerSession, BrowserUseSession) handles its own communication pattern internally.
+**Do this instead:** Store only structured signals: validation step outcomes, file patterns touched, and a LLM-generated 1-3 sentence lesson summary (extracted by the lesson classifier, not the full response).
 
-### Anti-Pattern 4: Monolithic Event Types
+### Anti-Pattern 4: Rate Limit Retries Count Against max_retries
 
-**What:** Using a single `RunEvent` type for everything and relying on the `data` bag.
+**What:** Incrementing `retryAttempts` when a run is rate-limited.
 
-**Why bad:** Makes querying specific event types difficult and loses type safety.
+**Why it's wrong:** Rate limits are infrastructure limits, not agent failures. Burning the agent's retry budget on rate limit recoveries prevents it from retrying actual errors (logic bugs, missing dependencies).
 
-**Instead:** Keep the existing `RunEvent` structure (it's simple and works) but ensure the `type` field is well-defined in the union. Use the `data` field with documented shapes per type. Don't create a separate class hierarchy for events -- that's overengineering for an append-only log.
+**Do this instead:** Maintain a separate `rateLimitAttempts` counter. Rate limit retries only count against a separate `max_rate_limit_retries` config (default: 5). Max retries remain for agent-caused failures.
+
+### Anti-Pattern 5: Outcome Lessons as Global Knowledge
+
+**What:** Injecting lessons from ANY previous run on any repo, not scoping to the current repo.
+
+**Why it's wrong:** A lesson from a Python Django codebase is noise in a TypeScript project. Global lessons generate false confidence and increase prompt size with irrelevant hints.
+
+**Do this instead:** Scope lessons by `repo` (owner/repo string) and secondarily by `issueLabels` overlap. Query: "lessons from THIS repo with at least 1 matching label." Repo-scoped lessons are far more likely to be actionable.
+
+---
+
+## Build Order (Dependency Graph)
+
+The four features are mostly independent but share two dependency layers: storage schema extensions and worker integration. This gives a natural build order:
+
+```
+Phase 1: Storage Schema Extensions
+  • Add decomposition_plans, rate_limit_retries, outcome_lessons tables
+  • New repositories: decomposition.ts, rate-limits.ts, lessons.ts
+  • No behavior change — just schema and repository functions
+  • Dependency: NONE (foundation for all v5.0 features)
+
+Phase 2: Rate Limit Retry Scheduler          [LOW complexity]
+  • src/rate-limit/detector.ts + scheduler.ts
+  • Modify: worker.ts (detect), dispatcher.ts (route), retry.ts (schedule)
+  • Startup recovery: restore pending rate-limit timers from DB
+  • Dependency: Phase 1 (rate_limit_retries table)
+  • WHY FIRST: Lowest complexity, immediate user value (fewer failed runs),
+    and tests the storage extension pattern before harder features
+
+Phase 3: Outcome Learner                     [MEDIUM complexity]
+  • src/learning/: learner.ts, classifier.ts, formatter.ts
+  • Modify: dispatcher.ts (record after completion), prompt.ts (inject lessons)
+  • Dependency: Phase 1 (outcome_lessons table)
+  • WHY THIRD: Additive subscriber pattern, low coupling.
+    Lessons accumulate over time; earlier it's built, more runs it captures.
+    Can parallelize with Phase 2.
+
+Phase 4: Worktree Runtime                    [MEDIUM-HIGH complexity]
+  • src/worktree/: manager.ts, executor.ts, merger.ts, scheduler.ts
+  • Modify: worker.ts (route to worktree when plan approved)
+  • git worktree lifecycle, process spawn, merge-tree conflict detection
+  • Dependency: Phase 1, workspace manager (existing)
+  • Produces sub-tasks as independent runnable units
+
+Phase 5: Decomposition Engine                [HIGH complexity]
+  • src/decomposition/: engine.ts, prompt.ts, validator.ts, approval.ts
+  • Modify: worker.ts (detect decomposable, invoke engine)
+  • LLM call inside Docker container → Zod-validated DAG JSON → approval gate
+  • Dependency: Phase 1, Phase 4 (Worktree Runtime for parallel execution)
+  • WHY LAST: Highest complexity, requires Phase 4 to execute approved plans
+```
+
+**Parallelization opportunity:** Phase 2 (Rate Limit Retry) and Phase 3 (Outcome Learner) can be built concurrently — they touch different code paths. Phase 4 and 5 must be sequential (5 depends on 4).
+
+---
+
+## Integration Points Summary
+
+| Where | What Changes | How |
+|-------|-------------|-----|
+| `src/orchestrator/worker.ts` | Entry point for decompose detection and rate limit classification | New pre-agent steps: decompose check, RateLimitDetector call |
+| `src/orchestrator/dispatcher.ts` | Route rate limit outcomes and record lessons | New branch after worker result; OutcomeLearner.record() fire-and-forget |
+| `src/orchestrator/retry.ts` | Rate limit retry scheduling | Extend scheduleRetry() or delegate to RateLimitRetryScheduler |
+| `src/context/prompt.ts` | Inject outcome lessons | OutcomeLearner.query() result appended as prompt section |
+| `src/storage/schema.ts` | Three new tables | Additive only — no existing column changes |
+| `src/daemon/server.ts` | Initialize new components on startup | Instantiate OutcomeLearner, RateLimitRetryScheduler, load pending timers |
+| `src/pipeline/dag.ts` | Reused (not modified) | topologicalSort() and validateDAG() used by Worktree scheduler |
+| `src/tracker/sub-issue-dag.ts` | Reused (not modified) | detectIssueCycles() used by DecompositionEngine validator |
+| `src/governance/approval.ts` | Reused (not modified) | enterPendingApproval() used by DecompositionEngine approval gate |
+| `src/config/schema.ts` | New config sections | decomposition, worktree, learning config blocks |
+| `src/workflow/types.ts` | New WORKFLOW.md fields | `decompose: boolean`, `learning: { enabled: boolean }` |
 
 ---
 
 ## Scalability Considerations
 
-| Concern | At 10 runs/day | At 100 runs/day | At 1000 runs/day |
-|---------|----------------|------------------|-------------------|
-| SQLite write throughput | Trivial | WAL mode handles easily | Consider VACUUM schedule, may need write batching for events |
-| Event table size | ~1K events | ~10K events/month | ~100K events/month; add index on (run_id, created_at), consider periodic archival |
-| Webhook processing | Instant | Need deduplication logic | Need rate limiting, webhook queue |
-| Container concurrency | 1-3 slots | 3-5 slots | Need multi-worker (out of scope for v2) |
-| GitHub API rate limits | No concern | Watch for 5000 req/hr limit | Need installation token rotation, conditional requests |
-| Browser-use resources | ~512MB per browser | Multiple browsers strain memory | Need browser pool management |
+| Concern | Current (v3.0) | v5.0 Impact | Mitigation |
+|---------|---------------|-------------|-----------|
+| Worktree disk usage | N/A | Each worktree ~50-200MB per sub-task | Aggressive cleanup (remove worktree after merge regardless of success/fail) |
+| Decomposition LLM cost | N/A | 1 extra LLM call per decomposable issue | Use cheaper model for decomposition (claude-haiku or similar); configurable model override |
+| Lesson table size | N/A | 1 row per run, ~500 bytes each | Trivial: 10K runs = 5MB. No concern for single-machine |
+| Rate limit retry timers | N/A | N timers in memory for rate-limited issues | Bounded by max_concurrent_slots × runs; at most ~20 pending timers |
+| Parallel worktree processes | N/A | N Node.js processes per decomposition | Slot-weighted: same max_concurrent_slots cap. Each worktree process = 1 slot |
+| git merge-tree concurrency | N/A | Sequential per merge (git is single-writer) | Merge operations are fast (<1s); don't parallelize merges, parallelize agent work |
 
-## Suggested Build Order
-
-Based on the dependency graph and integration points:
-
-```
-Phase 1: Storage Layer (src/storage/)
-  No dependencies on other v2 features.
-  All other phases depend on this.
-
-Phase 2: Company & Agent Identity (src/company/, src/agent/identity.ts)
-  Depends on: Phase 1
-  Needed by: Phase 3 (attribution), Phase 5 (budget scoping)
-
-Phase 3: Flight Recorder (src/audit/)
-  Depends on: Phase 1, Phase 2
-  Low-risk: purely additive subscriber pattern
-  Needed by: Phase 4 (crash recovery from events)
-
-Phase 4: Durable Execution (modify src/orchestrator/)
-  Depends on: Phase 1, 2, 3
-  Highest complexity: modifies core state machine
-
-Phase 5: Governance (src/governance/, src/costs/)
-  Depends on: Phase 2, 3
-  CAN parallelize with Phase 4 (different code paths)
-
-Phase 6: GitHub App (src/github-app/)
-  Depends on: Phase 4, 5
-  Highest user-facing impact
-
-Browser-Use Adapter: Can be built anytime after Phase 1
-  Independent of governance/durability
-  Useful for demo scenarios
-  Suggest: build alongside Phase 3 or 4 as a parallel track
-```
+---
 
 ## Sources
 
-- [Drizzle ORM SQLite setup](https://orm.drizzle.team/docs/get-started-sqlite) -- Official docs, HIGH confidence
-- [Drizzle SQLite column types](https://orm.drizzle.team/docs/column-types/sqlite) -- Official docs, HIGH confidence
-- [Event sourcing with relational databases](https://softwaremill.com/implementing-event-sourcing-using-a-relational-database/) -- Pattern reference, MEDIUM confidence
-- [Event sourcing with SQLite CQRS guide](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- Pattern reference, MEDIUM confidence
-- [Octokit GitHub App auth](https://github.com/octokit/auth-app.js/) -- Official library, HIGH confidence
-- [Octokit webhooks.js](https://github.com/octokit/webhooks.js/) -- Official library, HIGH confidence
-- [Octokit app.js (bundled SDK)](https://github.com/octokit/app.js/) -- Official library, HIGH confidence
-- [browser-use GitHub repository](https://github.com/browser-use/browser-use) -- Official project, HIGH confidence
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- Confirms no built-in REST API, MEDIUM confidence
-- [fastify-webhook plugin](https://github.com/smartiniOnGitHub/fastify-webhook) -- Fastify ecosystem, MEDIUM confidence
-- [@fastify/raw-body for webhook signatures](https://github.com/autotelic/fastify-webhooks) -- Fastify ecosystem, MEDIUM confidence
+- [ComposioHQ agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) — Planner/Executor dual-layer decomposition, worktree-per-task pattern, HIGH confidence
+- [git worktrees for parallel AI agents (Upsun)](https://devcenter.upsun.com/posts/git-worktrees-for-parallel-ai-coding-agents/) — Worktree isolation rationale and limitations (shared .git, race conditions on shared state), MEDIUM confidence
+- [How we built parallel agents with git worktrees (DEV)](https://dev.to/getpochi/how-we-built-true-parallel-agents-with-git-worktrees-2580) — Branch-per-task cleanup patterns, MEDIUM confidence
+- [Clash: conflict detection for worktrees](https://github.com/clash-sh/clash) — git merge-tree dry-run for early conflict surfacing, HIGH confidence (official git docs confirm)
+- [git-merge-tree documentation](https://git-scm.com/docs/git-merge-tree) — Three-way merge simulation without side effects, HIGH confidence
+- [greyhaven-ai/autocontext](https://github.com/greyhaven-ai/autocontext) — Closed-loop outcome learning: lesson persistence, validation gating, curator-based quality filter, MEDIUM confidence
+- [LLM tool-calling rate limits in production (Medium)](https://medium.com/@komalbaparmar007/llm-tool-calling-in-production-rate-limits-retries-and-the-infinite-loop-failure-mode-you-must-2a1e2a1e84c8) — 429 detection patterns, Retry-After header, workspace preservation on rate limit, MEDIUM confidence
+- [TDAG: Dynamic Task Decomposition and Agent Generation (arXiv)](https://arxiv.org/abs/2402.10178) — DAG-based task decomposition with per-node subagent generation, HIGH confidence (peer-reviewed)
+- [Task decomposition for coding agents (atoms.dev)](https://atoms.dev/insights/task-decomposition-for-coding-agents-architectures-advancements-and-future-directions/a95f933f2c6541fc9e1fb352b429da15) — Hierarchical fallback mechanisms for decomposition failure, MEDIUM confidence
+- [Mastering retry logic agents 2025 (sparkco.ai)](https://sparkco.ai/blog/mastering-retry-logic-agents-a-deep-dive-into-2025-best-practices) — Exponential backoff with jitter, adaptive error handling patterns, MEDIUM confidence
+- [forgectl v3.0 source: src/tracker/sub-issue-dag.ts] — Existing DFS cycle detection, reusable for decomposition DAG validation, HIGH confidence (own codebase)
+- [forgectl v3.0 source: src/pipeline/dag.ts] — Existing topologicalSort() and validateDAG(), reusable for worktree scheduling, HIGH confidence (own codebase)
+
+---
+
+*Architecture research for: forgectl v5.0 Intelligent Decomposition*
+*Researched: 2026-03-14*

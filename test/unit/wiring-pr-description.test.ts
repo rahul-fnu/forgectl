@@ -159,17 +159,17 @@ describe("PR description generation wiring", () => {
   });
 
   describe("worker imports pr-description functions", () => {
-    it("worker.ts imports updatePRDescriptionForBranch from github/pr-description", async () => {
+    it("worker.ts imports createPRForBranch from github/pr-description", async () => {
       const fs = await import("node:fs");
       const workerSrc = fs.readFileSync("src/orchestrator/worker.ts", "utf-8");
       expect(workerSrc).toContain('from "../github/pr-description.js"');
-      expect(workerSrc).toContain("updatePRDescriptionForBranch");
+      expect(workerSrc).toContain("createPRForBranch");
     });
 
-    it("worker.ts calls updatePRDescriptionForBranch after output collection", async () => {
+    it("worker.ts calls createPRForBranch after output collection", async () => {
       const fs = await import("node:fs");
       const workerSrc = fs.readFileSync("src/orchestrator/worker.ts", "utf-8");
-      expect(workerSrc).toContain("updatePRDescriptionForBranch");
+      expect(workerSrc).toContain("createPRForBranch");
     });
   });
 });

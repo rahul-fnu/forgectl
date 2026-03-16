@@ -1,5 +1,13 @@
 import type { TrackerAdapter, TrackerConfig, TrackerIssue } from "./types.js";
 import { resolveToken } from "./token.js";
+import { SubIssueCache } from "./sub-issue-cache.js";
+import { detectIssueCycles } from "./sub-issue-dag.js";
+import { MergeQueue } from "../orchestrator/merge-queue.js";
+
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const API_BASE = "https://api.github.com";
 const RATE_LIMIT_WARNING_THRESHOLD = 100;
@@ -50,16 +58,25 @@ function extractPriority(labels: GitHubLabel[]): string | null {
  *
  * id is set to ghIssue.number (the API-addressable issue number),
  * not ghIssue.id (GitHub's internal numeric ID).
+ *
+ * Optional subIssues param: if provided, populates blocked_by from child
+ * issue numbers (excluding PRs). Also always stores ghInternalId (SUBISSUE-02).
  */
-function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
+function normalizeIssue(ghIssue: GitHubIssue, subIssues?: GitHubIssue[]): TrackerIssue | null {
   if (ghIssue.pull_request) {
     return null;
   }
 
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = {
+    ghInternalId: ghIssue.id,
+  };
   if (ghIssue.reactions) {
     metadata.reactions = ghIssue.reactions;
   }
+
+  const blockedBy = subIssues
+    ? subIssues.filter((s) => !s.pull_request).map((s) => String(s.number))
+    : [];
 
   return {
     id: String(ghIssue.number),
@@ -73,7 +90,7 @@ function normalizeIssue(ghIssue: GitHubIssue): TrackerIssue | null {
     url: ghIssue.html_url,
     created_at: ghIssue.created_at,
     updated_at: ghIssue.updated_at,
-    blocked_by: [],
+    blocked_by: blockedBy,
     metadata,
   };
 }
@@ -103,7 +120,267 @@ function parseIssueNumber(idOrIdentifier: string): number {
 /**
  * Create a GitHub Issues TrackerAdapter.
  */
-export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
+/**
+ * Sanitize Claude's merge output before writing it to a file.
+ * Returns cleaned content, or null if the output is invalid.
+ */
+function sanitizeMergeOutput(raw: string, filename: string): string | null {
+  let text = raw.trim();
+  if (!text) return null;
+
+  // Reject obvious error messages
+  if (/^error:/i.test(text) || text.startsWith("Error: Reached max turns")) return null;
+  if (text.startsWith("I ") || text.startsWith("Here ") || text.startsWith("The merged")) return null;
+
+  // Strip ALL markdown code fences — opening and closing, anywhere in the text.
+  // Claude sometimes wraps output in ```lang ... ``` even when told not to.
+  // Match opening fence at start of a line: ```optional-lang
+  text = text.replace(/^```\w*\r?\n/gm, "");
+  // Match closing fence at start of a line: ```
+  text = text.replace(/^```\s*$/gm, "");
+  text = text.trim();
+
+  if (!text) return null;
+
+  // Validate file-type-specific syntax as a sanity check
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (ext === "toml" && !text.includes("[")) return null;
+  if (ext === "json" && !text.startsWith("{") && !text.startsWith("[")) return null;
+  if (ext === "rs" && !text.includes("fn ") && !text.includes("mod ") && !text.includes("use ") && !text.includes("struct ")) return null;
+
+  // Final check: reject if it still contains code fence markers
+  if (/^```/m.test(text)) return null;
+
+  return text + "\n";
+}
+
+/**
+ * Resolve merge conflicts on a PR branch using Claude Code, then merge.
+ * Clones the repo, merges main into the branch with Claude resolving conflicts,
+ * force-pushes the resolved branch, and retries the merge.
+ */
+async function resolveAndMerge(
+  owner: string,
+  repo: string,
+  branch: string,
+  prNumber: number,
+  ghToken: string,
+  rawToken: string,
+): Promise<void> {
+  const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-conflict-"));
+  const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+
+  try {
+    // Clone and checkout the PR branch
+    execSync(`git clone --depth=50 "${repoUrl}" .`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git config user.name forgectl`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git config user.email forge@localhost`, { cwd: tmpDir, stdio: "pipe" });
+    execSync(`git checkout "${branch}"`, { cwd: tmpDir, stdio: "pipe" });
+
+    // Try merging main into the branch
+    try {
+      execSync(`git merge origin/main --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+      // No conflicts — just push
+    } catch {
+      // Get conflicted files
+      const conflictOutput = execSync(`git diff --name-only --diff-filter=U`, {
+        cwd: tmpDir,
+        encoding: "utf-8",
+      }).trim();
+
+      if (!conflictOutput) return; // No conflicts found somehow
+
+      const conflicts = conflictOutput.split("\n");
+
+      for (const file of conflicts) {
+        // Extract three-way versions
+        let base = "", ours = "", theirs = "";
+        try { base = execSync(`git show :1:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* new file */ }
+        try { ours = execSync(`git show :2:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+        try { theirs = execSync(`git show :3:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+
+        // Use Claude to resolve
+        const prompt = [
+          `Merge these three versions of ${file}. Output ONLY the merged file content, no explanation.`,
+          `=== BASE (common ancestor) ===`,
+          base,
+          `=== OURS (main branch) ===`,
+          ours,
+          `=== THEIRS (feature branch - new code to keep) ===`,
+          theirs,
+          `Rules: Include ALL content from both sides. Combine imports, merge function lists. Do not duplicate identical lines.`,
+        ].join("\n");
+
+        try {
+          const { writeFileSync } = await import("node:fs");
+          const promptFile = join(tmpDir, ".forgectl-merge-prompt.txt");
+          writeFileSync(promptFile, prompt);
+          const resolved = execSync(
+            `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
+            { cwd: tmpDir, encoding: "utf-8", timeout: 60000 },
+          );
+          // Sanitize Claude output before writing to file
+          const cleaned = sanitizeMergeOutput(resolved, file);
+          if (cleaned) {
+            writeFileSync(join(tmpDir, file), cleaned);
+          } else {
+            execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+          }
+        } catch {
+          execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+        }
+        execSync(`git add "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+      }
+
+      // Post-resolve verification: ask Claude to review the merge result
+      try {
+        const { writeFileSync: writeSyncVerify } = await import("node:fs");
+        const diffOutput = execSync(`git diff --cached --stat`, { cwd: tmpDir, encoding: "utf-8" });
+        const changedFiles = conflicts.join(", ");
+        const verifyPrompt = [
+          `You just resolved merge conflicts in: ${changedFiles}`,
+          `Here is the staged diff summary:\n${diffOutput}`,
+          `Review the resolved files for these problems:`,
+          `1. Markdown code fences (\`\`\`) that don't belong in source code`,
+          `2. Duplicate function/struct/mod declarations`,
+          `3. Missing imports or module declarations`,
+          `4. Syntax errors (unclosed braces, missing semicolons)`,
+          `5. Conflict markers (<<<<<<, ======, >>>>>>)`,
+          ``,
+          `For each file, run: cat <file> and check.`,
+          `If you find problems, fix them and run: git add <file>`,
+          `If everything looks clean, just say "LGTM".`,
+        ].join("\n");
+        const verifyFile = join(tmpDir, ".forgectl-verify-prompt.txt");
+        writeSyncVerify(verifyFile, verifyPrompt);
+        execSync(
+          `cat "${verifyFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 5`,
+          { cwd: tmpDir, encoding: "utf-8", timeout: 120000 },
+        );
+      } catch {
+        // Verification is best-effort — don't block the merge
+      }
+
+      execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+    }
+
+    // Push the resolved branch
+    execSync(`git push origin "${branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+
+    // Retry the merge via API
+    const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
+    await fetch(mergeUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${ghToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ merge_method: "squash" }),
+    });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Wait for CI checks to pass on a PR, then merge. Resolves conflicts first if needed.
+ * Polls check status every 30s for up to 15 minutes.
+ */
+async function autoMergeWithCI(
+  owner: string,
+  repo: string,
+  branch: string,
+  prNumber: number,
+  ghToken: string,
+  rawToken: string,
+): Promise<void> {
+  const headers = {
+    Authorization: `token ${ghToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/vnd.github+json",
+  };
+
+  // Step 1: Check if PR is mergeable, resolve conflicts if not
+  const prUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`;
+  const prData = await (await fetch(prUrl, { headers })).json() as { mergeable?: boolean; mergeable_state?: string; head?: { sha?: string } };
+
+  if (prData.mergeable === false) {
+    await resolveAndMerge(owner, repo, branch, prNumber, ghToken, rawToken);
+  }
+
+  // Step 2: Wait for CI checks to pass (poll every 30s, max 15 min)
+  const headSha = prData.head?.sha;
+  if (headSha) {
+    const maxWaitMs = 15 * 60 * 1000;
+    const pollMs = 30_000;
+    const start = Date.now();
+    let ciResolved = false;
+
+    while (Date.now() - start < maxWaitMs) {
+      const statusUrl = `${API_BASE}/repos/${owner}/${repo}/commits/${headSha}/check-runs`;
+      const checks = await (await fetch(statusUrl, { headers })).json() as {
+        check_runs?: Array<{ status: string; conclusion: string | null }>;
+      };
+
+      const runs = checks.check_runs ?? [];
+      if (runs.length === 0) {
+        // No CI configured — proceed to merge
+        ciResolved = true;
+        break;
+      }
+
+      const allComplete = runs.every((r) => r.status === "completed");
+      if (allComplete) {
+        const allPassed = runs.every((r) => r.conclusion === "success" || r.conclusion === "skipped");
+        if (!allPassed) {
+          // CI failed — leave PR open with comment, do NOT merge
+          const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          await fetch(commentUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ body: "**forgectl:** CI checks failed. Leaving PR open for manual review." }),
+          }).catch(() => {});
+          return;
+        }
+        ciResolved = true;
+        break;
+      }
+
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+
+    // CI polling timed out — leave PR open, do NOT merge
+    if (!ciResolved) {
+      const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+      await fetch(commentUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body: "**forgectl:** CI checks timed out after 15 minutes. Leaving PR open for manual review." }),
+      }).catch(() => {});
+      return;
+    }
+  }
+
+  // Step 3: Merge — if merge API fails, leave PR open (never force-merge)
+  const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
+  const mergeResponse = await fetch(mergeUrl, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ merge_method: "squash" }),
+  });
+
+  if (!mergeResponse.ok) {
+    // Merge failed (conflicts, branch protection, etc.) — leave PR open with comment
+    const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+    await fetch(commentUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ body: "**forgectl:** Merge failed after CI passed. Leaving PR open for manual review." }),
+    }).catch(() => {});
+  }
+}
+
+export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache; mergeQueue: MergeQueue } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
   }
@@ -119,14 +396,21 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
 
   // Internal state
   let lastETag: string | null = null;
-  let lastUpdatedAt: string | null = null;
   let cachedIssues: TrackerIssue[] = [];
   let rateLimitRemaining = Infinity;
   let rateLimitReset = 0;
 
+  // Sub-issue TTL cache (5min default) — use external cache if provided (singleton pattern)
+  const subIssueCache = externalCache ?? new SubIssueCache();
+
+  // Sequential merge queue — serializes PR merges to prevent parallel corruption
+  const mergeQueue = new MergeQueue(async (prNumber: number, branch: string) => {
+    await autoMergeWithCI(owner, repo, branch, prNumber, token, config.token);
+  });
+
   /**
    * Perform an authenticated fetch against the GitHub API.
-   * Reads rate limit headers and enforces limits.
+   * Reads rate limit headers, enforces limits, and retries on transient errors.
    */
   async function githubFetch(
     url: string,
@@ -139,32 +423,57 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
       ...(options.headers as Record<string, string> | undefined),
     };
 
-    const response = await fetch(url, { ...options, headers });
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS = [1000, 3000, 5000]; // ms
 
-    // Update rate limit state
-    const remaining = response.headers.get("x-ratelimit-remaining");
-    const reset = response.headers.get("x-ratelimit-reset");
-    if (remaining !== null) {
-      rateLimitRemaining = parseInt(remaining, 10);
-    }
-    if (reset !== null) {
-      rateLimitReset = parseInt(reset, 10);
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(url, { ...options, headers });
+      } catch (err) {
+        // Network error (DNS, connection refused, etc.)
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+          continue;
+        }
+        throw lastError;
+      }
+
+      // Update rate limit state
+      const remaining = response.headers.get("x-ratelimit-remaining");
+      const reset = response.headers.get("x-ratelimit-reset");
+      if (remaining !== null) {
+        rateLimitRemaining = parseInt(remaining, 10);
+      }
+      if (reset !== null) {
+        rateLimitReset = parseInt(reset, 10);
+      }
+
+      // Enforce rate limit
+      if (response.status === 403 && rateLimitRemaining === 0) {
+        const resetDate = new Date(rateLimitReset * 1000).toISOString();
+        throw new Error(
+          `GitHub rate limit exhausted. Resets at ${resetDate}`,
+        );
+      }
+
+      // Retry on 5xx server errors
+      if (response.status >= 500 && attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+        continue;
+      }
+
+      if (rateLimitRemaining < RATE_LIMIT_WARNING_THRESHOLD && rateLimitRemaining > 0) {
+        // Log warning — using console.warn since this is a library module
+      }
+
+      return response;
     }
 
-    // Enforce rate limit
-    if (response.status === 403 && rateLimitRemaining === 0) {
-      const resetDate = new Date(rateLimitReset * 1000).toISOString();
-      throw new Error(
-        `GitHub rate limit exhausted. Resets at ${resetDate}`,
-      );
-    }
-
-    if (rateLimitRemaining < RATE_LIMIT_WARNING_THRESHOLD && rateLimitRemaining > 0) {
-      // Log warning — using console.warn since this is a library module
-      // In production, the caller can configure proper logging
-    }
-
-    return response;
+    throw lastError ?? new Error(`GitHub API request failed after ${MAX_RETRIES} retries`);
   }
 
   /**
@@ -195,8 +504,19 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
     return { issues, response };
   }
 
-  const adapter: TrackerAdapter = {
+  /**
+   * Fetch sub-issues for a given issue number from the GitHub sub_issues endpoint.
+   */
+  async function fetchSubIssues(issueNumber: number): Promise<GitHubIssue[]> {
+    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${issueNumber}/sub_issues?per_page=100`;
+    const result = await fetchAllPages(url);
+    return result ? result.issues : [];
+  }
+
+  const adapter: TrackerAdapter & { subIssueCache: SubIssueCache; mergeQueue: MergeQueue } = {
     kind: "github",
+    subIssueCache,
+    mergeQueue,
 
     async fetchCandidateIssues(): Promise<TrackerIssue[]> {
       const params = new URLSearchParams({
@@ -210,9 +530,10 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         params.set("labels", labelsFilter.join(","));
       }
 
-      if (lastUpdatedAt) {
-        params.set("since", lastUpdatedAt);
-      }
+      // Delta polling disabled — always fetch full candidate list.
+      // The `since` param caused stale cache entries for auto-closed issues
+      // (closed issues disappear from state:open queries, leaving stale
+      // open entries in the cache that caused infinite re-dispatch loops).
 
       const url = `${API_BASE}/repos/${owner}/${repo}/issues?${params.toString()}`;
 
@@ -234,26 +555,139 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         lastETag = etag;
       }
 
-      // Normalize and filter out PRs
+      // First pass: normalize without sub-issues (basic normalization)
+      const ghIssueMap = new Map<string, GitHubIssue>();
       const normalized: TrackerIssue[] = [];
       for (const ghIssue of result.issues) {
         const issue = normalizeIssue(ghIssue);
         if (issue) {
           normalized.push(issue);
+          ghIssueMap.set(issue.id, ghIssue);
         }
       }
 
-      // Update lastUpdatedAt for delta polling
-      if (normalized.length > 0) {
-        const maxUpdated = normalized.reduce((max, issue) =>
-          issue.updated_at > max ? issue.updated_at : max,
-          normalized[0].updated_at,
-        );
-        lastUpdatedAt = maxUpdated;
+      // Second pass: enrich with sub-issues (SUBISSUE-01)
+      // Collect all candidate issue numbers seen so far for auto-discovery dedup
+      const candidateIds = new Set<string>(normalized.map((i) => i.id));
+      const enriched: TrackerIssue[] = [];
+      const pendingEnrichment: Array<{ ghIssue: GitHubIssue; subIssues: GitHubIssue[] }> = [];
+
+      for (const issue of normalized) {
+        const ghIssue = ghIssueMap.get(issue.id)!;
+        const issueNum = Number(issue.id);
+
+        // Check cache first
+        const cached = subIssueCache.get(issue.id);
+        if (cached) {
+          // Cache hit: rebuild sub-issues from childIds/childStates (reconstruct minimal GitHubIssue[])
+          // We only need the number to populate blocked_by
+          const cachedSubIssues: GitHubIssue[] = cached.childIds.map((childId) => ({
+            id: 0, // internal id not needed for blocked_by
+            number: Number(childId),
+            title: "",
+            body: null,
+            state: cached.childStates.get(childId) ?? "open",
+            labels: [],
+            assignees: [],
+            html_url: "",
+            created_at: "",
+            updated_at: "",
+          }));
+          pendingEnrichment.push({ ghIssue, subIssues: cachedSubIssues });
+          continue;
+        }
+
+        // Cache miss: fetch if rate limit allows
+        if (rateLimitRemaining >= RATE_LIMIT_WARNING_THRESHOLD) {
+          const subIssues = await fetchSubIssues(issueNum);
+
+          // Store in cache
+          const childStates = new Map<string, string>();
+          for (const si of subIssues) {
+            if (!si.pull_request) {
+              childStates.set(String(si.number), si.state);
+            }
+          }
+          subIssueCache.set({
+            parentId: issue.id,
+            childIds: subIssues.filter((s) => !s.pull_request).map((s) => String(s.number)),
+            childStates,
+            fetchedAt: Date.now(),
+          });
+
+          pendingEnrichment.push({ ghIssue, subIssues });
+        } else {
+          // Rate limit low: graceful degradation, serve with empty sub-issues
+          console.warn(
+            `[forgectl] Rate limit low (${rateLimitRemaining} remaining), skipping sub-issue fetch for issue #${issueNum}`,
+          );
+          pendingEnrichment.push({ ghIssue, subIssues: [] });
+        }
       }
 
-      cachedIssues = normalized;
-      return normalized;
+      // Auto-discovery: add sub-issues not already in candidates
+      for (const { subIssues } of pendingEnrichment) {
+        for (const si of subIssues) {
+          if (!si.pull_request && !candidateIds.has(String(si.number))) {
+            candidateIds.add(String(si.number));
+            // Enqueue auto-discovered issue for its own enrichment
+            // Use the sub-issue data directly as a basic GitHubIssue
+            ghIssueMap.set(String(si.number), si);
+            // Fetch sub-issues for auto-discovered child (if rate allows)
+            let childSubIssues: GitHubIssue[] = [];
+            const cached = subIssueCache.get(String(si.number));
+            if (cached) {
+              childSubIssues = cached.childIds.map((childId) => ({
+                id: 0,
+                number: Number(childId),
+                title: "",
+                body: null,
+                state: cached.childStates.get(childId) ?? "open",
+                labels: [],
+                assignees: [],
+                html_url: "",
+                created_at: "",
+                updated_at: "",
+              }));
+            } else if (rateLimitRemaining >= RATE_LIMIT_WARNING_THRESHOLD) {
+              childSubIssues = await fetchSubIssues(si.number);
+              const childStates = new Map<string, string>();
+              for (const csi of childSubIssues) {
+                if (!csi.pull_request) {
+                  childStates.set(String(csi.number), csi.state);
+                }
+              }
+              subIssueCache.set({
+                parentId: String(si.number),
+                childIds: childSubIssues.filter((s) => !s.pull_request).map((s) => String(s.number)),
+                childStates,
+                fetchedAt: Date.now(),
+              });
+            }
+            const discoveredIssue = normalizeIssue(si, childSubIssues);
+            if (discoveredIssue) {
+              enriched.push(discoveredIssue);
+            }
+          }
+        }
+      }
+
+      // Re-normalize original issues with their sub-issues
+      for (const { ghIssue, subIssues } of pendingEnrichment) {
+        const enrichedIssue = normalizeIssue(ghIssue, subIssues);
+        if (enrichedIssue) {
+          enriched.push(enrichedIssue);
+        }
+      }
+
+      // Cycle detection: run on all enriched candidates (SUBISSUE-04)
+      const cycleError = detectIssueCycles(enriched.map((i) => ({ id: i.id, blocked_by: i.blocked_by })));
+      if (cycleError) {
+        console.warn(`[forgectl] Sub-issue dependency cycle detected: ${cycleError}`);
+      }
+
+      cachedIssues = enriched;
+      return cachedIssues;
     },
 
     async fetchIssueStatesByIds(ids: string[]): Promise<Map<string, string>> {
@@ -346,7 +780,15 @@ export function createGitHubAdapter(config: TrackerConfig): TrackerAdapter {
         method: "POST",
         body: JSON.stringify({ title, body, head: branch, base: "main" }),
       });
-      const data = await response.json() as { html_url?: string };
+      const data = await response.json() as { html_url?: string; number?: number };
+
+      // Enqueue for sequential merge — waits for CI, merges one at a time
+      if (data.number) {
+        void mergeQueue.enqueue(branch, data.number).catch(() => {
+          // Non-fatal — PR stays open for manual merge
+        });
+      }
+
       return data.html_url;
     },
   };

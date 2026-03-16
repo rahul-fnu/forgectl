@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,15 +13,20 @@ import type {
   ResolvedContextContent,
   ResolvedFileArtifact,
 } from "./types.js";
-import { collectAncestors, collectDescendants, validateDAG, topologicalSort } from "./dag.js";
+import { collectAncestors, collectDescendants, validateDAG, topologicalSort, buildDependentsMap } from "./dag.js";
+import { evaluateCondition } from "./condition.js";
+import type { NodeStatusContext } from "./condition.js";
 import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
 import { resolveRunPlan, type CLIOptions } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
 import { Logger } from "../logging/logger.js";
 import { emitRunEvent } from "../logging/events.js";
-import { loadCheckpoint, saveCheckpoint } from "./checkpoint.js";
+import { loadCheckpoint, saveCheckpoint, saveLoopCheckpoint, loadLoopCheckpoint, GLOBAL_MAX_ITERATIONS } from "./checkpoint.js";
+import type { LoopIterationRecord } from "./types.js";
 import type { OutputResult } from "../output/types.js";
+import { extractCoverage } from "./coverage.js";
+import { checkExclusionViolations } from "./exclusion.js";
 
 export interface PipelineExecutorOptions {
   maxParallel?: number;
@@ -104,69 +109,221 @@ export class PipelineExecutor {
       });
     }
 
-    // Track in-flight promises
-    const inFlight = new Map<string, Promise<void>>();
+    // Build dependents map for ready-queue logic
+    const dependentsMap = buildDependentsMap(this.pipeline);
     const maxParallel = this.options.maxParallel ?? 3;
 
-    let pipelineStatus: "running" | "completed" | "failed" = "running";
+    // Use a mutable object so TypeScript doesn't narrow the type when processNode
+    // sets pipeline_state.status inside an async closure
+    const pipeline_state = { status: "running" as "running" | "completed" | "failed" };
 
-    for (const nodeId of order) {
+    // Track in-flight promises
+    const inFlight = new Map<string, Promise<void>>();
+
+    // Helpers
+    const isTerminal = (status: string) =>
+      status === "completed" || status === "failed" || status === "skipped";
+
+    const isNodeReady = (nodeId: string): boolean => {
+      const state = this.nodeStates.get(nodeId);
+      if (!state) return false;
+      if (!selection.executeNodes.has(nodeId)) return false;
+      if (isTerminal(state.status)) return false;
+      if (inFlight.has(nodeId)) return false;
       const node = nodeMap.get(nodeId)!;
+      return (node.depends_on ?? []).every(dep => {
+        const depState = this.nodeStates.get(dep);
+        return depState && isTerminal(depState.status);
+      });
+    };
 
-      if (!selection.executeNodes.has(nodeId)) {
-        continue;
-      }
-
-      // Wait for dependencies to complete
-      const deps = node.depends_on ?? [];
+    const buildStatusContext = (deps: string[]): NodeStatusContext => {
+      const ctx: NodeStatusContext = {};
       for (const dep of deps) {
-        const depPromise = inFlight.get(dep);
-        if (depPromise) {
-          await depPromise;
+        const depState = this.nodeStates.get(dep);
+        if (depState) {
+          ctx[dep] = depState.status as "completed" | "failed" | "skipped";
         }
       }
+      return ctx;
+    };
 
-      const dependencyIssues = this.getDependencyIssues(deps);
-      if (dependencyIssues.length > 0) {
-        const reason = dependencyIssues.join("; ");
+    const propagateCascadeSkip = (skippedId: string): void => {
+      const stack = [skippedId];
+      while (stack.length > 0) {
+        const currentId = stack.pop()!;
+        for (const dependentId of dependentsMap.get(currentId) ?? []) {
+          if (!selection.executeNodes.has(dependentId)) continue;
+          const depState = this.nodeStates.get(dependentId);
+          if (!depState || isTerminal(depState.status)) continue;
+          // Check if this dependent would be activated as else_node — do not cascade-skip else_nodes
+          const parentNode = nodeMap.get(currentId);
+          if (parentNode?.else_node === dependentId) continue;
+          this.nodeStates.set(dependentId, {
+            nodeId: dependentId,
+            status: "skipped",
+            skipReason: `dependency ${currentId} was skipped`,
+          });
+          stack.push(dependentId);
+        }
+      }
+    };
+
+    // Check if a dependency's terminal state blocks the node from executing.
+    // Returns a skip reason string if blocked, or null if all deps are OK.
+    const getDependencyBlockReason = (deps: string[]): string | null => {
+      for (const dep of deps) {
+        const state = this.nodeStates.get(dep);
+        if (!state) continue;
+        if (state.status === "failed") {
+          return `dependency ${dep} was skipped`;
+        }
+        if (state.status === "skipped") {
+          // Hydrated checkpoints have result.success + result.output — they are OK
+          const hydratedSuccess = Boolean(state.result?.success && state.result.output);
+          if (!hydratedSuccess) {
+            return `dependency ${dep} was skipped`;
+          }
+        }
+      }
+      return null;
+    };
+
+    const processNode = async (nodeId: string): Promise<void> => {
+      const node = nodeMap.get(nodeId)!;
+      const deps = node.depends_on ?? [];
+
+      // Check for blocking dependency issues (failed or non-hydrated skipped deps)
+      const blockReason = getDependencyBlockReason(deps);
+      if (blockReason !== null) {
         this.nodeStates.set(nodeId, {
           nodeId,
           status: "skipped",
-          error: reason,
-          skipReason: reason,
+          skipReason: blockReason,
         });
-        continue;
+        propagateCascadeSkip(nodeId);
+        return;
       }
 
-      // Respect max parallel limit
-      while (inFlight.size >= maxParallel) {
-        await Promise.race(inFlight.values());
+      // Evaluate condition if present
+      if (node.condition !== undefined) {
+        const ctx = buildStatusContext(deps);
+        let condResult: boolean;
+        try {
+          condResult = evaluateCondition(node.condition, ctx);
+        } catch (err) {
+          // Fatal condition error — fail the pipeline immediately
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "failed",
+            error: errMsg,
+          });
+          pipeline_state.status = "failed";
+          return;
+        }
+
+        if (!condResult) {
+          // Condition is false — skip this node
+          const skipReason = `condition false: ${node.condition}`;
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "skipped",
+            skipReason,
+          });
+
+          if (node.else_node) {
+            // Activate else_node if all its deps are terminal and it's in executeNodes
+            const elseNode = nodeMap.get(node.else_node);
+            if (elseNode && selection.executeNodes.has(node.else_node)) {
+              const elseState = this.nodeStates.get(node.else_node);
+              if (elseState && !isTerminal(elseState.status) && !inFlight.has(node.else_node)) {
+                const elseDeps = elseNode.depends_on ?? [];
+                const elseReady = elseDeps.every(dep => {
+                  const depState = this.nodeStates.get(dep);
+                  return depState && isTerminal(depState.status);
+                });
+                if (elseReady) {
+                  readyQueue.add(node.else_node);
+                }
+              }
+            }
+          } else {
+            // Cascade-skip all downstream dependents
+            propagateCascadeSkip(nodeId);
+          }
+
+          return;
+        }
+      }
+
+      // Loop node: delegate to executeLoopNode
+      if (node.loop !== undefined) {
+        await this.executeLoopNode(node, buildStatusContext(deps));
+        // Enqueue newly-ready dependents (same as after executeNode)
+        for (const dependentId of dependentsMap.get(nodeId) ?? []) {
+          if (isNodeReady(dependentId)) {
+            readyQueue.add(dependentId);
+          }
+        }
+        return;
       }
 
       // Execute the node
-      const promise = this.executeNode(node).then(() => {
-        inFlight.delete(nodeId);
-      });
-      inFlight.set(nodeId, promise);
+      await this.executeNode(node);
+
+      // Enqueue newly-ready dependents
+      for (const dependentId of dependentsMap.get(nodeId) ?? []) {
+        if (isNodeReady(dependentId)) {
+          readyQueue.add(dependentId);
+        }
+      }
+    };
+
+    // Seed the ready queue: all nodes in executeNodes whose deps are already terminal
+    // (handles root nodes AND nodes whose ancestors were hydrated from checkpoints)
+    const readyQueue = new Set<string>();
+    for (const nodeId of order) {
+      if (isNodeReady(nodeId)) {
+        readyQueue.add(nodeId);
+      }
     }
 
-    // Wait for all remaining in-flight nodes
-    await Promise.all(inFlight.values());
+    // Drain loop
+    while (readyQueue.size > 0 || inFlight.size > 0) {
+      for (const nodeId of [...readyQueue]) {
+        if (inFlight.size >= maxParallel) break;
+        readyQueue.delete(nodeId);
+        // Wrap processNode so inFlight cleanup happens AFTER the promise is stored
+        const promise = processNode(nodeId).then(() => {
+          inFlight.delete(nodeId);
+        });
+        inFlight.set(nodeId, promise);
+      }
+      if (inFlight.size > 0) await Promise.race(inFlight.values());
+      // If pipeline failed due to fatal condition error, stop processing
+      if (pipeline_state.status === "failed") break;
+    }
+
+    // Wait for any remaining in-flight nodes (if we broke early due to failure)
+    if (inFlight.size > 0) {
+      await Promise.allSettled(inFlight.values());
+    }
 
     // Determine overall status
     const allStatuses = [...this.nodeStates.values()].map(s => s.status);
     if (allStatuses.some(s => s === "failed")) {
-      pipelineStatus = "failed";
+      pipeline_state.status = "failed";
     } else if (allStatuses.every(s => s === "completed" || s === "skipped")) {
-      pipelineStatus = "completed";
+      pipeline_state.status = "completed";
     }
 
     emitRunEvent({
       runId: this.pipelineRunId,
-      type: pipelineStatus === "completed" ? "completed" : "failed",
+      type: pipeline_state.status === "completed" ? "completed" : "failed",
       timestamp: new Date().toISOString(),
       data: {
-        status: pipelineStatus,
+        status: pipeline_state.status,
         completed: allStatuses.filter(s => s === "completed").length,
         failed: allStatuses.filter(s => s === "failed").length,
         skipped: allStatuses.filter(s => s === "skipped").length,
@@ -176,7 +333,7 @@ export class PipelineExecutor {
     return {
       id: this.pipelineRunId,
       pipeline: this.pipeline,
-      status: pipelineStatus,
+      status: pipeline_state.status,
       nodes: new Map(this.nodeStates),
       startedAt,
       completedAt: new Date().toISOString(),
@@ -462,6 +619,188 @@ export class PipelineExecutor {
     this.nodeStates.set(node.id, state);
   }
 
+  private async executeLoopNode(node: PipelineNode, upstreamCtx: Record<string, string>): Promise<void> {
+    // a. Safety cap clamping
+    const configuredMax = node.loop!.max_iterations ?? 10;
+    const maxIterations = Math.min(configuredMax, GLOBAL_MAX_ITERATIONS);
+    if (configuredMax > GLOBAL_MAX_ITERATIONS) {
+      const logger = new Logger(this.options.verbose ?? false);
+      logger.warn("loop", `Loop "${node.id}": max_iterations ${configuredMax} clamped to ${GLOBAL_MAX_ITERATIONS}`);
+    }
+
+    // b. Initialize loopState on nodeStates
+    const state: NodeExecution = {
+      nodeId: node.id,
+      status: "loop-iterating",
+      startedAt: new Date().toISOString(),
+      loopState: {
+        currentIteration: 0,
+        maxIterations,
+        iterations: [],
+      },
+    };
+    this.nodeStates.set(node.id, state);
+
+    // d. Progressive context setup (temp dir for iteration output files)
+    const loopTempDir = mkdtempSync(join(tmpdir(), "forgectl-loop-ctx-"));
+    const progressiveContext: string[] = [];
+
+    try {
+      // c. Crash recovery check (LOOP-05)
+      let startIteration = 1;
+      if (this.options.checkpointSourceRunId) {
+        const lc = loadLoopCheckpoint(this.options.checkpointSourceRunId, node.id);
+        if (lc) {
+          startIteration = lc.lastCompletedIteration + 1;
+          state.loopState!.iterations = lc.loopState.iterations;
+          // Reconstruct progressive context file paths from iteration history
+          for (const iterRecord of lc.loopState.iterations) {
+            const iterFile = join(loopTempDir, `iteration-${String(iterRecord.iteration).padStart(2, "0")}-output.md`);
+            // Write a placeholder so the file exists for context passing
+            writeFileSync(iterFile, `# Iteration ${iterRecord.iteration} (recovered)\n\nStatus: ${iterRecord.status}\n`);
+            progressiveContext.push(iterFile);
+          }
+        }
+      }
+
+      // CORR-02/CORR-05: Load exclude patterns and initialize no-progress hash tracking
+      const loopConfig = loadConfig();
+      const excludePatterns = loopConfig.repo?.exclude ?? [];
+      let lastOutputHash = "";
+      let lastIterOutput = "";
+
+      // e. Iteration loop
+      for (let i = startIteration; i <= maxIterations; i++) {
+        state.loopState!.currentIteration = i;
+        const iterStartedAt = new Date().toISOString();
+
+        // Build node clone with progressive context
+        const iterationNode: PipelineNode = {
+          ...node,
+          context: [...(node.context ?? []), ...progressiveContext],
+        };
+
+        // Run the iteration body
+        await this.executeNode(iterationNode);
+
+        // CORR-02: Test file exclusion enforcement — check before reading iterState
+        const repoPath = node.repo ?? this.pipeline.defaults?.repo ?? this.options.repo;
+        if (repoPath && excludePatterns.length > 0) {
+          const { violations } = checkExclusionViolations(repoPath, excludePatterns);
+          if (violations.length > 0) {
+            // Mark node failed and exit loop immediately — exclusion violation is terminal
+            state.status = "failed";
+            state.error = `Fix agent modified excluded file(s): ${violations.join(", ")}`;
+            state.completedAt = new Date().toISOString();
+            this.nodeStates.set(node.id, state);
+            return;
+          }
+        }
+
+        // Read the result from nodeStates (executeNode updates it)
+        const iterState = this.nodeStates.get(node.id)!;
+        const iterStatus: "completed" | "failed" = iterState.status === "completed" ? "completed" : "failed";
+        const iterCompletedAt = new Date().toISOString();
+
+        // CORR-05: No-progress detection via SHA-256 hash comparison
+        const currentOutput = iterState.result?.validation?.lastOutput ?? "";
+        const currentHash = currentOutput !== "" ? createHash("sha256").update(currentOutput).digest("hex") : "";
+
+        if (i > startIteration && currentHash !== "" && currentHash === lastOutputHash) {
+          state.status = "failed";
+          state.error = `Loop "${node.id}" aborted: no progress detected — identical test output on iterations ${i - 1} and ${i}:\n${currentOutput.slice(0, 500)}`;
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+        lastOutputHash = currentHash;
+        lastIterOutput = currentOutput;
+
+        // IMPORTANT: Reset status back to loop-iterating for next iteration
+        state.status = "loop-iterating";
+        state.loopState!.currentIteration = i;
+
+        // Record iteration history
+        const iterRecord: LoopIterationRecord = {
+          iteration: i,
+          status: iterStatus,
+          startedAt: iterStartedAt,
+          completedAt: iterCompletedAt,
+        };
+        state.loopState!.iterations.push(iterRecord);
+        this.nodeStates.set(node.id, state);
+
+        // Write iteration output to progressive context temp dir
+        const iterOutputFile = join(loopTempDir, `iteration-${String(i).padStart(2, "0")}-output.md`);
+        const iterOutputContent = [
+          `# Iteration ${i} Output`,
+          ``,
+          `**Status:** ${iterStatus}`,
+          `**Started:** ${iterStartedAt}`,
+          `**Completed:** ${iterCompletedAt}`,
+          ``,
+        ].join("\n");
+        writeFileSync(iterOutputFile, iterOutputContent, "utf-8");
+        progressiveContext.push(iterOutputFile);
+
+        // Save per-iteration loop checkpoint
+        saveLoopCheckpoint(this.pipelineRunId, node.id, i, state.loopState!);
+
+        // Also save a regular checkpoint for downstream hydration if iteration succeeded
+        if (iterStatus === "completed" && iterState.result) {
+          const checkpoint = await saveCheckpoint(this.pipelineRunId, node.id, iterState.result);
+          state.checkpoint = checkpoint;
+        }
+
+        // Evaluate `until` expression
+        // CORR-04: Inject _coverage from validation output
+        const coverage = extractCoverage(iterState.result?.validation?.lastOutput ?? "");
+        const untilCtx = {
+          ...upstreamCtx,
+          _status: iterStatus,
+          _iteration: i,
+          _max_iterations: maxIterations,
+          _first_iteration: i === 1 ? 1 : 0,
+          _coverage: coverage,
+        } as unknown as Parameters<typeof evaluateCondition>[1];
+
+        let untilResult: boolean;
+        try {
+          untilResult = evaluateCondition(node.loop!.until, untilCtx);
+        } catch (err) {
+          // Fatal until expression error — consistent with COND-06
+          state.status = "failed";
+          state.error = err instanceof Error ? err.message : String(err);
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+
+        if (untilResult) {
+          // Loop completed successfully
+          state.status = "completed";
+          state.completedAt = new Date().toISOString();
+          this.nodeStates.set(node.id, state);
+          return;
+        }
+      }
+
+      // f. Loop exhaustion — until never became true
+      state.status = "failed";
+      const finalCoverage = extractCoverage(lastIterOutput);
+      if (finalCoverage >= 0) {
+        state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true (final coverage: ${finalCoverage.toFixed(1)}%)`;
+      } else {
+        state.error = `Loop "${node.id}" exhausted max_iterations (${maxIterations}) without "until" expression becoming true`;
+      }
+      state.completedAt = new Date().toISOString();
+      this.nodeStates.set(node.id, state);
+    } finally {
+      // g. Cleanup temp dir
+      rmSync(loopTempDir, { recursive: true, force: true });
+    }
+  }
+
   private materializeContextContent(
     nodeId: string,
     contextContent: ResolvedContextContent[],
@@ -509,48 +848,63 @@ export class PipelineExecutor {
     return { dir };
   }
 
-  private getDependencyIssues(deps: string[]): string[] {
-    const issues: string[] = [];
-    for (const dep of deps) {
-      const state = this.nodeStates.get(dep);
-      if (!state) {
-        issues.push(`Dependency ${dep} has no state`);
-        continue;
-      }
-
-      if (state.status === "failed") {
-        issues.push(`Dependency ${dep} failed`);
-        continue;
-      }
-
-      if (state.status === "completed") {
-        if (!state.result?.success) {
-          issues.push(`Dependency ${dep} completed unsuccessfully`);
-        }
-        continue;
-      }
-
-      if (state.status === "skipped") {
-        const hydratedSuccess = Boolean(state.result?.success && state.result.output);
-        if (!hydratedSuccess) {
-          issues.push(`Dependency ${dep} was skipped without hydrated output`);
-        }
-        continue;
-      }
-
-      if (state.status === "pending" || state.status === "running") {
-        issues.push(`Dependency ${dep} is not finished (${state.status})`);
-      }
-    }
-
-    return issues;
-  }
-
   private buildDryRunResult(startedAt: string): PipelineRun {
     const order = topologicalSort(this.pipeline);
     const nodeMap = new Map(this.pipeline.nodes.map(n => [n.id, n]));
+    const dryRunErrors: string[] = [];
 
-    console.log(chalk.bold(`\n📋 Pipeline: ${this.pipeline.name} (dry run)\n`));
+    // Simulate happy-path condition evaluation: all ancestors are "completed"
+    // Walk in topo order, tracking which nodes would run on happy path
+    const happyPathStatus = new Map<string, "completed" | "skipped">();
+    for (const nodeId of order) {
+      happyPathStatus.set(nodeId, "completed");
+    }
+
+    // Evaluate conditions on happy path to determine SKIP/RUN annotations
+    const conditionAnnotations = new Map<string, { outcome: "RUN" | "SKIP"; detail: string }>();
+    for (const nodeId of order) {
+      const node = nodeMap.get(nodeId)!;
+      if (node.condition === undefined) continue;
+
+      // Build simulated context: all ancestor nodes = "completed"
+      const simCtx: NodeStatusContext = {};
+      for (const dep of node.depends_on ?? []) {
+        simCtx[dep] = "completed";
+      }
+
+      try {
+        const result = evaluateCondition(node.condition, simCtx);
+        if (result) {
+          conditionAnnotations.set(nodeId, {
+            outcome: "RUN",
+            detail: `condition: ${node.condition} -> true on happy path`,
+          });
+        } else {
+          conditionAnnotations.set(nodeId, {
+            outcome: "SKIP",
+            detail: `condition: ${node.condition} -> false on happy path`,
+          });
+          // Mark as skipped in happy-path simulation
+          happyPathStatus.set(nodeId, "skipped");
+          // Update node state to reflect dry-run skip
+          this.nodeStates.set(nodeId, {
+            nodeId,
+            status: "skipped",
+            skipReason: `dry-run: condition false on happy path: ${node.condition}`,
+          });
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        dryRunErrors.push(`Node "${nodeId}": ${errMsg}`);
+        conditionAnnotations.set(nodeId, {
+          outcome: "SKIP",
+          detail: `condition error: ${errMsg}`,
+        });
+      }
+    }
+
+    // Render output
+    console.log(chalk.bold(`\nPipeline: ${this.pipeline.name} (dry run)\n`));
     if (this.pipeline.description) {
       console.log(chalk.gray(`  ${this.pipeline.description}\n`));
     }
@@ -562,15 +916,37 @@ export class PipelineExecutor {
       const workflow = node.workflow ?? this.pipeline.defaults?.workflow ?? "code";
       const agent = node.agent ?? this.pipeline.defaults?.agent ?? "codex";
       const deps = node.depends_on?.join(", ") ?? "(root)";
-      console.log(chalk.gray(`    ${i + 1}. ${nodeId} [${workflow}/${agent}] depends: ${deps}`));
+      const annotation = conditionAnnotations.get(nodeId);
+
+      let line = chalk.gray(`    ${i + 1}. ${nodeId} [${workflow}/${agent}] depends: ${deps}`);
+      if (annotation) {
+        const color = annotation.outcome === "RUN" ? chalk.green : chalk.yellow;
+        line += `  ${color(annotation.outcome)} (${annotation.detail})`;
+      }
+      if (node.loop !== undefined) {
+        const loopMax = Math.min(node.loop.max_iterations ?? 10, GLOBAL_MAX_ITERATIONS);
+        const loopInfo = chalk.cyan(`LOOP(max:${loopMax}, until: ${node.loop.until})`);
+        line += `  ${loopInfo}`;
+      }
+      console.log(line);
       console.log(chalk.gray(`       Task: ${node.task.slice(0, 80)}${node.task.length > 80 ? "..." : ""}`));
     }
     console.log();
 
+    if (dryRunErrors.length > 0) {
+      console.log(chalk.red(`  DRY RUN ERRORS:`));
+      for (const err of dryRunErrors) {
+        console.log(chalk.red(`    - ${err}`));
+      }
+      console.log();
+    }
+
+    const hasFatalErrors = dryRunErrors.length > 0;
+
     return {
       id: this.pipelineRunId,
       pipeline: this.pipeline,
-      status: "completed",
+      status: hasFatalErrors ? "failed" : "completed",
       nodes: this.nodeStates,
       startedAt,
       completedAt: startedAt,

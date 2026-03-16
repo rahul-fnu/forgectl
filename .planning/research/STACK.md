@@ -1,218 +1,317 @@
-# Technology Stack: v2.0 Additions
+# Stack Research
 
-**Project:** forgectl v2.0 Durable Runtime
-**Researched:** 2026-03-09
-**Scope:** NEW dependencies only. Existing stack (TypeScript, Node 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, etc.) is validated and excluded.
+**Domain:** AI agent orchestrator — intelligent task decomposition, worktree runtimes, rate limit resilience, outcome learning (v5.0)
+**Researched:** 2026-03-14
+**Confidence:** HIGH (core additions), MEDIUM (vector similarity via sqlite-vec)
+
+## Context: New Additions Only
+
+The existing stack is validated and not re-researched here. This document covers only what v5.0 adds.
+
+**Already in place (do not re-add):** TypeScript, Node.js 20+, Commander, Fastify 5, Dockerode, Zod, Vitest, tsup, Drizzle ORM, better-sqlite3, @octokit/app, @octokit/webhooks, @octokit/rest, picomatch, keytar, chalk, js-yaml, agent-relay.
+
+---
 
 ## Recommended Stack Additions
 
-### Database Layer
+### Core New Dependencies
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `better-sqlite3` | ^12.6.2 | SQLite driver | Fastest synchronous SQLite driver for Node.js. Native bindings, zero-config embedded database. Synchronous API is an advantage for forgectl's single-process daemon -- no connection pool needed, no async overhead for simple queries. WAL mode gives concurrent read/write without blocking. |
-| `drizzle-orm` | ^0.45.1 | ORM / query builder | TypeScript-first, SQL-like syntax, zero runtime overhead. Schema defined in TypeScript (co-located with Zod validation already in the project). Supports prepared statements for performance. Thin abstraction -- you can drop to raw SQL when needed. |
-| `drizzle-kit` | ^0.31.9 | Schema migrations (dev dep) | Generates and runs SQL migrations from schema diffs. `drizzle-kit generate` creates migration files, `drizzle-kit migrate` applies them. Keeps schema changes version-controlled and reviewable. |
-| `@types/better-sqlite3` | ^7.6.13 | Type definitions (dev dep) | TypeScript types for better-sqlite3 API. |
-
-**Confidence:** HIGH -- drizzle-orm + better-sqlite3 is the standard TypeScript/SQLite combination. Verified via npm and official docs.
-
-**Key configuration:**
-- Enable WAL mode on database open: `db.pragma('journal_mode = WAL')` -- required for concurrent read/write during daemon operation.
-- Use `BEGIN IMMEDIATE` transactions for execution locks (prevents SQLITE_BUSY on write contention).
-- Store database at `~/.forgectl/forgectl.db` (alongside existing `daemon.pid`).
-- Drizzle config file (`drizzle.config.ts`) points to schema directory and migrations output.
-
-### GitHub App
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `@octokit/app` | ^16.1.2 | GitHub App toolkit | Handles JWT authentication, installation tokens, webhook verification, and event routing. Lower-level than Probot, which is the right choice because forgectl already has Fastify and its own daemon architecture. Probot brings its own Express server -- unnecessary overhead and architectural conflict. |
-| `@octokit/webhooks` | ^14.2.0 | Webhook event handling | Type-safe webhook event definitions and payload parsing. `webhooks.on("issues.labeled", handler)` pattern. Included transitively by `@octokit/app` but useful to reference directly for types. |
-| `@octokit/rest` | ^22.0.1 | GitHub REST API client | Typed methods for all GitHub API endpoints. `octokit.rest.issues.createComment()`, `octokit.rest.checks.create()`, etc. Used via installation-scoped Octokit instances from `@octokit/app`. |
-| `@octokit/types` | ^16.0.0 | Shared TypeScript types (dev dep) | Webhook payload types, API response types. Useful for typing handler functions. |
-
-**Confidence:** HIGH -- Octokit is GitHub's official SDK. Versions verified via npm.
-
-**Why NOT Probot:**
-Probot (v14.2.4) is a framework that bundles its own Express server, logging, and app lifecycle. forgectl already has all of this via Fastify + structured logger + daemon lifecycle. Using Probot would mean either (a) running two HTTP servers, (b) fighting Probot's Express internals to integrate with Fastify via `@fastify/middie`, or (c) replacing Fastify with Express. None of these are acceptable.
-
-Instead, use `@octokit/app` directly, which is what Probot uses internally. This gives you:
-- `app.webhooks.on()` for event routing (same DX as Probot)
-- `app.getInstallationOctokit()` for per-installation API calls
-- `app.webhooks.verify()` for HMAC-SHA256 signature verification
-- Full control over HTTP layer (Fastify routes, not Express middleware)
-
-**Fastify integration pattern:**
-```typescript
-// Register webhook route in existing Fastify daemon
-fastify.post('/webhooks/github', {
-  config: { rawBody: true } // needed for HMAC verification
-}, async (request, reply) => {
-  await app.webhooks.verifyAndReceive({
-    id: request.headers['x-github-delivery'],
-    name: request.headers['x-github-event'],
-    signature: request.headers['x-hub-signature-256'],
-    payload: request.rawBody,
-  });
-  reply.send({ ok: true });
-});
-```
-
-No middleware adapter needed. Direct Fastify route handler calling Octokit's verify/receive directly.
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `@anthropic-ai/sdk` | `^0.78.0` | LLM API calls for task decomposition — send issue content, receive structured DAG output | Official SDK with built-in retry, streaming, and typed tool-use helpers including `betaZodTool`. Already the API that Claude Code wraps; calling it directly allows structured message calls with Zod-schema-enforced responses without shelling out to `claude -p`. Throws typed `RateLimitError` with a parsed `retryAfter` field — exactly what the rate limit retry path needs. |
+| `execa` | `^9.6.0` | Lightweight process spawning for worktree agents (no Docker overhead) | Purpose-built for programmatic process execution. Typed Promise-based API, streaming stdio, graceful kill with SIGTERM→SIGKILL, configurable timeout, and IPC. Replaces raw `child_process.spawn` for agent invocations that run inside a git worktree rather than a container. Execa 9 is fully ESM-native — matches forgectl's `"type": "module"` project type. |
+| `simple-git` | `^3.27.0` | Programmatic git worktree management (add, list, remove, prune) | Typed wrapper around the git CLI with bundled TypeScript definitions (no `@types/` package needed). v3 is dual CJS+ESM. The `.raw()` escape hatch gives access to any worktree subcommand not yet in the high-level API. 6.4M weekly downloads, actively maintained. |
+| `p-queue` | `^9.1.0` | Priority queue for parallel sub-task execution with dynamic concurrency cap | Required for worktree-runtime sub-tasks that arrive dynamically and must be bounded. Unlike `p-limit` (which just gates concurrent invocations), `p-queue` supports priority ordering, pause/resume, and draining — all needed for the decomposition feedback loop where a re-plan must interrupt and replace in-flight tasks. Pure ESM, compatible with forgectl's module type. |
 
 ### Supporting Libraries
 
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| `@fastify/raw-body` | ^3.1.0 | Raw body access in Fastify | Required for GitHub webhook HMAC-SHA256 verification. Fastify parses JSON by default -- you need the raw bytes to verify the signature. |
+| `p-limit` | `^7.3.0` | Simple concurrency cap for bounded fan-out operations | Use for one-shot bounded parallel calls where ordering does not matter and no queue state is needed — e.g., validating multiple sub-task outputs simultaneously or running decomposition pre-checks in parallel. Lighter than p-queue for these cases. Pure ESM. |
+| `sqlite-vec` | latest (verify at install) | K-nearest-neighbor vector similarity search inside the existing SQLite database | Required for outcome learning: embed the current issue text, find the semantically nearest past lessons, inject them into the decomposer's system prompt. Runs as a SQLite loadable extension via `db.loadExtension()` on the existing better-sqlite3 connection — no new service, no new database. Pure C, SIMD-accelerated cosine similarity. Active 2025 development. |
 
-**Confidence:** MEDIUM -- need to verify exact package name and version. Fastify 5 may have built-in `rawBody` support via route config. Check Fastify 5 docs before adding this dependency.
+### Development Tools
 
-### Event Sourcing / Flight Recorder
+No new dev tools are needed. Existing tsup, vitest, eslint, prettier, and drizzle-kit cover all new v5.0 code.
 
-**No new dependencies needed.** The event sourcing pattern for the flight recorder is implemented with:
-- `drizzle-orm` + `better-sqlite3` (already added above) for the append-only event store
-- `zod` (already in project) for event payload validation
-- Standard SQLite features: auto-increment IDs for ordering, timestamps, JSON columns for event payloads
-
-**Architecture notes:**
-- Events table: `id`, `run_id`, `event_type`, `payload` (JSON), `created_at`, `sequence_number`
-- Append-only: never UPDATE or DELETE event rows. Use a DB trigger or application-level enforcement.
-- State snapshots: periodic materialized state stored in a separate `state_snapshots` table for fast reconstruction without replaying full history.
-- SQLite JSON functions (`json_extract`, `json_each`) handle querying into event payloads when needed.
-
-### Governance / Approval State Machine
-
-**No new dependencies needed.** The approval state machine and budget enforcement use:
-- `zod` (existing) for approval/budget config validation
-- `drizzle-orm` + `better-sqlite3` (added above) for approval records, budget tracking
-- Existing orchestrator state machine patterns from v1.0 extend naturally
-
-**Architecture notes:**
-- Approvals table: `id`, `type`, `status` (pending/approved/rejected), `requested_by`, `decided_by`, `reason`, `created_at`, `decided_at`
-- Budget tracking: `cost_events` table with running aggregation queries
-- State transitions enforced in application code (TypeScript discriminated unions + Zod), not DB triggers
-- `BEGIN IMMEDIATE` transactions for atomic budget checks (check-then-deduct pattern)
-
-### Durable Execution
-
-**No new dependencies needed.** Session persistence and crash recovery use:
-- `drizzle-orm` + `better-sqlite3` (added above) for session state, checkpoints
-- Existing workspace manager and agent session interfaces from v1.0
-
-**Architecture notes:**
-- `sessions` table: `id`, `agent_id`, `issue_id`, `status`, `checkpoint_data` (JSON), `last_heartbeat`, `created_at`
-- On daemon restart: query `sessions WHERE status IN ('running', 'paused')`, reconcile against actual container state
-- Checkpoint data serialized as JSON blob -- contains enough context to rebuild agent prompt with prior work
-- Execution locks via SQLite `BEGIN IMMEDIATE` + unique constraint on `(issue_id, status='running')`
-
-### Browser-Use Integration (Deferred Assessment)
-
-| Technology | Version | Purpose | Notes |
-|------------|---------|---------|-------|
-| `browser-use` (Python) | 0.12.1 | Browser automation agent | Python package, NOT a Node.js dependency. Would run as a separate Docker container with a thin HTTP API wrapper. |
-
-**Confidence:** LOW -- browser-use does NOT have a built-in REST API server (there is an open feature request, GitHub issue #166). Integration requires building a custom Python FastAPI/Flask wrapper around the browser-use Agent class and running it as a sidecar service.
-
-**Recommendation:** Defer browser-use integration to v2.1+. The integration effort is non-trivial (custom Python service, Docker orchestration, API contract design) and is not listed in the v2.0 roadmap phases. If needed earlier, the simplest approach is a Docker container running a FastAPI app that exposes `/run` endpoint wrapping `browser_use.Agent`.
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| SQLite driver | `better-sqlite3` | `libsql` / `@libsql/client` | libsql is Turso's fork -- adds features forgectl doesn't need (embedded replicas, HTTP protocol). better-sqlite3 is simpler, faster for local-only use, and the standard choice for embedded SQLite in Node.js. |
-| ORM | `drizzle-orm` | `prisma` | Prisma generates a query engine binary, adds significant bundle size, and has its own migration system that conflicts with the lightweight approach. Drizzle is SQL-like (less magic), TypeScript-native, and 10x smaller. |
-| ORM | `drizzle-orm` | `kysely` | Kysely is query-builder only (no migrations, no schema introspection). Drizzle provides the full package: schema definition, migrations, query builder, and prepared statements. |
-| ORM | `drizzle-orm` | Raw SQL via `better-sqlite3` | Possible but loses type safety on queries, requires manual migration management, and increases maintenance burden as schema grows to 10+ tables. |
-| GitHub App framework | `@octokit/app` | `probot` | Probot bundles Express, its own logging, and app lifecycle. forgectl already has Fastify + structured logger + daemon. Using Probot creates architectural conflicts. `@octokit/app` provides the same webhook/auth primitives without the framework baggage. |
-| GitHub App framework | `@octokit/app` | Raw `@octokit/rest` + manual JWT | Too much boilerplate. `@octokit/app` handles JWT generation, installation token refresh, and webhook verification -- all things you'd have to reimplement. |
-| Event store | SQLite (Drizzle) | EventStoreDB | Overkill for single-machine. EventStoreDB is a separate server process, adds operational complexity, and forgectl's event volume (thousands, not millions) is well within SQLite's capabilities. |
-| Event store | SQLite (Drizzle) | Kafka / NATS | Distributed streaming is out of scope. forgectl is single-process. SQLite append-only table is the event log. |
-| State machine | Application code | `xstate` | xstate adds complexity for state machines that are simple enough to express as TypeScript discriminated unions + transition functions (pattern already used in v1.0 orchestrator). The governance state machine has ~4 states and ~6 transitions -- xstate is overkill. |
-| Durable execution | Custom (SQLite checkpoints) | `temporal` SDK | Temporal requires a separate server cluster. forgectl needs durable execution semantics, not the full Temporal infrastructure. Borrow the patterns (checkpointing, idempotent steps, replay), implement with SQLite. |
-| Durable execution | Custom (SQLite checkpoints) | `trigger.dev` | Trigger.dev is a hosted service / self-hosted server. Same problem as Temporal -- adds infrastructure forgectl doesn't need. |
-
-## What NOT to Add
-
-| Dependency | Why Skip |
-|------------|----------|
-| `probot` | Bundles Express server. Architectural conflict with existing Fastify daemon. Use `@octokit/app` instead. |
-| `xstate` | Overkill for the state machines in this project. Existing pattern (discriminated unions + transition functions) works. |
-| `prisma` | Heavy ORM with binary engine. Drizzle is lighter, faster, more SQL-like. |
-| `temporal` / `@temporalio/worker` | Requires separate server infrastructure. Borrow patterns, don't import the framework. |
-| `eventemitter3` or `mitt` | Node.js built-in `EventEmitter` is sufficient. Already used in v1.0. |
-| `bull` / `bullmq` | Requires Redis. forgectl's RunQueue is in-memory with SQLite persistence -- no need for a separate job queue. |
-| `pg` / `postgres` | Out of scope. Single-machine deployment uses SQLite. Postgres migration is a v3+ concern if ever. |
-| `express` | Already using Fastify. Don't introduce a second HTTP framework via Probot or otherwise. |
-| `smee-client` | Probot's webhook proxy for development. Use `ngrok` or Cloudflare Tunnel instead if needed for local webhook testing -- don't add a dependency for it. |
-| `jsonwebtoken` | `@octokit/app` handles JWT internally. Don't add a separate JWT library. |
-| `cron` / `node-cron` | Existing setTimeout chain pattern from v1.0 scheduler works. Don't add a cron library. |
-| `uuid` | Node.js 20+ has `crypto.randomUUID()` built-in. |
-| `date-fns` / `dayjs` | Not needed. Use `Date` and ISO strings. Budget periods use simple epoch math. |
-| `browser-use` (npm) | Doesn't exist as an npm package. The Python package requires a custom sidecar service -- defer. |
+---
 
 ## Installation
 
 ```bash
-# Core new dependencies
-npm install drizzle-orm better-sqlite3 @octokit/app @octokit/webhooks @octokit/rest
+# New runtime dependencies for v5.0
+npm install @anthropic-ai/sdk execa simple-git p-queue p-limit
 
-# Dev dependencies
-npm install -D drizzle-kit @types/better-sqlite3 @octokit/types
+# sqlite-vec for outcome learning
+# Verify the current npm package name — canonical upstream is asg017/sqlite-vec
+npm install sqlite-vec
 ```
 
-**Total new production dependencies:** 5
-**Total new dev dependencies:** 3
+---
 
-This is a minimal surface area for the scope of v2.0. Every dependency earns its place.
+## Feature-to-Library Mapping
+
+### LLM-Driven Task Decomposition
+
+**Use:** `@anthropic-ai/sdk` + existing `zod`
+
+Decomposition calls Claude directly via `anthropic.messages.create()` with a tool definition whose `inputSchema` is a Zod schema matching the DAG YAML structure. Claude is forced into the tool response shape — the response is always parseable, no freeform JSON extraction or regex needed. The existing Zod validation layer then validates the DAG before it enters the pipeline executor.
+
+The SDK's built-in retry (3 attempts, exponential backoff) handles transient API errors automatically. Rate limit responses surface as `Anthropic.RateLimitError` (HTTP 429) with a `retryAfter` field already parsed to seconds — wire directly into the orchestrator's existing retry queue.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { z } from 'zod';
+
+const decomposeTool = betaZodTool({
+  name: 'decompose_issue',
+  description: 'Break the issue into a DAG of focused sub-tasks',
+  inputSchema: z.object({
+    nodes: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      depends_on: z.array(z.string()),
+    })),
+  }),
+  run: async (input) => input, // return parsed structure directly
+});
+```
+
+**Do NOT use:** LangChain, LlamaIndex, or instructor-ai. The Anthropic SDK's `betaZodTool` provides structured output natively for a single-provider use case. Adding a framework creates an additional update dependency with no benefit.
+
+### Git Worktree Management
+
+**Use:** `simple-git`
+
+```typescript
+import simpleGit from 'simple-git';
+const git = simpleGit(repoRoot);
+
+// Add a worktree for a sub-task branch
+await git.raw(['worktree', 'add', worktreePath, branchName]);
+
+// List all active worktrees (porcelain for machine-readable output)
+await git.raw(['worktree', 'list', '--porcelain']);
+
+// Remove when sub-task completes
+await git.raw(['worktree', 'remove', '--force', worktreePath]);
+
+// Prune stale metadata after crash recovery
+await git.raw(['worktree', 'prune']);
+```
+
+Use `.raw()` for all worktree operations — simple-git v3.27 does not yet have a high-level `worktree()` API, but the raw command path is stable and typed. The `WorktreeManager` module in `src/worktree/` wraps these calls and adds per-worktree path locking via a SQLite row to prevent two agents colliding on the same directory.
+
+**Do NOT use:** `git-worktree` npm package (alexweininger — last updated 2022, negligible downloads) or `nodegit` (libgit2 native bindings — heavy native build dependency, overkill for what is purely CLI-passthrough work).
+
+### Lightweight Process Spawning (Worktree Agents)
+
+**Use:** `execa`
+
+```typescript
+import { execa } from 'execa';
+
+const proc = execa('claude', ['-p', prompt], {
+  cwd: worktreePath,
+  env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
+  stdout: 'pipe',
+  stderr: 'pipe',
+  timeout: timeoutMs,
+});
+
+// Stream output in real time
+proc.stdout?.on('data', (chunk) => logger.info(chunk.toString()));
+const result = await proc;
+// result.exitCode, result.stdout, result.stderr — all typed
+```
+
+Execa 9's structured subprocess object exposes stdout/stderr as separate streams, exit code, signal name, and wall-clock duration — all typed. The `timeout` option sends SIGTERM then SIGKILL, preventing orphaned agent processes if the daemon restarts.
+
+**Rate limit detection in process mode:** Claude Code exits with code 1 and writes a structured JSON error to stderr when rate-limited: `{"type":"error","error":{"type":"rate_limit_error","retry_after":N}}`. Use `stderr: 'pipe'` and accumulate the stderr buffer for parsing on process exit. Map the `retry_after` value to the same orchestrator retry queue used for API-mode rate limits.
+
+**Do NOT use:** Raw `child_process.spawn`. Execa provides typed errors, automatic cleanup on parent exit, and IPC — all required for reliable agent lifecycle management in a daemon context.
+
+### Parallel Sub-Task Execution
+
+**Use:** `p-queue` (dynamic task queue for worktree agents) + `p-limit` (bounded fan-out for simpler parallel checks)
+
+```typescript
+import PQueue from 'p-queue';
+const queue = new PQueue({ concurrency: maxWorktrees });
+
+// Enqueue sub-tasks from the decomposition DAG
+for (const node of dagNodes) {
+  queue.add(() => runWorktreeAgent(node), { priority: node.depth });
+}
+
+// Wait for all to complete before synthesizing
+await queue.onIdle();
+```
+
+`p-queue`'s `pause()` and `clear()` methods support the re-plan path: when the feedback loop decides to re-decompose, pause the queue, clear pending tasks, and enqueue the revised plan. `p-limit` handles simpler cases — like running up to N validation checks in parallel — without the overhead of a full queue.
+
+Both packages are pure ESM. Import as `import PQueue from 'p-queue'` and `import pLimit from 'p-limit'`. Compatible with forgectl's `"type": "module"` package.
+
+### Rate Limit Detection and Scheduled Retry
+
+**Use:** `@anthropic-ai/sdk` typed error classes + existing orchestrator retry queue
+
+The SDK throws `Anthropic.RateLimitError` (extends `APIError`) on HTTP 429. The error carries:
+- `status: 429`
+- `headers`: raw response headers including `retry-after` and `anthropic-ratelimit-*`
+- `retryAfter`: already parsed to an integer (seconds)
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+
+try {
+  await anthropic.messages.create({ ... });
+} catch (e) {
+  if (e instanceof Anthropic.RateLimitError) {
+    const waitMs = (e.retryAfter ?? 60) * 1000;
+    // Schedule retry in existing orchestrator retry queue, preserving workspace/checkpoint
+    await orchestrator.scheduleRetry(issueId, waitMs, currentCheckpoint);
+  }
+}
+```
+
+For process-spawned agents (execa path), parse the accumulated stderr for the JSON rate limit error and map to the same `scheduleRetry` call.
+
+**Do NOT add:** `bottleneck`, `rate-limiter-flexible`, or any third-party rate limiting library. The retry logic belongs in the existing orchestrator state machine. A separate library creates two competing retry systems and duplicates state.
+
+### Run Outcome Learning
+
+**Use:** `sqlite-vec` + existing `better-sqlite3` + `@anthropic-ai/sdk` (for text embeddings via `embeddings.create()`)
+
+Three table additions to the existing Drizzle ORM schema:
+
+1. `outcome_lessons` — text lessons extracted from completed runs (issue summary, what worked, dead ends, final sub-task count)
+2. `outcome_embeddings` — serialized float32 vectors, one per lesson, generated by the Anthropic embeddings API
+3. `vec_lessons` — sqlite-vec virtual table for KNN search over the embeddings
+
+At dispatch time: embed the incoming issue title + body, query `vec_lessons` for the top-5 nearest neighbors (cosine similarity), inject the retrieved lesson texts into the decomposer's system prompt as historical context.
+
+```typescript
+import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
+
+// Load into existing connection (no new database)
+sqliteVec.load(db);
+
+// K-nearest neighbor query at dispatch time
+const similar = db.prepare(`
+  SELECT l.lesson_text, v.distance
+  FROM vec_lessons v
+  JOIN outcome_lessons l ON l.id = v.rowid
+  WHERE v.embedding MATCH ?
+  ORDER BY v.distance
+  LIMIT 5
+`).all(new Float32Array(queryVector));
+```
+
+**Fallback when embeddings are not yet seeded:** BM25 full-text search via SQLite FTS5 on `outcome_lessons.issue_label` and `lesson_text` columns. FTS5 is already available in SQLite with no extra extension — keyword-based retrieval degrades gracefully until the vector index is populated.
+
+**Confidence on sqlite-vec: MEDIUM.** The library is actively maintained, has Node.js tutorials from early 2025, and ships pre-built platform binaries to npm. However, the exact npm package name and binary availability for the target platform (linux-x64) should be verified at install time. The canonical upstream is `asg017/sqlite-vec`; check the current npm package name before pinning in package.json.
+
+**Do NOT use:** External vector databases (Chroma, Pinecone, Qdrant, Weaviate). The project constraint is single-machine, SQLite-only. sqlite-vec runs inside the existing better-sqlite3 connection with zero additional infrastructure.
+
+---
+
+## Alternatives Considered
+
+| Recommended | Alternative | Why Not |
+|-------------|-------------|---------|
+| `@anthropic-ai/sdk` direct | Shell out to `claude -p` for decomposition | No structured output enforcement; subprocess overhead; no typed error classes for rate limit detection |
+| `@anthropic-ai/sdk` direct | `@instructor-ai/instructor` | Extra dependency for what `betaZodTool` already provides in the SDK; adds its own Anthropic adapter layer |
+| `@anthropic-ai/sdk` direct | `@ai-sdk/anthropic` (Vercel AI SDK) | Vercel AI SDK adds an abstraction layer designed for multi-provider use — forgectl is Claude-only; the abstraction is unnecessary weight |
+| `execa` | Raw `child_process.spawn` | No timeout enforcement, no typed errors, no auto-cleanup on parent exit — all required for daemon-managed agent processes |
+| `execa` | `zx` | zx is a shell scripting tool, not a process-embedding library; heavier API surface designed for script authors, not programmatic embedding |
+| `simple-git` | `git-worktree` npm package | Last updated 2022, negligible downloads; abandoned |
+| `simple-git` | `isomorphic-git` | Pure JS implementation (no git binary required), but git worktrees are a binary-level feature — isomorphic-git has no worktree support |
+| `simple-git` | Direct `execa('git', [...])` calls | Possible, but simple-git adds typed return parsing, error wrapping, and the GitConfigScope enum — worth the marginal dependency |
+| `p-queue` | `bull` / `bullmq` | Requires Redis; violates the single-process, SQLite-only project constraint |
+| `p-queue` | `bee-queue` | Same Redis dependency problem |
+| `sqlite-vec` | Separate Chroma service | Adds a Python service dependency; violates single-machine constraint |
+| `sqlite-vec` | SQLite FTS5 only | FTS5 is keyword-based, not semantic; misses synonyms and paraphrased lessons — use FTS5 as fallback only, not primary |
+| `sqlite-vec` | `sqlite-vss` | Predecessor to sqlite-vec, no longer actively maintained; sqlite-vec is the designated successor |
+
+---
+
+## What NOT to Add
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| LangChain / LlamaIndex | Framework-level LLM abstractions conflict with forgectl's handcrafted orchestration; adds its own agent loop and retry logic | `@anthropic-ai/sdk` directly with `betaZodTool` |
+| `bottleneck` / `rate-limiter-flexible` | Creates a second retry system alongside the existing orchestrator retry queue; two systems diverge | Handle `Anthropic.RateLimitError` in the existing retry queue |
+| `nodegit` | Native libgit2 bindings with heavy build dependency; worktree API incomplete | `simple-git` with `.raw()` |
+| `sqlite-vss` | No longer actively maintained; superseded by sqlite-vec | `sqlite-vec` |
+| `openai` SDK | No OpenAI usage in scope; adding a second LLM vendor SDK creates version management overhead | `@anthropic-ai/sdk` only |
+| `@anthropic-ai/claude-agent-sdk` | This is the Claude Code SDK (for building agents that run inside Claude Code) — not what forgectl needs. forgectl calls the Claude API directly for decomposition. | `@anthropic-ai/sdk` |
+| `uuid` | Already covered by Node.js 20+ built-in `crypto.randomUUID()` | Built-in |
+| `cron` / `node-cron` | Existing setTimeout-chain scheduler in the orchestrator covers all retry scheduling needs | Existing orchestrator retry queue |
+
+---
+
+## Stack Patterns by Variant
+
+**If sub-task is trusted (same repo, non-destructive):**
+- Use execa + git worktree (no Docker)
+- Because worktree gives file isolation without container spin-up overhead
+
+**If sub-task is untrusted (external data sources, arbitrary shell commands):**
+- Use the existing Dockerode path
+- Because a container provides process and filesystem isolation; a worktree alone is not a security boundary
+
+**If issue is simple (single file, well-understood pattern):**
+- Skip the decomposition LLM call; dispatch directly to a single agent
+- Because LLM decomposition adds latency (~2–5s) and API cost; the single-agent fallback must remain the fast path
+
+**If sqlite-vec binary is unavailable on the target platform:**
+- Use SQLite FTS5 full-text search on `outcome_lessons` as fallback
+- BM25 keyword retrieval is better than no retrieval; the outcome learning feature degrades gracefully
+
+---
+
+## Version Compatibility
+
+| Package | Node.js Requirement | ESM/CJS | Notes |
+|---------|---------------------|---------|-------|
+| `@anthropic-ai/sdk@^0.78.0` | Node 18+ | Dual ESM+CJS | Uses built-in `fetch` in Node 18+; no polyfill needed |
+| `execa@^9.6.0` | Node 18.19.0 or 20.5.0+ | Pure ESM | forgectl targets Node 20+ — fully compatible |
+| `simple-git@^3.27.0` | Node 14+ | CJS + ESM + TS | Bundled typings; no `@types/simple-git` needed |
+| `p-queue@^9.1.0` | Node 18+ | Pure ESM | Do not require() it; import only |
+| `p-limit@^7.3.0` | Node 18+ | Pure ESM | Same constraint as p-queue |
+| `sqlite-vec` | Any (native binaries) | CJS (via better-sqlite3) | Loads as a SQLite extension; platform binary (linux-x64) must be present |
+
+---
 
 ## Integration Points with Existing Stack
 
 | Existing | New | Integration |
 |----------|-----|-------------|
-| Fastify daemon (`src/daemon/`) | `@octokit/app` webhooks | New route group `/webhooks/github` in Fastify. Octokit's verify/receive called from Fastify handler. No middleware adapter needed. |
-| Fastify daemon (`src/daemon/`) | `better-sqlite3` | Database opened on daemon start, closed on shutdown. Connection passed to repository layer. |
-| Zod (`src/config/`) | `drizzle-orm` schema | Zod validates runtime config/input. Drizzle defines DB schema. They complement, don't overlap. |
-| Orchestrator state machine (`src/orchestration/`) | SQLite sessions/checkpoints | State machine transitions write to SQLite. On restart, state is recovered from DB instead of lost. |
-| Tracker adapters (`src/tracker/`) | GitHub App webhooks | GitHub tracker adapter gains a second input path: webhooks in addition to polling. Polling remains fallback for users who can't receive webhooks. |
-| RunLog JSON writer (`src/logging/`) | Flight recorder (SQLite events) | RunLog writes become event inserts. Existing RunLog format can be a compatibility layer that reads from the event store. |
-| Commander CLI (`src/cli/`) | SQLite queries | New CLI commands (`forgectl approval list`, `forgectl costs summary`, `forgectl run inspect`) query SQLite directly. |
-| Agent sessions (`src/agent/`) | Durable execution | Session state serialized to SQLite. On resume, session context rebuilt from checkpoint + event replay. |
+| `src/pipeline/` DAG executor | `@anthropic-ai/sdk` decomposer | Decomposer outputs a DAG YAML struct; parsed and fed into existing pipeline DAG types |
+| `src/orchestrator/` retry queue | `Anthropic.RateLimitError` | Catch in dispatch loop; `retryAfter` maps to existing `scheduleRetry(issueId, waitMs)` |
+| `src/storage/` Drizzle schema | sqlite-vec + `outcome_lessons` | New tables added to existing schema.ts; sqlite-vec loaded on the existing better-sqlite3 `db` instance |
+| `src/agent/` Claude Code adapter | `execa` | Worktree runtime path uses execa instead of Dockerode; same adapter interface, different spawn mechanism |
+| `src/workspace/` WorkspaceManager | `simple-git` WorktreeManager | New `src/worktree/` module manages worktree lifecycle; WorkspaceManager retains Docker-based workspace ownership |
+| Existing `p-queue` (if used) | `p-queue@9` | If any prior code used p-queue, confirm it is already on v9 or update; only one version should be present |
 
-## Database Schema Preview
-
-Tables needed across all v2.0 phases:
-
-| Table | Phase | Purpose |
-|-------|-------|---------|
-| `companies` | 2 | Tenant identity, config |
-| `agents` | 2 | Agent identity, role, status, budget scope |
-| `runs` | 1 | Run metadata (replaces file-based run logs) |
-| `events` | 3 | Append-only event ledger (flight recorder) |
-| `state_snapshots` | 3-4 | Materialized state at step boundaries |
-| `sessions` | 4 | Durable execution sessions |
-| `checkpoints` | 4 | Step-boundary state for crash recovery |
-| `approvals` | 5 | Approval requests and decisions |
-| `cost_events` | 5 | Token/cost tracking per run/agent |
-| `budgets` | 5 | Agent/company budget limits and usage |
-| `conversations` | 6 | GitHub comment threads for clarification |
-| `webhook_deliveries` | 6 | Idempotency tracking for webhook deduplication |
-
-All tables defined in `src/storage/schema.ts` using Drizzle's TypeScript schema DSL. Migrations generated by `drizzle-kit generate` and applied via `drizzle-kit migrate` (or programmatically on daemon start).
+---
 
 ## Sources
 
-- [drizzle-orm on npm](https://www.npmjs.com/package/drizzle-orm) -- v0.45.1
-- [drizzle-kit on npm](https://www.npmjs.com/package/drizzle-kit) -- v0.31.9
-- [better-sqlite3 on npm](https://www.npmjs.com/package/better-sqlite3) -- v12.6.2
-- [Drizzle ORM SQLite docs](https://orm.drizzle.team/docs/get-started-sqlite)
-- [@octokit/app on npm](https://www.npmjs.com/package/@octokit/app) -- v16.1.2
-- [@octokit/app GitHub](https://github.com/octokit/app.js/) -- GitHub App toolkit
-- [@octokit/webhooks on npm](https://www.npmjs.com/package/@octokit/webhooks) -- v14.2.0
-- [@octokit/rest on npm](https://www.npmjs.com/package/@octokit/rest) -- v22.0.1
-- [Probot on npm](https://www.npmjs.com/package/probot) -- v14.2.4 (evaluated, not recommended)
-- [SQLite WAL mode](https://sqlite.org/wal.html) -- concurrent read/write
-- [Event sourcing with SQLite](https://www.sqliteforum.com/p/building-event-sourcing-systems-with) -- append-only patterns
-- [browser-use on PyPI](https://pypi.org/project/browser-use/) -- v0.12.1 (Python, no REST API)
-- [browser-use REST API feature request](https://github.com/browser-use/browser-use/issues/166) -- open, not implemented
+- [anthropics/anthropic-sdk-typescript GitHub](https://github.com/anthropics/anthropic-sdk-typescript) — tool-use helpers, typed error classes, streaming (HIGH confidence)
+- [@anthropic-ai/sdk on npm](https://www.npmjs.com/package/@anthropic-ai/sdk) — version 0.78.0 verified (HIGH confidence)
+- [sindresorhus/execa GitHub](https://github.com/sindresorhus/execa) — v9.6.x, ESM-native, Node 20 compatible, stdio streaming (HIGH confidence)
+- [execa@9.6.1 jsDocs.io](https://www.jsdocs.io/package/execa) — TypeScript types confirmed (HIGH confidence)
+- [steveukx/git-js GitHub](https://github.com/steveukx/git-js) — simple-git v3.27, TypeScript bundled, `.raw()` API (HIGH confidence)
+- [sindresorhus/p-queue GitHub](https://github.com/sindresorhus/p-queue) — v9.1.0, pure ESM, pause/resume/priority/drain (HIGH confidence)
+- [sindresorhus/p-limit GitHub](https://github.com/sindresorhus/p-limit) — v7.3.0, pure ESM (HIGH confidence)
+- [asg017/sqlite-vec GitHub](https://github.com/asg017/sqlite-vec) — K-NN, cosine similarity, SQLite extension, active 2025 (MEDIUM confidence — verify npm package name at install time)
+- [sqlite-vec Node.js tutorial (DEV Community, 2025)](https://dev.to/stephenc222/how-to-use-sqlite-vec-to-store-and-query-vector-embeddings-58mf) — Node.js integration confirmed (MEDIUM confidence)
+
+---
+
+*Stack research for: forgectl v5.0 Intelligent Decomposition*
+*Researched: 2026-03-14*

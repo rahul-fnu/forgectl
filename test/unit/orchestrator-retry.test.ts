@@ -156,6 +156,7 @@ describe("OrchestratorConfigSchema", () => {
       drain_timeout_ms: 30000,
       continuation_delay_ms: 1000,
       in_progress_label: "in-progress",
+      child_slots: 0,
     });
   });
 

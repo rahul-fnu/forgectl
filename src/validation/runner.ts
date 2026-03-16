@@ -2,6 +2,7 @@ import type Docker from "dockerode";
 import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { AgentAdapter, AgentOptions } from "../agent/types.js";
+import type { ValidationStep } from "../config/schema.js";
 import { runValidationStep, type StepResult } from "./step.js";
 import { formatFeedback } from "./feedback.js";
 import { invokeAgent } from "../agent/invoke.js";
@@ -14,6 +15,8 @@ export interface ValidationResult {
     passed: boolean;
     attempts: number;
   }>;
+  /** Combined stdout+stderr from all steps in the final validation pass. Undefined when no steps are configured. */
+  lastOutput?: string;
 }
 
 /**
@@ -43,6 +46,7 @@ export async function runValidationLoop(
   }
 
   let attempt = 0;
+  let lastResults: StepResult[] = [];
 
   while (attempt <= maxRetries) {
     attempt++;
@@ -66,8 +70,11 @@ export async function runValidationLoop(
       }
     }
 
+    lastResults = results;
+
     if (allPassed) {
       logger.info("validation", "All validation steps passed");
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
       return {
         passed: true,
         totalAttempts: attempt,
@@ -76,6 +83,7 @@ export async function runValidationLoop(
           passed: true,
           attempts: stepAttemptCounts[s.name],
         })),
+        lastOutput: lastOutput || undefined,
       };
     }
 
@@ -99,8 +107,9 @@ export async function runValidationLoop(
     }
   }
 
-  // Exhausted retries
+  // Exhausted retries — capture output from the final pass
   logger.error("validation", `Validation failed after ${attempt} attempts`);
+  const lastOutput = lastResults.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
   return {
     passed: false,
     totalAttempts: attempt,
@@ -109,5 +118,52 @@ export async function runValidationLoop(
       passed: stepLastPassed[s.name],
       attempts: stepAttemptCounts[s.name],
     })),
+    lastOutput: lastOutput || undefined,
+  };
+}
+
+/**
+ * Run all validation steps once with no retries and no agent re-invocation.
+ * Used as a final gate before output collection — if any step fails,
+ * the run is marked failed and no PR is created.
+ */
+export async function runValidationGate(
+  container: Docker.Container,
+  steps: ValidationStep[],
+  workingDir: string,
+  logger: Logger,
+): Promise<ValidationResult> {
+  if (steps.length === 0) {
+    return { passed: true, totalAttempts: 0, stepResults: [] };
+  }
+
+  logger.info("validation", "Running post-validation build gate");
+
+  const results: StepResult[] = [];
+  let allPassed = true;
+
+  for (const step of steps) {
+    const result = await runValidationStep(container, step, workingDir);
+    results.push(result);
+
+    if (result.passed) {
+      logger.info("validation", `Gate ✔ ${step.name} passed`);
+    } else {
+      logger.error("validation", `Gate ✗ ${step.name} failed (exit ${result.exitCode})`);
+      allPassed = false;
+    }
+  }
+
+  const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+
+  return {
+    passed: allPassed,
+    totalAttempts: 1,
+    stepResults: steps.map((s, i) => ({
+      name: s.name,
+      passed: results[i].passed,
+      attempts: 1,
+    })),
+    lastOutput: lastOutput || undefined,
   };
 }
