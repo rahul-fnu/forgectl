@@ -147,29 +147,53 @@ export class PRProcessor {
         await this.reviewDiff(tmpDir, pr);
       }
 
-      // Step 5: Wait for CI on current head
-      const prData = await this.fetchPRData(pr.number);
-      const currentSha = prData?.head?.sha ?? pr.sha;
-      const ciPassed = await this.waitForCI(pr.number, currentSha);
-      if (!ciPassed) {
-        return this.recordResult(pr, "failed", "CI did not pass");
-      }
+      // Step 5+6: Wait for CI then merge, with retry on 405 (branch not up to date)
+      const maxMergeAttempts = 3;
+      for (let mergeAttempt = 1; mergeAttempt <= maxMergeAttempts; mergeAttempt++) {
+        // Re-fetch head SHA (may have changed from rebase/force-push)
+        const prData = await this.fetchPRData(pr.number);
+        const currentSha = prData?.head?.sha ?? pr.sha;
+        const ciPassed = await this.waitForCI(pr.number, currentSha);
+        if (!ciPassed) {
+          return this.recordResult(pr, "failed", "CI did not pass");
+        }
 
-      // Step 6: Squash merge
-      const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}/merge`;
-      const mergeResponse = await fetch(mergeUrl, {
-        method: "PUT",
-        headers: this.headers,
-        body: JSON.stringify({ merge_method: "squash" }),
-      });
+        // Attempt squash merge
+        const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}/merge`;
+        const mergeResponse = await fetch(mergeUrl, {
+          method: "PUT",
+          headers: this.headers,
+          body: JSON.stringify({ merge_method: "squash" }),
+        });
 
-      if (mergeResponse.ok) {
-        this.logger.info("merge-daemon", `PR #${pr.number}: Merged successfully`);
-        return this.recordResult(pr, "merged");
-      } else {
+        if (mergeResponse.ok) {
+          this.logger.info("merge-daemon", `PR #${pr.number}: Merged successfully`);
+          return this.recordResult(pr, "merged");
+        }
+
         const body = await mergeResponse.text();
+
+        // 405 = branch not up to date with main (strict protection) — rebase and retry
+        if (mergeResponse.status === 405 && mergeAttempt < maxMergeAttempts) {
+          this.logger.info("merge-daemon", `PR #${pr.number}: Branch not up to date, rebasing (attempt ${mergeAttempt}/${maxMergeAttempts})`);
+          // Clean up old tmpDir and re-clone
+          if (tmpDir) cleanupTmpDir(tmpDir);
+          const reclone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
+          tmpDir = reclone.tmpDir;
+          const newConflicts = mergeMain(tmpDir);
+          if (newConflicts.length > 0) {
+            this.logger.info("merge-daemon", `PR #${pr.number}: Resolving ${newConflicts.length} conflict(s) on retry`);
+            await resolveConflicts(tmpDir, newConflicts, token);
+            await verifyMerge(tmpDir, newConflicts);
+          }
+          pushResolved(tmpDir, pr.branch);
+          continue; // Wait for CI on new head and retry merge
+        }
+
         return this.recordResult(pr, "failed", `Merge API returned ${mergeResponse.status}: ${body}`);
       }
+
+      return this.recordResult(pr, "failed", `Exhausted ${maxMergeAttempts} merge attempts`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error("merge-daemon", `PR #${pr.number}: Error — ${msg}`);
