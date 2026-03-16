@@ -201,7 +201,14 @@ export class PRProcessor {
       };
       const runs = checks.check_runs ?? [];
 
-      if (runs.length === 0) return true; // No CI configured
+      if (runs.length === 0) {
+        // No checks yet — CI may not have started. Wait a bit before concluding no CI is configured.
+        if (Date.now() - start < 60_000) {
+          await new Promise((r) => setTimeout(r, pollMs));
+          continue;
+        }
+        return true; // No CI configured (waited at least 60s)
+      }
 
       const allComplete = runs.every((r) => r.status === "completed");
       if (allComplete) {
