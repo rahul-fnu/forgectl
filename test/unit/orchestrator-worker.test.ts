@@ -120,6 +120,7 @@ vi.mock("../../src/agent/registry.js", () => ({
 
 vi.mock("../../src/validation/runner.js", () => ({
   runValidationLoop: vi.fn(),
+  runValidationGate: vi.fn(),
 }));
 
 vi.mock("../../src/output/git.js", () => ({
@@ -142,7 +143,7 @@ const { buildOrchestratedRunPlan, executeWorker } = await import("../../src/orch
 const { prepareExecution } = await import("../../src/orchestration/single.js");
 const { createAgentSession } = await import("../../src/agent/session.js");
 const { cleanupRun } = await import("../../src/container/cleanup.js");
-const { runValidationLoop } = await import("../../src/validation/runner.js");
+const { runValidationLoop, runValidationGate } = await import("../../src/validation/runner.js");
 const { collectGitOutput } = await import("../../src/output/git.js");
 const { needsPostApproval } = await import("../../src/governance/autonomy.js");
 const { enterPendingOutputApproval } = await import("../../src/governance/approval.js");
@@ -465,6 +466,10 @@ describe("executeWorker", () => {
     };
     vi.mocked(runValidationLoop).mockImplementation(async () => {
       callOrder.push("runValidationLoop");
+      return { passed: true, totalAttempts: 1, stepResults: [] };
+    });
+    vi.mocked(runValidationGate).mockImplementation(async () => {
+      callOrder.push("runValidationGate");
       return { passed: true, totalAttempts: 1, stepResults: [] };
     });
 

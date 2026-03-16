@@ -11,7 +11,7 @@ import type { ValidationResult } from "../validation/runner.js";
 import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
-import { runValidationLoop } from "../validation/runner.js";
+import { runValidationLoop, runValidationGate } from "../validation/runner.js";
 import { collectGitOutput, recordPreAgentSha } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
@@ -365,6 +365,26 @@ export async function executeWorker(
       }
     }
 
+    // Post-validation build gate: run validation steps once more with no retries.
+    // If it fails, mark run as failed and skip output collection entirely.
+    if (plan.validation.steps.length > 0 && validationResult?.passed) {
+      const gateResult = await runValidationGate(
+        container,
+        plan.validation.steps,
+        plan.input.mountPath,
+        logger,
+      );
+      if (!gateResult.passed) {
+        logger.error("worker", `Build gate failed for ${issue.identifier} — skipping output collection`);
+        agentResult = {
+          ...agentResult,
+          status: "failed",
+          stderr: "Post-validation build gate failed: validation steps did not pass final check",
+        };
+        validationResult = gateResult;
+      }
+    }
+
     // Update check run after validation
     if (checkRunId && githubDeps?.repoContext) {
       try {
@@ -382,20 +402,24 @@ export async function executeWorker(
       }
     }
 
-    // 9. Collect git output — failure here means agent work is lost, so fail the run
-    try {
-      const pushToken = config.tracker?.token;
-      const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
-      branch = gitResult.branch;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
-      // Override agent result — the work is lost if we can't collect output
-      agentResult = {
-        ...agentResult,
-        status: "failed",
-        stderr: `Agent completed but git output collection failed (work lost): ${message}`,
-      };
+    // 9. Collect git output — skip if build gate already failed
+    if (agentResult.status !== "failed") {
+      try {
+        const pushToken = config.tracker?.token;
+        const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
+        branch = gitResult.branch;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
+        // Override agent result — the work is lost if we can't collect output
+        agentResult = {
+          ...agentResult,
+          status: "failed",
+          stderr: `Agent completed but git output collection failed (work lost): ${message}`,
+        };
+      }
+    } else {
+      logger.warn("worker", `Skipping output collection for ${issue.identifier} — agent/gate already failed`);
     }
 
     // Update progress: collecting_output complete

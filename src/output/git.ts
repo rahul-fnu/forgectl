@@ -10,6 +10,30 @@ import { slugify } from "../utils/slug.js";
 import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { GitResult } from "./types.js";
+import { validateStagedFiles } from "./staged-file-validator.js";
+
+/**
+ * Hard-exclude patterns always appended to .gitignore regardless of user config.
+ * Prevents build artifacts from ever being committed.
+ */
+export const HARD_EXCLUDE_PATTERNS = [
+  "node_modules/",
+  "target/",
+  "dist/",
+  "build/",
+  "__pycache__/",
+  ".next/",
+  "coverage/",
+  "*.rlib",
+  "*.o",
+  "*.so",
+  "*.dylib",
+  "*.exe",
+  "*.dll",
+  "*.class",
+  "*.pyc",
+  "*.log",
+];
 
 /**
  * Record the HEAD SHA before agent runs — used to detect agent changes.
@@ -85,9 +109,11 @@ export async function collectGitOutput(
   // Also check for any unstaged/untracked changes the agent left behind (without committing)
   // Use exclude patterns to avoid committing build artifacts (node_modules, target, dist)
   const excludePatterns = plan.input.exclude ?? [];
-  if (excludePatterns.length > 0) {
+  // Merge user excludes with hard excludes (deduped)
+  const allExcludes = [...new Set([...excludePatterns, ...HARD_EXCLUDE_PATTERNS])];
+  if (allExcludes.length > 0) {
     // Ensure .gitignore contains exclude patterns before staging
-    const ignoreLines = excludePatterns.join("\n");
+    const ignoreLines = allExcludes.join("\n");
     await execInContainer(container, [
       "sh", "-c", `echo '${ignoreLines}' >> /workspace/.gitignore`,
     ], { workingDir: "/workspace" });
@@ -95,6 +121,10 @@ export async function collectGitOutput(
   await execInContainer(container, ["git", "add", "-A"], {
     workingDir: "/workspace",
   });
+
+  // Validate staged files — unstage any with agent errors, code fences, or bad content
+  await validateStagedFiles(container, logger);
+
   const diffResult = await execInContainer(container, [
     "git", "diff", "--cached", "--stat",
   ], { workingDir: "/workspace" });

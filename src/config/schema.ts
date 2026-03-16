@@ -128,6 +128,8 @@ export const ConfigSchema = z.object({
     }).default({}),
     exclude: z.array(z.string()).default([
       "node_modules/", "dist/", "build/", "*.log", ".env", ".env.*",
+      "target/", "*.rlib", "*.o", "*.so", "*.dylib", "*.exe", "*.dll",
+      "*.class", "__pycache__/", "*.pyc", ".next/", "coverage/",
     ]),
   }).default({}),
 

@@ -2,6 +2,7 @@ import type { TrackerAdapter, TrackerConfig, TrackerIssue } from "./types.js";
 import { resolveToken } from "./token.js";
 import { SubIssueCache } from "./sub-issue-cache.js";
 import { detectIssueCycles } from "./sub-issue-dag.js";
+import { MergeQueue } from "../orchestrator/merge-queue.js";
 
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -313,6 +314,7 @@ async function autoMergeWithCI(
     const maxWaitMs = 15 * 60 * 1000;
     const pollMs = 30_000;
     const start = Date.now();
+    let ciResolved = false;
 
     while (Date.now() - start < maxWaitMs) {
       const statusUrl = `${API_BASE}/repos/${owner}/${repo}/commits/${headSha}/check-runs`;
@@ -323,6 +325,7 @@ async function autoMergeWithCI(
       const runs = checks.check_runs ?? [];
       if (runs.length === 0) {
         // No CI configured — proceed to merge
+        ciResolved = true;
         break;
       }
 
@@ -330,17 +333,35 @@ async function autoMergeWithCI(
       if (allComplete) {
         const allPassed = runs.every((r) => r.conclusion === "success" || r.conclusion === "skipped");
         if (!allPassed) {
-          // CI failed — don't merge, leave PR open
+          // CI failed — leave PR open with comment, do NOT merge
+          const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          await fetch(commentUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ body: "**forgectl:** CI checks failed. Leaving PR open for manual review." }),
+          }).catch(() => {});
           return;
         }
+        ciResolved = true;
         break;
       }
 
       await new Promise((r) => setTimeout(r, pollMs));
     }
+
+    // CI polling timed out — leave PR open, do NOT merge
+    if (!ciResolved) {
+      const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+      await fetch(commentUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body: "**forgectl:** CI checks timed out after 15 minutes. Leaving PR open for manual review." }),
+      }).catch(() => {});
+      return;
+    }
   }
 
-  // Step 3: Merge
+  // Step 3: Merge — if merge API fails, leave PR open (never force-merge)
   const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
   const mergeResponse = await fetch(mergeUrl, {
     method: "PUT",
@@ -349,12 +370,17 @@ async function autoMergeWithCI(
   });
 
   if (!mergeResponse.ok) {
-    // Last resort: resolve and retry
-    await resolveAndMerge(owner, repo, branch, prNumber, ghToken, rawToken);
+    // Merge failed (conflicts, branch protection, etc.) — leave PR open with comment
+    const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+    await fetch(commentUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ body: "**forgectl:** Merge failed after CI passed. Leaving PR open for manual review." }),
+    }).catch(() => {});
   }
 }
 
-export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache } {
+export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIssueCache): TrackerAdapter & { subIssueCache: SubIssueCache; mergeQueue: MergeQueue } {
   if (!config.repo) {
     throw new Error("GitHub adapter: repo is required");
   }
@@ -370,13 +396,17 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
 
   // Internal state
   let lastETag: string | null = null;
-  let lastUpdatedAt: string | null = null;
   let cachedIssues: TrackerIssue[] = [];
   let rateLimitRemaining = Infinity;
   let rateLimitReset = 0;
 
   // Sub-issue TTL cache (5min default) — use external cache if provided (singleton pattern)
   const subIssueCache = externalCache ?? new SubIssueCache();
+
+  // Sequential merge queue — serializes PR merges to prevent parallel corruption
+  const mergeQueue = new MergeQueue(async (prNumber: number, branch: string) => {
+    await autoMergeWithCI(owner, repo, branch, prNumber, token, config.token);
+  });
 
   /**
    * Perform an authenticated fetch against the GitHub API.
@@ -483,9 +513,10 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
     return result ? result.issues : [];
   }
 
-  const adapter: TrackerAdapter & { subIssueCache: SubIssueCache } = {
+  const adapter: TrackerAdapter & { subIssueCache: SubIssueCache; mergeQueue: MergeQueue } = {
     kind: "github",
     subIssueCache,
+    mergeQueue,
 
     async fetchCandidateIssues(): Promise<TrackerIssue[]> {
       const params = new URLSearchParams({
@@ -655,17 +686,6 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
         console.warn(`[forgectl] Sub-issue dependency cycle detected: ${cycleError}`);
       }
 
-      // Update lastUpdatedAt for delta polling
-      if (enriched.length > 0) {
-        const maxUpdated = enriched.reduce((max, issue) =>
-          issue.updated_at > max ? issue.updated_at : max,
-          enriched[0].updated_at,
-        );
-        if (maxUpdated) {
-          lastUpdatedAt = maxUpdated;
-        }
-      }
-
       cachedIssues = enriched;
       return cachedIssues;
     },
@@ -762,9 +782,9 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
       });
       const data = await response.json() as { html_url?: string; number?: number };
 
-      // Auto-merge: resolve conflicts, wait for CI, then merge
+      // Enqueue for sequential merge — waits for CI, merges one at a time
       if (data.number) {
-        void autoMergeWithCI(owner, repo, branch, data.number, token, config.token).catch(() => {
+        void mergeQueue.enqueue(branch, data.number).catch(() => {
           // Non-fatal — PR stays open for manual merge
         });
       }
