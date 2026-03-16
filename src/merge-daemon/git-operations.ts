@@ -49,9 +49,10 @@ export interface CloneResult {
 export function cloneAndRebase(repoUrl: string, branch: string, authorName = "forgectl-merger[bot]", authorEmail = "forge-merger@localhost"): CloneResult {
   const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-merge-"));
 
-  execSync(`git clone --depth=100 "${repoUrl}" .`, { cwd: tmpDir, stdio: "pipe" });
+  execSync(`git clone --no-checkout "${repoUrl}" .`, { cwd: tmpDir, stdio: "pipe" });
   execSync(`git config user.name "${authorName}"`, { cwd: tmpDir, stdio: "pipe" });
   execSync(`git config user.email "${authorEmail}"`, { cwd: tmpDir, stdio: "pipe" });
+  execSync(`git fetch origin "${branch}":refs/remotes/origin/"${branch}"`, { cwd: tmpDir, stdio: "pipe" });
   execSync(`git checkout "${branch}"`, { cwd: tmpDir, stdio: "pipe" });
 
   return { tmpDir };
