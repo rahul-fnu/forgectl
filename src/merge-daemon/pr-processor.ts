@@ -148,7 +148,7 @@ export class PRProcessor {
       }
 
       // Step 5+6: Wait for CI then merge, with retry on 405 (branch not up to date)
-      const maxMergeAttempts = 3;
+      const maxMergeAttempts = 5;
       for (let mergeAttempt = 1; mergeAttempt <= maxMergeAttempts; mergeAttempt++) {
         // Re-fetch head SHA (may have changed from rebase/force-push)
         const prData = await this.fetchPRData(pr.number);
@@ -173,21 +173,30 @@ export class PRProcessor {
 
         const body = await mergeResponse.text();
 
-        // 405 = branch not up to date with main (strict protection) — rebase and retry
+        // 405 = branch not up to date or checks pending — check if rebase is actually needed
         if (mergeResponse.status === 405 && mergeAttempt < maxMergeAttempts) {
-          this.logger.info("merge-daemon", `PR #${pr.number}: Branch not up to date, rebasing (attempt ${mergeAttempt}/${maxMergeAttempts})`);
-          // Clean up old tmpDir and re-clone
-          if (tmpDir) cleanupTmpDir(tmpDir);
-          const reclone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
-          tmpDir = reclone.tmpDir;
-          const newConflicts = mergeMain(tmpDir);
-          if (newConflicts.length > 0) {
-            this.logger.info("merge-daemon", `PR #${pr.number}: Resolving ${newConflicts.length} conflict(s) on retry`);
-            await resolveConflicts(tmpDir, newConflicts, token);
-            await verifyMerge(tmpDir, newConflicts);
+          // Check if the branch is actually behind main (mergeable_state)
+          const prCheck = await this.fetchPRData(pr.number) as { mergeable_state?: string; mergeable?: boolean } | null;
+          const needsRebase = prCheck?.mergeable === false || prCheck?.mergeable_state === "behind" || prCheck?.mergeable_state === "dirty";
+
+          if (needsRebase) {
+            this.logger.info("merge-daemon", `PR #${pr.number}: Branch behind main, rebasing (attempt ${mergeAttempt}/${maxMergeAttempts})`);
+            if (tmpDir) cleanupTmpDir(tmpDir);
+            const reclone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
+            tmpDir = reclone.tmpDir;
+            const newConflicts = mergeMain(tmpDir);
+            if (newConflicts.length > 0) {
+              this.logger.info("merge-daemon", `PR #${pr.number}: Resolving ${newConflicts.length} conflict(s) on retry`);
+              await resolveConflicts(tmpDir, newConflicts, token);
+              await verifyMerge(tmpDir, newConflicts);
+            }
+            pushResolved(tmpDir, pr.branch);
+          } else {
+            // Branch is up to date but checks still pending — just wait and retry
+            this.logger.info("merge-daemon", `PR #${pr.number}: Checks still pending, waiting 60s before retry (attempt ${mergeAttempt}/${maxMergeAttempts})`);
+            await new Promise((r) => setTimeout(r, 60_000));
           }
-          pushResolved(tmpDir, pr.branch);
-          continue; // Wait for CI on new head and retry merge
+          continue;
         }
 
         return this.recordResult(pr, "failed", `Merge API returned ${mergeResponse.status}: ${body}`);
