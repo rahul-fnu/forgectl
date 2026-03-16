@@ -176,6 +176,17 @@ export const ConfigSchema = z.object({
 
   github_app: GitHubAppConfigSchema.optional(),
 
+  merger_app: GitHubAppConfigSchema.optional(),
+
+  merge_daemon: z.object({
+    ci_timeout_ms: z.number().int().positive().default(2_700_000), // 45 min
+    poll_interval_ms: z.number().int().positive().default(60_000),
+    enable_review: z.boolean().default(true),
+    enable_build_fix: z.boolean().default(true),
+    validation_commands: z.array(z.string()).default([]),
+    branch_pattern: z.string().default("forge/*"),
+  }).optional(),
+
   team: z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),

@@ -25,6 +25,7 @@ import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
 import { costsCommand } from "./cli/costs.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
+import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
 
 const program = new Command();
 
@@ -474,6 +475,46 @@ boardCardCmd
       process.exit(1);
     }
     await boardCardRunsCommand(opts);
+  });
+
+// forgectl merge-daemon — start a separate daemon that processes forge PRs sequentially
+program
+  .command("merge-daemon")
+  .description("Start merge daemon (processes forge PRs sequentially: rebase, fix, review, CI, merge)")
+  .option("-p, --port <port>", "daemon port", "4857")
+  .option("--foreground", "Run in foreground (don't detach)")
+  .option("--ci-timeout <minutes>", "CI timeout in minutes", "45")
+  .action(async (opts: { port: string; foreground?: boolean; ciTimeout: string }) => {
+    const port = parseInt(opts.port, 10);
+    const ciTimeoutMs = parseInt(opts.ciTimeout, 10) * 60 * 1000;
+
+    if (isMergeDaemonRunning()) {
+      const pid = readMergeDaemonPid();
+      console.log(`forgectl merge-daemon is already running (PID ${pid})`);
+      return;
+    }
+
+    if (opts.foreground) {
+      const { startMergeDaemon } = await import("./merge-daemon/server.js");
+      await startMergeDaemon(port, ciTimeoutMs);
+    } else {
+      const child = spawn(process.execPath, [
+        process.argv[1], "merge-daemon", "--foreground",
+        "--port", String(port),
+        "--ci-timeout", opts.ciTimeout,
+      ], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      await new Promise(r => setTimeout(r, 500));
+      if (isMergeDaemonRunning()) {
+        console.log(`forgectl merge-daemon started on http://127.0.0.1:${port}`);
+      } else {
+        console.error("Failed to start merge-daemon. Run with --foreground to see errors.");
+        process.exit(1);
+      }
+    }
   });
 
 // forgectl doctor

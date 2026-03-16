@@ -361,7 +361,7 @@ async function autoMergeWithCI(
     }
   }
 
-  // Step 3: Merge — if merge API fails, leave PR open (never force-merge)
+  // Step 3: Merge — if merge API fails, try conflict resolution then re-wait for CI
   const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
   const mergeResponse = await fetch(mergeUrl, {
     method: "PUT",
@@ -370,13 +370,61 @@ async function autoMergeWithCI(
   });
 
   if (!mergeResponse.ok) {
-    // Merge failed (conflicts, branch protection, etc.) — leave PR open with comment
-    const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
-    await fetch(commentUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ body: "**forgectl:** Merge failed after CI passed. Leaving PR open for manual review." }),
-    }).catch(() => {});
+    // Merge failed (likely conflicts with main) — resolve and retry
+    try {
+      await resolveAndMerge(owner, repo, branch, prNumber, ghToken, rawToken);
+      // resolveAndMerge force-pushed resolved branch and retried merge API internally.
+      // The internal merge may fail if CI hasn't run on the new head yet.
+      // Re-check: fetch new head SHA and wait for CI before final merge attempt.
+      const prRefetch = await (await fetch(prUrl, { headers })).json() as { head?: { sha?: string } };
+      const newSha = prRefetch.head?.sha;
+      if (newSha && newSha !== headSha) {
+        // New head from conflict resolution — wait for CI on it
+        const ciMaxWait = 15 * 60 * 1000;
+        const ciPoll = 30_000;
+        const ciStart = Date.now();
+        let ciOk = false;
+
+        while (Date.now() - ciStart < ciMaxWait) {
+          const checksUrl = `${API_BASE}/repos/${owner}/${repo}/commits/${newSha}/check-runs`;
+          const checks = await (await fetch(checksUrl, { headers })).json() as {
+            check_runs?: Array<{ status: string; conclusion: string | null }>;
+          };
+          const runs = checks.check_runs ?? [];
+          if (runs.length === 0) { ciOk = true; break; }
+          const allDone = runs.every((r) => r.status === "completed");
+          if (allDone) {
+            ciOk = runs.every((r) => r.conclusion === "success" || r.conclusion === "skipped");
+            break;
+          }
+          await new Promise((r) => setTimeout(r, ciPoll));
+        }
+
+        if (ciOk) {
+          // CI passed on resolved branch — final merge attempt
+          await fetch(mergeUrl, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({ merge_method: "squash" }),
+          });
+        } else {
+          const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+          await fetch(commentUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ body: "**forgectl:** Conflicts resolved but CI failed on rebased branch. Leaving PR open." }),
+          }).catch(() => {});
+        }
+      }
+    } catch {
+      // Conflict resolution itself failed — leave PR open with comment
+      const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+      await fetch(commentUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body: "**forgectl:** Merge failed and conflict resolution failed. Leaving PR open for manual review." }),
+      }).catch(() => {});
+    }
   }
 }
 
@@ -790,6 +838,31 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
       }
 
       return data.html_url;
+    },
+
+    async createAndMergePullRequest(
+      branch: string,
+      title: string,
+      body: string,
+    ): Promise<{ merged: boolean; prUrl?: string; error?: string }> {
+      const url = `${API_BASE}/repos/${owner}/${repo}/pulls`;
+      const response = await githubFetch(url, {
+        method: "POST",
+        body: JSON.stringify({ title, body, head: branch, base: "main" }),
+      });
+      const data = await response.json() as { html_url?: string; number?: number };
+
+      if (!data.number) {
+        return { merged: false, prUrl: data.html_url, error: "Failed to create PR" };
+      }
+
+      // Await the full merge lifecycle (CI wait + merge)
+      const mergeResult = await mergeQueue.enqueue(branch, data.number);
+      return {
+        merged: mergeResult.merged,
+        prUrl: data.html_url,
+        error: mergeResult.error,
+      };
     },
   };
 

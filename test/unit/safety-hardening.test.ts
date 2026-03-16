@@ -374,7 +374,7 @@ describe("autoMergeWithCI safety patterns", () => {
       new URL("../../src/tracker/github.ts", import.meta.url),
       "utf-8",
     );
-    expect(source).toContain("Merge failed after CI passed");
+    expect(source).toContain("Merge failed and conflict resolution failed");
   });
 
   it("uses ciResolved flag for timeout detection", async () => {

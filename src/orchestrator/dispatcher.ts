@@ -485,20 +485,6 @@ async function executeWorkerAndHandle(
       logger.warn("dispatcher", `Failed to post comment for ${issue.identifier}: ${msg}`);
     });
 
-    // Create PR if branch exists and tracker supports it
-    if (result.branch && tracker.createPullRequest) {
-      tracker.createPullRequest(
-        result.branch,
-        `[forgectl] ${issue.title}`,
-        `Closes #${issue.id}\n\nAutomated changes by forgectl for ${issue.identifier}.`,
-      ).then((prUrl) => {
-        if (prUrl) logger.info("dispatcher", `PR created for ${issue.identifier}: ${prUrl}`);
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn("dispatcher", `Failed to create PR for ${issue.identifier}: ${msg}`);
-      });
-    }
-
     // Classify failure and handle retry
     const failureType = classifyFailure(result.agentResult.status);
 
@@ -511,6 +497,28 @@ async function executeWorkerAndHandle(
       failureType === "continuation" ? "completed" : "failed",
     );
 
+    // Create PR (fire-and-forget) — the merge daemon handles merging.
+    // Close the issue after successful agent run regardless of merge status.
+    let prCreated = false;
+    if (result.branch && failureType === "continuation") {
+      if (tracker.createPullRequest) {
+        try {
+          const prUrl = await tracker.createPullRequest(
+            result.branch,
+            `[forgectl] ${issue.title}`,
+            `Closes #${issue.id}\n\nAutomated changes by forgectl for ${issue.identifier}.`,
+          );
+          if (prUrl) {
+            logger.info("dispatcher", `PR created for ${issue.identifier}: ${prUrl}`);
+            prCreated = true;
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to create PR for ${issue.identifier}: ${msg}`);
+        }
+      }
+    }
+
     if (failureType === "continuation") {
       // Synthesizer-gated close: if this issue has the forge:synthesize label, it is
       // a synthesizer run. Close the parent and remove the label instead of the
@@ -519,8 +527,8 @@ async function executeWorkerAndHandle(
 
       if (isSynthesizerRun) {
         handleSynthesizerOutcome(issue, "success", tracker, logger);
-      } else {
-        // Auto-close issue when configured
+      } else if (prCreated || !result.branch) {
+        // Fire-and-forget: close the issue after PR creation (merge daemon handles merging)
         if (config.tracker?.auto_close) {
           tracker.updateState(issue.id, "closed").catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -528,18 +536,22 @@ async function executeWorkerAndHandle(
           });
         }
 
-        // Add done label when configured
         if (config.tracker?.done_label) {
           tracker.updateLabels(issue.id, [config.tracker.done_label], [orchestratorConfig.in_progress_label]).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
           });
         }
+      } else {
+        // PR creation failed — leave issue open
+        logger.warn("dispatcher", `Issue ${issue.identifier} completed but PR creation failed — leaving issue open`);
+        tracker.postComment(
+          issue.id,
+          "**forgectl:** Agent completed work but PR could not be created. Issue left open for manual resolution.",
+        ).catch(() => {});
+        tracker.updateLabels(issue.id, [], [orchestratorConfig.in_progress_label]).catch(() => {});
       }
 
-      // Release immediately — the issue is done (closed + done-labeled).
-      // The continuation delay was designed for multi-turn re-dispatch of the
-      // same issue, but completed+closed issues don't need re-dispatch.
       logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
       releaseIssue(state, issue.id);
       logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);

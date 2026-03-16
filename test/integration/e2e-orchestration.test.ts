@@ -60,6 +60,7 @@ function makeTracker(): TrackerAdapter & {
   };
   issueStates: Map<string, string>;
   candidateIssues: TrackerIssue[];
+  mergeResult: { merged: boolean; prUrl?: string; error?: string };
 } {
   const calls = {
     postComment: [] as Array<{ issueId: string; body: string }>,
@@ -68,11 +69,13 @@ function makeTracker(): TrackerAdapter & {
   };
   const issueStates = new Map<string, string>();
   const candidateIssues: TrackerIssue[] = [];
+  const mergeResult = { merged: true, prUrl: "https://github.com/org/repo/pull/1" };
 
   return {
     calls,
     issueStates,
     candidateIssues,
+    mergeResult,
     fetchCandidateIssues: vi.fn(async () => candidateIssues),
     fetchIssueStatesByIds: vi.fn(async (ids: string[]) => {
       const result = new Map<string, string>();
@@ -92,6 +95,8 @@ function makeTracker(): TrackerAdapter & {
     updateLabels: vi.fn(async (issueId: string, add: string[], remove: string[]) => {
       calls.updateLabels.push({ issueId, add, remove });
     }),
+    createPullRequest: vi.fn(async () => mergeResult.prUrl),
+    createAndMergePullRequest: vi.fn(async () => mergeResult),
   };
 }
 
@@ -294,6 +299,36 @@ describe("E2E Orchestration", () => {
       await new Promise((r) => setTimeout(r, 100));
 
       expect(tracker.calls.updateState).toHaveLength(0);
+    });
+
+    it("does not close issue when PR creation fails", async () => {
+      config = makeConfig({ autoClose: true, doneLabel: "done" });
+      const issue = makeIssue();
+
+      // Simulate PR creation failure (returns undefined URL)
+      (tracker.createPullRequest as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+
+      shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult());
+
+      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+
+      // Wait for the comment about PR creation failure
+      await vi.waitFor(() => {
+        const prFailComment = tracker.calls.postComment.find(
+          (c) => c.body.includes("PR could not be created"),
+        );
+        expect(prFailComment).toBeDefined();
+      }, { timeout: 2000 });
+
+      // Issue should NOT be auto-closed (only agent report comment, no state change)
+      const closeCall = tracker.calls.updateState.find((c) => c.state === "closed");
+      expect(closeCall).toBeUndefined();
+
+      // In-progress label should be removed
+      const removedLabel = tracker.calls.updateLabels.find(
+        (c) => c.remove.includes("in-progress") && c.add.length === 0,
+      );
+      expect(removedLabel).toBeDefined();
     });
 
     it("records completion metrics on success", async () => {

@@ -13,11 +13,13 @@ export const codeWorkflow: WorkflowDefinition = {
 Your workspace is at /workspace containing the full project repository.
 
 Rules:
+- Before implementing, search the codebase for existing solutions to the same problem. Reuse existing logic instead of reimplementing.
 - Make the minimal changes needed to complete the task
 - Write tests for any new functionality
 - Follow existing code style and conventions
 - Do not modify linting rules, test configs, or build scripts
-- Do not install new dependencies unless the task requires it`,
+- Do not install new dependencies unless the task requires it
+- When consolidating or refactoring, verify the old code is actually deleted, not just that new code exists`,
   validation: {
     steps: [
       { name: "lint", command: "npm run lint", retries: 3, description: "Code style and quality checks" },
