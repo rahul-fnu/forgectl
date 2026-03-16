@@ -147,15 +147,26 @@ export class PRProcessor {
         await this.reviewDiff(tmpDir, pr);
       }
 
-      // Step 5+6: Wait for CI then merge, with retry on 405 (branch not up to date)
+      // Step 5+6: Wait for CI then merge, with retry on failure
       const maxMergeAttempts = 5;
+      const maxBuildFixes = 3;
+      let buildFixCount = 0;
       for (let mergeAttempt = 1; mergeAttempt <= maxMergeAttempts; mergeAttempt++) {
         // Re-fetch head SHA (may have changed from rebase/force-push)
         const prData = await this.fetchPRData(pr.number);
         const currentSha = prData?.head?.sha ?? pr.sha;
         const ciPassed = await this.waitForCI(pr.number, currentSha);
         if (!ciPassed) {
-          return this.recordResult(pr, "failed", "CI did not pass");
+          // CI failed — try to fix the build if enabled
+          if (this.config.enableBuildFix && buildFixCount < maxBuildFixes) {
+            buildFixCount++;
+            this.logger.info("merge-daemon", `PR #${pr.number}: CI failed, attempting build fix (${buildFixCount}/${maxBuildFixes})`);
+            const fixed = await this.fixCIFailure(pr, currentSha);
+            if (fixed) {
+              continue; // New head pushed — re-wait for CI
+            }
+          }
+          return this.recordResult(pr, "failed", `CI failed after ${buildFixCount} fix attempt(s)`);
         }
 
         // Attempt squash merge
@@ -248,7 +259,6 @@ export class PRProcessor {
         const allPassed = runs.every((r) => r.conclusion === "success" || r.conclusion === "skipped");
         if (!allPassed) {
           this.logger.warn("merge-daemon", `PR #${prNumber}: CI failed`);
-          await this.postComment(prNumber, "**forgectl merge-daemon:** CI checks failed. Skipping this PR.");
         }
         return allPassed;
       }
@@ -326,6 +336,170 @@ export class PRProcessor {
     } catch {
       // Review is best-effort
       this.logger.warn("merge-daemon", `PR #${pr.number}: Review step failed (best-effort, continuing)`);
+    }
+  }
+
+  /**
+   * Fix a CI failure by fetching error logs, cloning the branch, and using Claude to fix.
+   * Returns true if a fix was pushed (caller should re-wait for CI).
+   */
+  async fixCIFailure(pr: PRInfo, failedSha: string): Promise<boolean> {
+    const { owner, repo, rawToken } = this.config;
+    const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+    const authorName = this.config.mergerAuthorName ?? "forgectl-merger[bot]";
+    const authorEmail = this.config.mergerAuthorEmail ?? "forge-merger@localhost";
+
+    // Step 1: Fetch CI error logs
+    const errorLog = await this.fetchCIErrorLog(pr.number, failedSha);
+    if (!errorLog) {
+      this.logger.warn("merge-daemon", `PR #${pr.number}: Could not fetch CI error logs`);
+      return false;
+    }
+
+    // Step 2: Clone the branch
+    let fixDir: string | undefined;
+    try {
+      const clone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
+      fixDir = clone.tmpDir;
+
+      // Step 3: Write error context and invoke Claude
+      const { writeFileSync: ws } = await import("node:fs");
+      const prompt = [
+        `The CI build is failing on this branch. Here are the error logs:`,
+        ``,
+        errorLog,
+        ``,
+        `Fix the build errors. Rules:`,
+        `- Read the failing source files before making changes`,
+        `- Fix the actual errors shown above — do not change tests or disable checks`,
+        `- Make minimal changes to fix the build`,
+        `- Stage your changes with git add`,
+      ].join("\n");
+
+      const promptFile = `${fixDir}/.forgectl-ci-fix-prompt.txt`;
+      ws(promptFile, prompt);
+      execSync(
+        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 15`,
+        { cwd: fixDir, encoding: "utf-8", timeout: 300_000 },
+      );
+
+      // Step 4: Check if Claude made changes
+      const status = execSync(`git status --porcelain`, { cwd: fixDir, encoding: "utf-8" }).trim();
+      if (!status) {
+        this.logger.warn("merge-daemon", `PR #${pr.number}: Claude made no changes`);
+        return false;
+      }
+
+      // Step 5: Commit and push
+      execSync(`git add -A`, { cwd: fixDir, stdio: "pipe" });
+      execSync(`git commit -m "fix: CI build errors (forgectl merge-daemon)"`, { cwd: fixDir, stdio: "pipe" });
+      execSync(`git push origin "${pr.branch}" --force`, { cwd: fixDir, stdio: "pipe" });
+
+      this.logger.info("merge-daemon", `PR #${pr.number}: Build fix pushed`);
+      await this.postComment(pr.number, `**forgectl merge-daemon:** Pushed build fix based on CI error logs. Waiting for CI to re-run.`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("merge-daemon", `PR #${pr.number}: CI fix failed: ${msg}`);
+      return false;
+    } finally {
+      if (fixDir) cleanupTmpDir(fixDir);
+    }
+  }
+
+  /**
+   * Fetch CI error logs from GitHub Actions for a failed SHA.
+   * Returns the combined error output, or null if unavailable.
+   */
+  private async fetchCIErrorLog(prNumber: number, sha: string): Promise<string | null> {
+    const { owner, repo } = this.config;
+    try {
+      // Get check runs for the SHA
+      const checksUrl = `${API_BASE}/repos/${owner}/${repo}/commits/${sha}/check-runs`;
+      const checksResp = await fetch(checksUrl, { headers: this.headers });
+      if (!checksResp.ok) return null;
+
+      const checks = (await checksResp.json()) as {
+        check_runs?: Array<{
+          id: number;
+          name: string;
+          conclusion: string | null;
+          details_url?: string;
+          html_url?: string;
+        }>;
+      };
+
+      const failedRuns = (checks.check_runs ?? []).filter((r) => r.conclusion === "failure");
+      if (failedRuns.length === 0) return null;
+
+      // Try to get annotations (error messages) from failed runs
+      const errors: string[] = [];
+      for (const run of failedRuns) {
+        const annotUrl = `${API_BASE}/repos/${owner}/${repo}/check-runs/${run.id}/annotations`;
+        const annotResp = await fetch(annotUrl, { headers: this.headers });
+        if (annotResp.ok) {
+          const annotations = (await annotResp.json()) as Array<{
+            path: string;
+            message: string;
+            annotation_level: string;
+            start_line?: number;
+          }>;
+          for (const a of annotations) {
+            if (a.annotation_level === "failure" || a.annotation_level === "error") {
+              errors.push(`${a.path}:${a.start_line ?? 0}: ${a.message}`);
+            }
+          }
+        }
+      }
+
+      // If we got annotations, use those
+      if (errors.length > 0) {
+        return errors.join("\n");
+      }
+
+      // Fallback: try to get the workflow run logs via the Actions API
+      // Find the workflow run for this SHA
+      const runsUrl = `${API_BASE}/repos/${owner}/${repo}/actions/runs?head_sha=${sha}&per_page=5`;
+      const runsResp = await fetch(runsUrl, { headers: this.headers });
+      if (!runsResp.ok) return null;
+
+      const runsData = (await runsResp.json()) as {
+        workflow_runs?: Array<{ id: number; conclusion: string }>;
+      };
+      const failedWorkflow = (runsData.workflow_runs ?? []).find((r) => r.conclusion === "failure");
+      if (!failedWorkflow) return null;
+
+      // Get jobs for the failed workflow
+      const jobsUrl = `${API_BASE}/repos/${owner}/${repo}/actions/runs/${failedWorkflow.id}/jobs`;
+      const jobsResp = await fetch(jobsUrl, { headers: this.headers });
+      if (!jobsResp.ok) return null;
+
+      const jobsData = (await jobsResp.json()) as {
+        jobs?: Array<{ id: number; name: string; conclusion: string }>;
+      };
+      const failedJob = (jobsData.jobs ?? []).find((j) => j.conclusion === "failure");
+      if (!failedJob) return null;
+
+      // Get the log for the failed job (returns plain text)
+      const logUrl = `${API_BASE}/repos/${owner}/${repo}/actions/jobs/${failedJob.id}/logs`;
+      const logResp = await fetch(logUrl, { headers: this.headers });
+      if (!logResp.ok) return null;
+
+      const fullLog = await logResp.text();
+      // Extract just the error-relevant lines (last 200 lines or lines with "error")
+      const lines = fullLog.split("\n");
+      const errorLines = lines.filter(
+        (l) => /error|failed|cannot find|not found|expected|unexpected/i.test(l),
+      );
+      if (errorLines.length > 0) {
+        return errorLines.slice(0, 100).join("\n");
+      }
+      // Fallback: last 100 lines
+      return lines.slice(-100).join("\n");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("merge-daemon", `PR #${prNumber}: Error fetching CI logs: ${msg}`);
+      return null;
     }
   }
 
