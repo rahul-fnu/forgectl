@@ -151,10 +151,16 @@ export async function verifyMerge(tmpDir: string, conflicts: string[]): Promise<
 }
 
 /**
- * Commit the merge resolution and force-push to the remote branch.
+ * Commit the merge resolution (if needed) and force-push to the remote branch.
+ * If the merge was clean (no conflicts to resolve), there may be nothing to commit.
  */
 export function pushResolved(tmpDir: string, branch: string): void {
-  execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+  // Only commit if there are staged changes (conflict resolution) or an in-progress merge
+  try {
+    execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+  } catch {
+    // Nothing to commit (clean merge already created the commit)
+  }
   execSync(`git push origin "${branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
 }
 
