@@ -46,9 +46,10 @@ export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number): Promi
     if (config.merger_app.installation_id) {
       try {
         const { createGitHubAppService } = await import("../github/app.js");
+        const resolvedKeyPath = config.merger_app.private_key_path.replace(/^~/, process.env.HOME || "/tmp");
         const ghAppService = createGitHubAppService({
           appId: config.merger_app.app_id,
-          privateKeyPath: config.merger_app.private_key_path,
+          privateKeyPath: resolvedKeyPath,
           webhookSecret: config.merger_app.webhook_secret,
           installationId: config.merger_app.installation_id,
         });
