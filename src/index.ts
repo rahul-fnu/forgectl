@@ -570,6 +570,7 @@ cacheCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand } from "./cli/kg.js";
 
 const repoCmd = program
   .command("repo")
@@ -596,6 +597,35 @@ repoCmd
   .command("show <name>")
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
+
+// forgectl kg — knowledge graph commands
+const kgCmd = program
+  .command("kg")
+  .description("Codebase knowledge graph");
+
+kgCmd
+  .command("build")
+  .description("Full knowledge graph rebuild")
+  .option("--db <path>", "Custom database path")
+  .action(kgBuildCommand);
+
+kgCmd
+  .command("update")
+  .description("Incremental update (changed files since last build)")
+  .option("--db <path>", "Custom database path")
+  .action(kgUpdateCommand);
+
+kgCmd
+  .command("query <module>")
+  .description("Show dependencies, coupling, test coverage for a module")
+  .option("--db <path>", "Custom database path")
+  .action(kgQueryCommand);
+
+kgCmd
+  .command("stats")
+  .description("Show graph statistics")
+  .option("--db <path>", "Custom database path")
+  .action(kgStatsCommand);
 
 /**
  * Resolve --config or --repo to a config file path.
