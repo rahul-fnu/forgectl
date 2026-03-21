@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 import { runCommand } from "./cli/run.js";
 import { authCommand } from "./cli/auth.js";
 import { initCommand } from "./cli/init.js";
@@ -121,8 +122,15 @@ program
   .description("Start daemon with orchestration enabled (polls tracker, dispatches agents)")
   .option("-p, --port <port>", "daemon port", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
-  .action(async (opts: { port: string; foreground?: boolean }) => {
+  .option("-c, --config <path>", "Config file path")
+  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
+  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
+    if (opts.config && opts.repo) {
+      console.error("Error: --config and --repo are mutually exclusive");
+      process.exit(1);
+    }
     const port = parseInt(opts.port, 10);
+    const configPath = resolveConfigOption(opts);
 
     if (isDaemonRunning()) {
       const pid = readPid();
@@ -132,9 +140,10 @@ program
 
     if (opts.foreground) {
       const { startDaemon } = await import("./daemon/server.js");
-      await startDaemon(port, true);
+      await startDaemon(port, true, configPath);
     } else {
-      const child = spawn(process.execPath, [process.argv[1], "orchestrate", "--foreground", "--port", String(port)], {
+      const extraArgs = buildConfigArgs(opts);
+      const child = spawn(process.execPath, [process.argv[1], "orchestrate", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
       });
@@ -155,8 +164,15 @@ program
   .description("Start the forgectl daemon")
   .option("-p, --port <number>", "Port to listen on", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
-  .action(async (opts: { port: string; foreground?: boolean }) => {
+  .option("-c, --config <path>", "Config file path")
+  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
+  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
+    if (opts.config && opts.repo) {
+      console.error("Error: --config and --repo are mutually exclusive");
+      process.exit(1);
+    }
     const port = parseInt(opts.port, 10);
+    const configPath = resolveConfigOption(opts);
 
     if (isDaemonRunning()) {
       const pid = readPid();
@@ -166,10 +182,11 @@ program
 
     if (opts.foreground) {
       const { startDaemon } = await import("./daemon/server.js");
-      await startDaemon(port);
+      await startDaemon(port, false, configPath);
     } else {
       // Spawn detached background process
-      const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port)], {
+      const extraArgs = buildConfigArgs(opts);
+      const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
       });
@@ -484,9 +501,16 @@ program
   .option("-p, --port <port>", "daemon port", "4857")
   .option("--foreground", "Run in foreground (don't detach)")
   .option("--ci-timeout <minutes>", "CI timeout in minutes", "45")
-  .action(async (opts: { port: string; foreground?: boolean; ciTimeout: string }) => {
+  .option("-c, --config <path>", "Config file path")
+  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
+  .action(async (opts: { port: string; foreground?: boolean; ciTimeout: string; config?: string; repo?: string }) => {
+    if (opts.config && opts.repo) {
+      console.error("Error: --config and --repo are mutually exclusive");
+      process.exit(1);
+    }
     const port = parseInt(opts.port, 10);
     const ciTimeoutMs = parseInt(opts.ciTimeout, 10) * 60 * 1000;
+    const configPath = resolveConfigOption(opts);
 
     if (isMergeDaemonRunning()) {
       const pid = readMergeDaemonPid();
@@ -496,12 +520,14 @@ program
 
     if (opts.foreground) {
       const { startMergeDaemon } = await import("./merge-daemon/server.js");
-      await startMergeDaemon(port, ciTimeoutMs);
+      await startMergeDaemon(port, ciTimeoutMs, configPath);
     } else {
+      const extraArgs = buildConfigArgs(opts);
       const child = spawn(process.execPath, [
         process.argv[1], "merge-daemon", "--foreground",
         "--port", String(port),
         "--ci-timeout", opts.ciTimeout,
+        ...extraArgs,
       ], {
         detached: true,
         stdio: "ignore",
@@ -541,5 +567,55 @@ cacheCmd
   .command("prebuild <workflow>")
   .description("Build and cache the image for a workflow without running anything")
   .action(cachePrebuildCommand);
+
+// forgectl repo — manage per-repo config profiles
+import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+
+const repoCmd = program
+  .command("repo")
+  .description("Manage per-repo config profiles (~/.forgectl/repos/)");
+
+repoCmd
+  .command("list")
+  .description("List configured repo profiles")
+  .action(repoListCommand);
+
+repoCmd
+  .command("add <name>")
+  .description("Add a repo profile")
+  .requiredOption("--tracker-repo <owner/repo>", "GitHub repo (owner/repo)")
+  .option("--labels <labels>", "Comma-separated tracker labels")
+  .option("--token <token>", "Token or env var reference (e.g. $GH_TOKEN, $gh)")
+  .action(repoAddCommand);
+
+repoCmd
+  .command("show <name>")
+  .description("Show merged config for a repo profile")
+  .action(repoShowCommand);
+
+/**
+ * Resolve --config or --repo to a config file path.
+ * --repo resolves via loadConfigWithOptions in the loader.
+ */
+function resolveConfigOption(opts: { config?: string; repo?: string }): string | undefined {
+  if (opts.config) return resolve(opts.config);
+  if (opts.repo) {
+    // Resolve repo profile to its overlay path — actual merge happens in loadConfig
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const profilePath = resolve(home, ".forgectl", "repos", `${opts.repo}.yaml`);
+    // We use a sentinel prefix so loadConfig knows to do profile merge
+    return `repo:${profilePath}`;
+  }
+  return undefined;
+}
+
+/**
+ * Build extra CLI args to forward --config or --repo to detached spawns.
+ */
+function buildConfigArgs(opts: { config?: string; repo?: string }): string[] {
+  if (opts.config) return ["--config", resolve(opts.config)];
+  if (opts.repo) return ["--repo", opts.repo];
+  return [];
+}
 
 program.parse();

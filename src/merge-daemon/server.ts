@@ -12,8 +12,8 @@ import { loadConfig } from "../config/loader.js";
 import { resolveToken } from "../tracker/token.js";
 import { Logger } from "../logging/logger.js";
 
-export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number): Promise<void> {
-  const config = loadConfig();
+export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number, configPath?: string): Promise<void> {
+  const config = loadConfig(configPath);
   const logger = new Logger(false);
 
   if (!config.tracker || config.tracker.kind !== "github" || !config.tracker.repo) {

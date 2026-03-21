@@ -36,11 +36,14 @@ import { ConfigSchema } from "../config/schema.js";
 import type { ValidatedWorkflowFile } from "../workflow/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
 
-export async function startDaemon(port = 4856, enableOrchestrator = false): Promise<void> {
+export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string): Promise<void> {
   const app = Fastify({ logger: false });
   await app.register(cors, { origin: true });
 
-  const config = loadConfig();
+  let config = loadConfig(configPath);
+
+  // Auto-derive workspace clone hook from tracker.repo when not explicitly configured
+  config = deriveWorkspaceHooks(config);
 
   // Initialize persistent storage
   const dbPath = config.storage?.db_path?.replace(/^~/, process.env.HOME || "/tmp");
@@ -70,7 +73,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
   }
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
-    const runConfig = loadConfig();
+    const runConfig = loadConfig(configPath);
     const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
     return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid, runRepo });
@@ -271,4 +274,29 @@ export async function startDaemon(port = 4856, enableOrchestrator = false): Prom
 
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+}
+
+/**
+ * Auto-derive workspace after_create hook from tracker.repo when not explicitly configured.
+ * Clones the repo and sets git identity for forgectl commits.
+ */
+export function deriveWorkspaceHooks(config: ForgectlConfig): ForgectlConfig {
+  if (
+    config.tracker?.kind === "github" &&
+    config.tracker.repo &&
+    !config.workspace?.hooks?.after_create
+  ) {
+    const repoUrl = `https://github.com/${config.tracker.repo}.git`;
+    return {
+      ...config,
+      workspace: {
+        ...(config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" }),
+        hooks: {
+          ...(config.workspace?.hooks ?? {}),
+          after_create: `git clone ${repoUrl} . && git config user.name forgectl && git config user.email forge@localhost`,
+        },
+      },
+    };
+  }
+  return config;
 }
