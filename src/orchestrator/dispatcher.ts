@@ -12,6 +12,8 @@ import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
+import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import type { EventRepository } from "../storage/repositories/events.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
@@ -30,6 +32,12 @@ import {
 export interface GitHubContext {
   octokit: unknown;
   repo: RepoContext;
+}
+
+/** Optional outcome logging dependencies. */
+export interface OutcomeDeps {
+  outcomeRepo: OutcomeRepository;
+  eventRepo?: EventRepository;
 }
 
 /** Optional governance context for pre-execution approval gate. */
@@ -262,6 +270,7 @@ export function dispatchIssue(
   subIssueCache?: SubIssueCache,
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
+  outcomeDeps?: OutcomeDeps,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -294,6 +303,7 @@ export function dispatchIssue(
     subIssueCache,
     skills,
     validationConfig,
+    outcomeDeps,
   );
 }
 
@@ -312,6 +322,7 @@ async function executeWorkerAndHandle(
   subIssueCache?: SubIssueCache,
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
+  outcomeDeps?: OutcomeDeps,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -533,6 +544,35 @@ async function executeWorkerAndHandle(
       });
     }
 
+    // Record outcome for the Outcome Analyzer
+    if (outcomeDeps) {
+      try {
+        const outcomeStatus = failureType === "continuation" ? "success" : "failure";
+        let rawEventsJson: string | undefined;
+        if (outcomeDeps.eventRepo) {
+          const events = outcomeDeps.eventRepo.findByRunId(issue.identifier);
+          if (events.length > 0) {
+            rawEventsJson = JSON.stringify(events);
+          }
+        }
+        const runId = issue.identifier;
+        outcomeDeps.outcomeRepo.insert({
+          id: runId,
+          taskId: issue.id,
+          startedAt: new Date(startedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          status: outcomeStatus,
+          totalTurns: result.agentResult.turnCount ?? undefined,
+          failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
+          failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
+          rawEventsJson,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to record outcome for ${issue.identifier}: ${msg}`);
+      }
+    }
+
     // Create PR (fire-and-forget) — the merge daemon handles merging.
     // Close the issue after successful agent run regardless of merge status.
     let prCreated = false;
@@ -655,6 +695,24 @@ async function executeWorkerAndHandle(
     metrics.recordCompletion(issue.id, { input: 0, output: 0, total: 0 }, runtimeMs, "failed");
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("dispatcher", `Unexpected worker error for ${issue.identifier}: ${msg}`);
+
+    // Record outcome for unexpected failures
+    if (outcomeDeps) {
+      try {
+        outcomeDeps.outcomeRepo.insert({
+          id: issue.identifier,
+          taskId: issue.id,
+          startedAt: new Date(startedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          status: "failure",
+          failureMode: "unexpected_error",
+          failureDetail: msg.slice(0, 2000),
+        });
+      } catch {
+        // Best-effort — don't mask the original error
+      }
+    }
+
     releaseIssue(state, issue.id);
   }
 }
