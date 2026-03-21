@@ -5,13 +5,15 @@ import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import type { RetryRepository } from "../storage/repositories/retries.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { claimIssue, releaseIssue } from "./state.js";
-import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
+import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
 import { createProgressComment } from "../github/comments.js";
 import { emitRunEvent } from "../logging/events.js";
@@ -36,6 +38,8 @@ export interface GovernanceOpts {
   autoApprove?: AutoApproveRule;
   runRepo?: RunRepository;
   runId?: string;
+  costRepo?: CostRepository;
+  retryRepo?: RetryRepository;
 }
 
 /**
@@ -497,6 +501,38 @@ async function executeWorkerAndHandle(
       failureType === "continuation" ? "completed" : "failed",
     );
 
+    // Persist cost data to run_costs table and emit cost event
+    if (governanceWithRunId?.costRepo && (tokenUsage.input > 0 || tokenUsage.output > 0)) {
+      const runId = governanceWithRunId.runId ?? issue.identifier;
+      const costUsd = (tokenUsage.input * 3 + tokenUsage.output * 15) / 1_000_000;
+      try {
+        governanceWithRunId.costRepo.insert({
+          runId,
+          agentType: config.agent.type,
+          model: config.agent.model,
+          inputTokens: tokenUsage.input,
+          outputTokens: tokenUsage.output,
+          costUsd,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to insert cost record for ${issue.identifier}: ${msg}`);
+      }
+      emitRunEvent({
+        runId: runId,
+        type: "cost",
+        timestamp: new Date().toISOString(),
+        data: {
+          agentType: config.agent.type,
+          model: config.agent.model,
+          inputTokens: tokenUsage.input,
+          outputTokens: tokenUsage.output,
+          costUsd,
+        },
+      });
+    }
+
     // Create PR (fire-and-forget) — the merge daemon handles merging.
     // Close the issue after successful agent run regardless of merge status.
     let prCreated = false;
@@ -553,6 +589,7 @@ async function executeWorkerAndHandle(
       }
 
       logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
+      cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
       releaseIssue(state, issue.id);
       logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
     } else {
@@ -585,6 +622,7 @@ async function executeWorkerAndHandle(
           .updateLabels(issue.id, [], [orchestratorConfig.in_progress_label])
           .catch(() => {});
 
+        cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
         releaseIssue(state, issue.id);
       } else {
         // Schedule error retry with backoff
@@ -606,6 +644,7 @@ async function executeWorkerAndHandle(
             releaseIssue(state, issue.id);
           },
           state,
+          governanceWithRunId?.retryRepo,
         );
       }
     }

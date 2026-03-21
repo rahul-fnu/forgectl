@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey as drizzlePrimaryKey, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -71,6 +71,17 @@ export const runCosts = sqliteTable("run_costs", {
   costUsd: text("cost_usd").notNull().default("0"), // stored as string for precision
   timestamp: text("timestamp").notNull(),
 });
+
+export const runRetries = sqliteTable("run_retries", {
+  runId: text("run_id").notNull(),
+  attempt: integer("attempt").notNull(),
+  nextRetryAt: text("next_retry_at"),
+  backoffMs: integer("backoff_ms"),
+  failureReason: text("failure_reason"),
+  createdAt: text("created_at"),
+}, (table) => [
+  drizzlePrimaryKey({ columns: [table.runId, table.attempt] }),
+]);
 
 export const executionLocks = sqliteTable(
   "execution_locks",

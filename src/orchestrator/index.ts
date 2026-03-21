@@ -4,6 +4,8 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import type { RetryRepository } from "../storage/repositories/retries.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { RepoContext } from "../github/types.js";
 import type { DelegationRepository } from "../storage/repositories/delegations.js";
@@ -32,6 +34,8 @@ export interface OrchestratorOptions {
   runRepo?: RunRepository;
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
+  costRepo?: CostRepository;
+  retryRepo?: RetryRepository;
   delegationRepo?: DelegationRepository;
   delegationManager?: DelegationManager;
   subIssueCache?: SubIssueCache;
@@ -54,6 +58,8 @@ export class Orchestrator {
   private promptTemplate: string;
   private readonly logger: Logger;
   private readonly runRepo?: RunRepository;
+  private readonly costRepo?: CostRepository;
+  private readonly retryRepo?: RetryRepository;
   private readonly autonomy?: AutonomyLevel;
   private readonly autoApprove?: AutoApproveRule;
   private readonly delegationRepo?: DelegationRepository;
@@ -75,6 +81,8 @@ export class Orchestrator {
     this.promptTemplate = opts.promptTemplate;
     this.logger = opts.logger;
     this.runRepo = opts.runRepo;
+    this.costRepo = opts.costRepo;
+    this.retryRepo = opts.retryRepo;
     this.autonomy = opts.autonomy;
     this.autoApprove = opts.autoApprove;
     this.delegationRepo = opts.delegationRepo;
@@ -111,6 +119,8 @@ export class Orchestrator {
       logger: this.logger,
       metrics: this.metrics,
       runRepo: this.runRepo,
+      costRepo: this.costRepo,
+      retryRepo: this.retryRepo,
       autonomy: this.autonomy,
       autoApprove: this.autoApprove,
       delegationManager: this.delegationManager,
@@ -281,6 +291,8 @@ export class Orchestrator {
           autonomy: this.autonomy ?? "full",
           autoApprove: this.autoApprove,
           runRepo: this.runRepo,
+          costRepo: this.costRepo,
+          retryRepo: this.retryRepo,
         }
       : undefined;
     dispatchIssueImpl(

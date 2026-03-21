@@ -2,6 +2,7 @@ import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "./types.js";
 import type { AgentSession, AgentResult, AgentSessionOptions, AgentStatus, InvokeOptions } from "./session.js";
 import { invokeAgent } from "./invoke.js";
+import { parseTokenUsage } from "./token-parser.js";
 
 /**
  * Map exit code to agent status.
@@ -49,11 +50,16 @@ export class OneShotSession implements AgentSession {
       this.sessionOptions.onActivity();
     }
 
+    const parsed = parseTokenUsage(this.adapter.name, execResult.stdout, execResult.stderr);
+    const tokenUsage = parsed
+      ? { input: parsed.inputTokens, output: parsed.outputTokens, total: parsed.inputTokens + parsed.outputTokens }
+      : { input: 0, output: 0, total: 0 };
+
     return {
       stdout: execResult.stdout,
       stderr: execResult.stderr,
       status: mapExitCodeToStatus(execResult.exitCode),
-      tokenUsage: { input: 0, output: 0, total: 0 },
+      tokenUsage,
       durationMs: execResult.durationMs,
       turnCount: 1,
     };

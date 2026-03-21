@@ -50,6 +50,13 @@
       "when": 1773210100000,
       "tag": "0006_run_costs_table",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1773210200000,
+      "tag": "0007_run_retries_table",
+      "breakpoints": true
     }
   ]
 }
