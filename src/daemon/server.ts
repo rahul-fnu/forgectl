@@ -13,6 +13,8 @@ import { createRunRepository } from "../storage/repositories/runs.js";
 import { createPipelineRepository } from "../storage/repositories/pipelines.js";
 import { createSnapshotRepository } from "../storage/repositories/snapshots.js";
 import { createLockRepository } from "../storage/repositories/locks.js";
+import { createCostRepository } from "../storage/repositories/costs.js";
+import { createRetryRepository } from "../storage/repositories/retries.js";
 import { createEventRepository } from "../storage/repositories/events.js";
 import { EventRecorder } from "../logging/recorder.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
@@ -53,6 +55,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const pipelineRepo = createPipelineRepository(db);
   const snapshotRepo = createSnapshotRepository(db);
   const lockRepo = createLockRepository(db);
+  const costRepo = createCostRepository(db);
+  const retryRepo = createRetryRepository(db);
   const eventRepo = createEventRepository(db);
   const recorder = new EventRecorder(eventRepo, snapshotRepo);
 
@@ -129,7 +133,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
-        runRepo,
+        runRepo, costRepo, retryRepo,
         autonomy: wf?.config?.autonomy,
         autoApprove: wf?.config?.auto_approve,
         subIssueCache,

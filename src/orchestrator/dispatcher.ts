@@ -5,13 +5,17 @@ import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import type { RetryRepository } from "../storage/repositories/retries.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
+import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import type { EventRepository } from "../storage/repositories/events.js";
 import { claimIssue, releaseIssue } from "./state.js";
-import { classifyFailure, calculateBackoff, scheduleRetry } from "./retry.js";
+import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
 import { createProgressComment } from "../github/comments.js";
 import { emitRunEvent } from "../logging/events.js";
@@ -30,12 +34,20 @@ export interface GitHubContext {
   repo: RepoContext;
 }
 
+/** Optional outcome logging dependencies. */
+export interface OutcomeDeps {
+  outcomeRepo: OutcomeRepository;
+  eventRepo?: EventRepository;
+}
+
 /** Optional governance context for pre-execution approval gate. */
 export interface GovernanceOpts {
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
   runRepo?: RunRepository;
   runId?: string;
+  costRepo?: CostRepository;
+  retryRepo?: RetryRepository;
 }
 
 /**
@@ -258,6 +270,7 @@ export function dispatchIssue(
   subIssueCache?: SubIssueCache,
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
+  outcomeDeps?: OutcomeDeps,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -290,6 +303,7 @@ export function dispatchIssue(
     subIssueCache,
     skills,
     validationConfig,
+    outcomeDeps,
   );
 }
 
@@ -308,6 +322,7 @@ async function executeWorkerAndHandle(
   subIssueCache?: SubIssueCache,
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
+  outcomeDeps?: OutcomeDeps,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -497,6 +512,67 @@ async function executeWorkerAndHandle(
       failureType === "continuation" ? "completed" : "failed",
     );
 
+    // Persist cost data to run_costs table and emit cost event
+    if (governanceWithRunId?.costRepo && (tokenUsage.input > 0 || tokenUsage.output > 0)) {
+      const runId = governanceWithRunId.runId ?? issue.identifier;
+      const costUsd = (tokenUsage.input * 3 + tokenUsage.output * 15) / 1_000_000;
+      try {
+        governanceWithRunId.costRepo.insert({
+          runId,
+          agentType: config.agent.type,
+          model: config.agent.model,
+          inputTokens: tokenUsage.input,
+          outputTokens: tokenUsage.output,
+          costUsd,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to insert cost record for ${issue.identifier}: ${msg}`);
+      }
+      emitRunEvent({
+        runId: runId,
+        type: "cost",
+        timestamp: new Date().toISOString(),
+        data: {
+          agentType: config.agent.type,
+          model: config.agent.model,
+          inputTokens: tokenUsage.input,
+          outputTokens: tokenUsage.output,
+          costUsd,
+        },
+      });
+    }
+
+    // Record outcome for the Outcome Analyzer
+    if (outcomeDeps) {
+      try {
+        const outcomeStatus = failureType === "continuation" ? "success" : "failure";
+        let rawEventsJson: string | undefined;
+        if (outcomeDeps.eventRepo) {
+          const events = outcomeDeps.eventRepo.findByRunId(issue.identifier);
+          if (events.length > 0) {
+            rawEventsJson = JSON.stringify(events);
+          }
+        }
+        const runId = issue.identifier;
+        outcomeDeps.outcomeRepo.insert({
+          id: runId,
+          taskId: issue.id,
+          startedAt: new Date(startedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          status: outcomeStatus,
+          totalTurns: result.agentResult.turnCount ?? undefined,
+          failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
+          failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
+          rawEventsJson,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to record outcome for ${issue.identifier}: ${msg}`);
+      }
+    }
+
     // Create PR (fire-and-forget) — the merge daemon handles merging.
     // Close the issue after successful agent run regardless of merge status.
     let prCreated = false;
@@ -553,6 +629,7 @@ async function executeWorkerAndHandle(
       }
 
       logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
+      cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
       releaseIssue(state, issue.id);
       logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
     } else {
@@ -585,6 +662,7 @@ async function executeWorkerAndHandle(
           .updateLabels(issue.id, [], [orchestratorConfig.in_progress_label])
           .catch(() => {});
 
+        cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
         releaseIssue(state, issue.id);
       } else {
         // Schedule error retry with backoff
@@ -606,6 +684,7 @@ async function executeWorkerAndHandle(
             releaseIssue(state, issue.id);
           },
           state,
+          governanceWithRunId?.retryRepo,
         );
       }
     }
@@ -616,6 +695,24 @@ async function executeWorkerAndHandle(
     metrics.recordCompletion(issue.id, { input: 0, output: 0, total: 0 }, runtimeMs, "failed");
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("dispatcher", `Unexpected worker error for ${issue.identifier}: ${msg}`);
+
+    // Record outcome for unexpected failures
+    if (outcomeDeps) {
+      try {
+        outcomeDeps.outcomeRepo.insert({
+          id: issue.identifier,
+          taskId: issue.id,
+          startedAt: new Date(startedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          status: "failure",
+          failureMode: "unexpected_error",
+          failureDetail: msg.slice(0, 2000),
+        });
+      } catch {
+        // Best-effort — don't mask the original error
+      }
+    }
+
     releaseIssue(state, issue.id);
   }
 }

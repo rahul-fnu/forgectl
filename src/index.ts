@@ -570,6 +570,8 @@ cacheCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand } from "./cli/kg.js";
+import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 
 const repoCmd = program
   .command("repo")
@@ -597,6 +599,35 @@ repoCmd
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
 
+// forgectl kg — knowledge graph commands
+const kgCmd = program
+  .command("kg")
+  .description("Codebase knowledge graph");
+
+kgCmd
+  .command("build")
+  .description("Full knowledge graph rebuild")
+  .option("--db <path>", "Custom database path")
+  .action(kgBuildCommand);
+
+kgCmd
+  .command("update")
+  .description("Incremental update (changed files since last build)")
+  .option("--db <path>", "Custom database path")
+  .action(kgUpdateCommand);
+
+kgCmd
+  .command("query <module>")
+  .description("Show dependencies, coupling, test coverage for a module")
+  .option("--db <path>", "Custom database path")
+  .action(kgQueryCommand);
+
+kgCmd
+  .command("stats")
+  .description("Show graph statistics")
+  .option("--db <path>", "Custom database path")
+  .action(kgStatsCommand);
+
 /**
  * Resolve --config or --repo to a config file path.
  * --repo resolves via loadConfigWithOptions in the loader.
@@ -621,5 +652,33 @@ function buildConfigArgs(opts: { config?: string; repo?: string }): string[] {
   if (opts.repo) return ["--repo", opts.repo];
   return [];
 }
+
+// forgectl task
+const taskCmd = program
+  .command("task")
+  .description("Manage task specifications");
+
+taskCmd
+  .command("new")
+  .description("Scaffold a new task spec")
+  .requiredOption("--id <id>", "Task ID (lowercase alphanumeric with hyphens)")
+  .requiredOption("--title <title>", "Task title")
+  .option("--files <globs...>", "File glob patterns for context")
+  .action(taskNewCommand);
+
+taskCmd
+  .command("validate <file>")
+  .description("Validate a task spec file")
+  .action(taskValidateCommand);
+
+taskCmd
+  .command("show <file>")
+  .description("Pretty-print a task spec")
+  .action(taskShowCommand);
+
+taskCmd
+  .command("list [dir]")
+  .description("Find and list task specs in a directory")
+  .action(taskListCommand);
 
 program.parse();

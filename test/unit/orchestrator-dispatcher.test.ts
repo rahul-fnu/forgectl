@@ -18,6 +18,7 @@ vi.mock("../../src/orchestrator/retry.js", () => ({
   calculateBackoff: vi.fn().mockReturnValue(10000),
   scheduleRetry: vi.fn(),
   cancelRetry: vi.fn(),
+  cleanupRetryRecords: vi.fn(),
 }));
 
 // Import the module under test (after mocks are set up)
@@ -375,6 +376,7 @@ describe("dispatchIssue", () => {
         20000,
         expect.any(Function),
         state,
+        undefined,
       );
     });
   });

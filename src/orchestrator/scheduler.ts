@@ -6,6 +6,8 @@ import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import type { RetryRepository } from "../storage/repositories/retries.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
@@ -26,6 +28,8 @@ export interface TickDeps {
   logger: Logger;
   metrics: MetricsCollector;
   runRepo?: RunRepository;
+  costRepo?: CostRepository;
+  retryRepo?: RetryRepository;
   autonomy?: AutonomyLevel;
   autoApprove?: AutoApproveRule;
   delegationManager?: DelegationManager;
@@ -106,7 +110,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 7: Build governance opts if runRepo available
   const governance: GovernanceOpts | undefined = deps.runRepo
-    ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo }
+    ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo, costRepo: deps.costRepo, retryRepo: deps.retryRepo }
     : undefined;
 
   // Step 8: Dispatch up to available slots
