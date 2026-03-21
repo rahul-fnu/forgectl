@@ -2,7 +2,9 @@
  * Resolve a token value that may reference an environment variable or a sentinel.
  *
  * - "$GITHUB_TOKEN" => reads process.env.GITHUB_TOKEN
+ * - "$LINEAR_API_KEY" => reads process.env.LINEAR_API_KEY
  * - "$gh" => runs `gh auth token` to get the token from GitHub CLI
+ * - "$linear" => reads LINEAR_API_KEY env var (convenient shorthand)
  * - "literal-value" => returns the string as-is
  *
  * Throws if the env var is not set or is empty, or if gh CLI fails.
@@ -15,6 +17,15 @@ export function resolveToken(token: string): string {
   }
 
   const varName = token.slice(1);
+
+  // $linear sentinel: shorthand for $LINEAR_API_KEY
+  if (varName === "linear") {
+    const value = process.env.LINEAR_API_KEY;
+    if (!value) {
+      throw new Error('$linear: LINEAR_API_KEY environment variable is not set. Get your API key from Linear Settings > Account > Security & Access > API.');
+    }
+    return value;
+  }
 
   // $gh sentinel: resolve via gh CLI
   if (varName === "gh") {

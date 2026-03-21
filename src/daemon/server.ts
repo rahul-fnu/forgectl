@@ -97,10 +97,16 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   if (orchestratorEnabled && config.tracker) {
     try {
       subIssueCache = new SubIssueCache();
-      const { createGitHubAdapter } = await import("../tracker/github.js");
-      const tracker = config.tracker.kind === "github"
-        ? createGitHubAdapter(config.tracker, subIssueCache)
-        : createTrackerAdapter(config.tracker);
+      let tracker;
+      if (config.tracker.kind === "github") {
+        const { createGitHubAdapter } = await import("../tracker/github.js");
+        tracker = createGitHubAdapter(config.tracker, subIssueCache);
+      } else if (config.tracker.kind === "linear") {
+        const { createLinearAdapter } = await import("../tracker/linear.js");
+        tracker = createLinearAdapter(config.tracker, subIssueCache);
+      } else {
+        tracker = createTrackerAdapter(config.tracker);
+      }
       const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
       const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
 
@@ -229,6 +235,50 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     } catch (err) {
       daemonLogger.error("daemon", `Failed to initialize GitHub App: ${err}`);
     }
+  }
+
+  // Linear webhook endpoint (when tracker is Linear with webhook_secret configured)
+  if (config.tracker?.kind === "linear" && config.tracker.webhook_secret && subIssueCache) {
+    const webhookSecret = config.tracker.webhook_secret;
+    const { handleLinearWebhook, verifyLinearWebhookSignature } = await import("../tracker/linear.js");
+
+    app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+      done(null, body);
+    });
+
+    app.post("/api/v1/linear/webhook", async (request, reply) => {
+      const rawBody = request.body as string;
+      const signature = request.headers["linear-signature"] as string | undefined;
+
+      if (!signature) {
+        reply.code(401);
+        return { error: "Missing linear-signature header" };
+      }
+
+      const valid = await verifyLinearWebhookSignature(rawBody, signature, webhookSecret);
+      if (!valid) {
+        reply.code(401);
+        return { error: "Invalid webhook signature" };
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(rawBody);
+      } catch {
+        reply.code(400);
+        return { error: "Invalid JSON" };
+      }
+
+      const shouldTick = handleLinearWebhook(payload, subIssueCache!);
+
+      if (shouldTick && orchestrator) {
+        void orchestrator.triggerTick();
+      }
+
+      return { ok: true };
+    });
+
+    daemonLogger.info("daemon", "Linear webhook endpoint registered at /api/v1/linear/webhook");
   }
 
   // Serve dashboard UI — find the index.html from src/ui or bundled location

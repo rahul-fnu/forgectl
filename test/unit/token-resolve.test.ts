@@ -20,6 +20,22 @@ describe("resolveToken", () => {
     expect(() => resolveToken("$NONEXISTENT_VAR")).toThrow('environment variable "NONEXISTENT_VAR" is not set');
   });
 
+  it("resolves $linear from LINEAR_API_KEY env var", () => {
+    vi.stubEnv("LINEAR_API_KEY", "lin_api_test123");
+    expect(resolveToken("$linear")).toBe("lin_api_test123");
+  });
+
+  it("throws clear error when $linear used without LINEAR_API_KEY", () => {
+    delete process.env.LINEAR_API_KEY;
+    expect(() => resolveToken("$linear")).toThrow("LINEAR_API_KEY");
+    expect(() => resolveToken("$linear")).toThrow("Settings > Account > Security");
+  });
+
+  it("resolves $LINEAR_API_KEY as standard env var", () => {
+    vi.stubEnv("LINEAR_API_KEY", "lin_api_direct");
+    expect(resolveToken("$LINEAR_API_KEY")).toBe("lin_api_direct");
+  });
+
   it("resolves $gh via gh CLI", () => {
     // This test will fail if `gh` isn't installed, which is expected in CI.
     // We test the error path instead — it should throw with a clear message.

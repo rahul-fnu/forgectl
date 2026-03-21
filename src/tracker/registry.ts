@@ -1,10 +1,11 @@
 import type { TrackerAdapter, TrackerConfig } from "./types.js";
 import { createGitHubAdapter } from "./github.js";
 import { createNotionAdapter } from "./notion.js";
+import { createLinearAdapter } from "./linear.js";
 
 /**
  * Factory function that creates a TrackerAdapter from configuration.
- * Each tracker kind (github, notion, etc.) registers its own factory.
+ * Each tracker kind (github, notion, linear, etc.) registers its own factory.
  */
 export type TrackerAdapterFactory = (config: TrackerConfig) => TrackerAdapter;
 
@@ -13,6 +14,7 @@ const FACTORIES: Record<string, TrackerAdapterFactory> = {};
 // Register built-in adapter factories
 registerTrackerFactory("github", createGitHubAdapter);
 registerTrackerFactory("notion", createNotionAdapter);
+registerTrackerFactory("linear", createLinearAdapter);
 
 /**
  * Register a factory for a tracker kind.

@@ -63,7 +63,7 @@ export interface TrackerAdapter {
  * Tracker configuration — matches the TrackerConfigSchema shape.
  */
 export interface TrackerConfig {
-  kind: "github" | "notion";
+  kind: "github" | "notion" | "linear";
   token: string;
   active_states: string[];
   terminal_states: string[];
@@ -75,4 +75,8 @@ export interface TrackerConfig {
   property_map?: Record<string, string>;
   in_progress_label?: string;
   done_label?: string;
+  // Linear-specific
+  team_ids?: string[];
+  project_id?: string;
+  webhook_secret?: string;
 }

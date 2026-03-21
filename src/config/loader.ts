@@ -155,9 +155,9 @@ export function loadConfigWithOptions(opts: { config?: string; repo?: string }):
 
 /**
  * List available repo profiles from ~/.forgectl/repos/.
- * Returns array of { name, trackerRepo } objects.
+ * Returns array of { name, trackerRepo, trackerKind } objects.
  */
-export function listRepoProfiles(): Array<{ name: string; trackerRepo?: string }> {
+export function listRepoProfiles(): Array<{ name: string; trackerRepo?: string; trackerKind?: string }> {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const reposDir = join(home, ".forgectl", "repos");
 
@@ -172,7 +172,11 @@ export function listRepoProfiles(): Array<{ name: string; trackerRepo?: string }
       const raw = readFileSync(join(reposDir, f), "utf-8");
       const parsed = yaml.load(raw) as Record<string, unknown> | null;
       const tracker = parsed?.tracker as Record<string, unknown> | undefined;
-      return { name, trackerRepo: tracker?.repo as string | undefined };
+      return {
+        name,
+        trackerRepo: tracker?.repo as string | undefined,
+        trackerKind: tracker?.kind as string | undefined,
+      };
     } catch {
       return { name };
     }

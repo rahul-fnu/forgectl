@@ -53,6 +53,22 @@ describe("tracker registry integration", () => {
     expect(typeof adapter.fetchCandidateIssues).toBe("function");
   });
 
+  it("creates a linear adapter from valid config", () => {
+    const config: TrackerConfig = {
+      kind: "linear",
+      token: "lin_api_test",
+      team_ids: ["team-uuid-1"],
+      active_states: ["In Progress"],
+      terminal_states: ["Done"],
+      poll_interval_ms: 60000,
+      auto_close: false,
+    };
+
+    const adapter = createTrackerAdapter(config);
+    expect(adapter.kind).toBe("linear");
+    expect(typeof adapter.fetchCandidateIssues).toBe("function");
+  });
+
   it("throws on unknown tracker kind with available kinds listed", () => {
     const config = {
       kind: "jira" as "github",
@@ -65,7 +81,7 @@ describe("tracker registry integration", () => {
 
     expect(() => createTrackerAdapter(config)).toThrow(/unknown kind/i);
     expect(() => createTrackerAdapter(config)).toThrow("github");
-    expect(() => createTrackerAdapter(config)).toThrow("notion");
+    expect(() => createTrackerAdapter(config)).toThrow("linear");
   });
 
   it("full flow: parse raw config through schema then create adapter", () => {

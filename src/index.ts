@@ -582,10 +582,14 @@ repoCmd
 
 repoCmd
   .command("add <name>")
-  .description("Add a repo profile")
-  .requiredOption("--tracker-repo <owner/repo>", "GitHub repo (owner/repo)")
+  .description("Add a repo profile (GitHub or Linear)")
+  .option("--tracker-repo <owner/repo>", "GitHub repo (owner/repo)")
+  .option("--linear", "Create a Linear tracker profile")
+  .option("--team-id <uuid>", "Linear team ID (repeatable)", (v: string, prev: string[]) => [...prev, v], [] as string[])
+  .option("--project-id <uuid>", "Linear project ID (optional)")
+  .option("--webhook-secret <secret>", "Linear webhook signing secret")
   .option("--labels <labels>", "Comma-separated tracker labels")
-  .option("--token <token>", "Token or env var reference (e.g. $GH_TOKEN, $gh)")
+  .option("--token <token>", "Token or env var reference (e.g. $GH_TOKEN, $gh, $linear)")
   .action(repoAddCommand);
 
 repoCmd

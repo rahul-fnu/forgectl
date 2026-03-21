@@ -207,7 +207,7 @@ export const WorkspaceConfigSchema = z.object({
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 
 export const TrackerConfigSchema = z.object({
-  kind: z.enum(["github", "notion"]),
+  kind: z.enum(["github", "notion", "linear"]),
   token: z.string(),
   active_states: z.array(z.string()).default(["open"]),
   terminal_states: z.array(z.string()).default(["closed"]),
@@ -219,6 +219,10 @@ export const TrackerConfigSchema = z.object({
   property_map: z.record(z.string()).optional(),
   in_progress_label: z.string().optional(),
   done_label: z.string().optional(),
+  // Linear-specific fields
+  team_ids: z.array(z.string()).optional(),
+  project_id: z.string().optional(),
+  webhook_secret: z.string().optional(),
 }).superRefine((data, ctx) => {
   if (data.kind === "github" && !data.repo) {
     ctx.addIssue({
@@ -232,6 +236,13 @@ export const TrackerConfigSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'Tracker kind "notion" requires a "database_id" field',
       path: ["database_id"],
+    });
+  }
+  if (data.kind === "linear" && (!data.team_ids || data.team_ids.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Tracker kind "linear" requires at least one entry in "team_ids"',
+      path: ["team_ids"],
     });
   }
 });

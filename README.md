@@ -250,6 +250,96 @@ forgectl pipeline revert -f <path>   Revert to checkpoint
   --to <node>                        Target node
 ```
 
+## Tracker Integration (Autonomous Orchestration)
+
+forgectl can poll issue trackers for work items and dispatch AI agents autonomously. Supports **GitHub Issues** and **Linear**.
+
+### GitHub Issues
+
+```bash
+# Quick setup via repo profile
+forgectl repo add my-project --tracker-repo owner/repo
+
+# Start orchestrator (polls for issues, dispatches agents)
+forgectl orchestrate --repo my-project
+```
+
+### Linear
+
+Linear is ideal for concurrent DAG-like executions across multiple teams. forgectl maps Linear's parent/child sub-issues and blocking relations into a dependency graph, dispatching agents only when blockers are resolved.
+
+```bash
+# Set your API key (Settings > Account > Security & Access > API)
+export LINEAR_API_KEY=lin_api_...
+
+# Quick setup — single team
+forgectl repo add my-project --linear --team-id <team-uuid>
+
+# Multiple teams
+forgectl repo add my-project --linear \
+  --team-id <team-uuid-1> \
+  --team-id <team-uuid-2> \
+  --labels forgectl
+
+# With webhook for real-time updates (instead of polling)
+forgectl repo add my-project --linear \
+  --team-id <team-uuid> \
+  --webhook-secret <your-signing-secret>
+
+# Start orchestrator
+forgectl orchestrate --repo my-project
+```
+
+**Finding your team ID:** In Linear, go to Settings > Teams > select a team. The ID is in the URL, or use the Linear API: `linearClient.teams()`.
+
+#### Linear Webhook Setup
+
+For real-time updates instead of polling:
+
+1. In Linear: Settings > API > Webhooks > New webhook
+2. URL: `https://your-host:4856/api/v1/linear/webhook`
+3. Resource types: select **Issues**
+4. Copy the signing secret into your repo profile (`--webhook-secret`)
+
+When configured, forgectl validates the HMAC-SHA256 signature, updates its sub-issue cache, and triggers an immediate orchestrator tick.
+
+### Manual Tracker Configuration
+
+Instead of repo profiles, configure directly in `~/.forgectl/config.yaml`:
+
+```yaml
+# GitHub
+tracker:
+  kind: github
+  repo: owner/repo
+  token: $gh                    # or $GITHUB_TOKEN, or literal token
+  labels: [forgectl]
+
+# Linear
+tracker:
+  kind: linear
+  token: $linear                # or $LINEAR_API_KEY, or literal token
+  team_ids:
+    - <team-uuid-1>
+    - <team-uuid-2>
+  project_id: <optional-uuid>   # filter to a specific project
+  webhook_secret: <optional>    # for webhook-driven updates
+  labels: [forgectl]            # filter issues by label
+  active_states: [In Progress, Todo]
+  terminal_states: [Done, Canceled]
+```
+
+### Token Shortcuts
+
+| Token value       | Resolves to                              |
+|-------------------|------------------------------------------|
+| `$gh`             | Runs `gh auth token` (GitHub CLI)        |
+| `$linear`         | Reads `LINEAR_API_KEY` env var           |
+| `$GITHUB_TOKEN`   | Reads `GITHUB_TOKEN` env var             |
+| `$LINEAR_API_KEY` | Reads `LINEAR_API_KEY` env var           |
+| `$ANY_VAR`        | Reads the named environment variable     |
+| `ghp_abc...`      | Used as-is (literal token)               |
+
 ## Configuration
 
 Create `.forgectl/config.yaml` in your project root to customize behavior:
@@ -384,6 +474,10 @@ When the daemon is running:
 | GET | /pipelines/:id | Get pipeline status |
 | GET | /pipelines/:id/events | Pipeline SSE stream |
 | POST | /pipelines/:id/rerun | Re-run from a node |
+| GET | /api/v1/state | Orchestrator state snapshot |
+| POST | /api/v1/refresh | Trigger immediate orchestrator tick |
+| GET | /api/v1/events | Orchestrator SSE event stream |
+| POST | /api/v1/linear/webhook | Linear webhook endpoint |
 
 ## Development
 
