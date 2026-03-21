@@ -84,3 +84,23 @@ export const executionLocks = sqliteTable(
   },
   (table) => [unique().on(table.lockType, table.lockKey)]
 );
+
+export const runOutcomes = sqliteTable("run_outcomes", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id"),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+  status: text("status"),
+  totalTurns: integer("total_turns"),
+  lintIterations: integer("lint_iterations"),
+  reviewRounds: integer("review_rounds"),
+  reviewCommentsJson: text("review_comments_json"),
+  failureMode: text("failure_mode"),
+  failureDetail: text("failure_detail"),
+  humanReviewResult: text("human_review_result"),
+  humanReviewComments: integer("human_review_comments"),
+  modulesTouched: text("modules_touched"),
+  filesChanged: integer("files_changed"),
+  testsAdded: integer("tests_added"),
+  rawEventsJson: text("raw_events_json"),
+});
