@@ -9,7 +9,7 @@ import type { ModuleInfo, ExportEntry, ImportEntry } from "./types.js";
 // import { X, Y } from './path'
 // import { X as Z } from './path'
 // import type { X } from './path'
-const NAMED_IMPORT_RE = /import\s+(type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+const NAMED_IMPORT_RE = /import\s+(type\s+)?\{([\s\S]*?)\}\s+from\s+['"]([^'"]+)['"]/g;
 
 // import X from './path'
 // import type X from './path'
@@ -25,7 +25,7 @@ const SIDE_EFFECT_IMPORT_RE = /import\s+['"]([^'"]+)['"]/g;
 const DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 // export { X, Y } from './path' (re-exports)
-const REEXPORT_RE = /export\s+(type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+const REEXPORT_RE = /export\s+(type\s+)?\{([\s\S]*?)\}\s+from\s+['"]([^'"]+)['"]/g;
 
 // export * from './path'
 const STAR_REEXPORT_RE = /export\s+\*\s+from\s+['"]([^'"]+)['"]/g;
@@ -222,15 +222,17 @@ function parseImports(content: string, fileDir: string, repoRoot: string): Impor
     addImport(match[2], ['*'], false);
   }
 
-  // Side-effect imports
+  // Side-effect imports — filter out matches that are part of named/default/namespace imports
+  // by checking the full statement context around the match
   const sideRe = new RegExp(SIDE_EFFECT_IMPORT_RE.source, 'g');
   while ((match = sideRe.exec(content)) !== null) {
-    // Filter out lines that are part of named/default/namespace imports
-    const line = content.substring(
-      content.lastIndexOf('\n', match.index) + 1,
-      content.indexOf('\n', match.index + match[0].length)
-    );
-    if (line.includes('{') || line.includes('from') || line.includes('* as')) continue;
+    // Look backward from match to find the start of the import statement
+    const beforeMatch = content.substring(Math.max(0, match.index - 200), match.index);
+    // If the text before this quote contains 'from' or '{' or '* as' on the same statement,
+    // this is part of a named/default/namespace import, not a side-effect import
+    const lastNewline = beforeMatch.lastIndexOf('\n');
+    const statementPrefix = beforeMatch.substring(lastNewline + 1);
+    if (statementPrefix.includes('{') || statementPrefix.includes('from') || statementPrefix.includes('* as')) continue;
     addImport(match[1], [], false);
   }
 

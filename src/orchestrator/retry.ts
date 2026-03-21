@@ -94,10 +94,14 @@ export function restoreRetryState(
 ): string[] {
   const restoredIds: string[] = [];
   for (const runId of allRunIds) {
-    const latest = retryRepo.latestAttempt(runId);
-    if (latest > 0) {
-      state.retryAttempts.set(runId, latest);
-      restoredIds.push(runId);
+    try {
+      const latest = retryRepo.latestAttempt(runId);
+      if (latest > 0) {
+        state.retryAttempts.set(runId, latest);
+        restoredIds.push(runId);
+      }
+    } catch {
+      // Skip individual failures — continue restoring other runs
     }
   }
   return restoredIds;

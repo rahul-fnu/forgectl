@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import picomatch from "picomatch";
 import type { TaskSpec, TaskValidationResult, TaskValidationError, TaskValidationWarning } from "./types.js";
 
@@ -49,13 +49,22 @@ export function validateTaskSpec(spec: TaskSpec, options?: ValidateOptions): Tas
 }
 
 function validateFilePatterns(patterns: string[], repoRoot: string, errors: TaskValidationError[]): void {
+  const resolvedRoot = resolve(repoRoot);
   for (const pattern of patterns) {
+    // Reject patterns that attempt path traversal
+    if (pattern.includes("..")) {
+      errors.push({
+        field: "context.files",
+        message: `Pattern "${pattern}" contains path traversal ("..") — not allowed`,
+      });
+      continue;
+    }
     // Skip patterns with glob characters — just check that the base dir exists
     if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
       // Try to match against actual files in the repo
       try {
         const matcher = picomatch(pattern);
-        const files = collectFiles(repoRoot, "", 3); // Limit depth to 3 for performance
+        const files = collectFiles(resolvedRoot, "", 5); // Limit depth to 5 for performance
         const matched = files.some((f) => matcher(f));
         if (!matched) {
           errors.push({
