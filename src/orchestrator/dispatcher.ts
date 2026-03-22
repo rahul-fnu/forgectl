@@ -31,6 +31,8 @@ import {
 /** GitHub context passed from webhook handler (octokit + repo). */
 export interface GitHubContext {
   octokit: unknown;
+  /** Separate octokit with PR write permissions (e.g. merger app). Falls back to octokit if not set. */
+  prOctokit?: unknown;
   repo: RepoContext;
 }
 
@@ -597,9 +599,9 @@ async function executeWorkerAndHandle(
         try {
           const [owner, repo] = config.tracker.repo.split("/");
           const base = config.repo?.branch?.base ?? "main";
-          const octokit = githubContext.octokit as any;
-          const pulls = octokit.rest?.pulls ?? octokit.pulls;
-          const { data: pr } = await pulls.create({
+          // Use prOctokit (merger app) if available, otherwise fall back to main octokit
+          const octokit = (githubContext.prOctokit ?? githubContext.octokit) as any;
+          const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
             owner, repo,
             title: `[forgectl] ${issue.title}`,
             head: result.branch,
@@ -623,12 +625,8 @@ async function executeWorkerAndHandle(
 
       if (isSynthesizerRun) {
         handleSynthesizerOutcome(issue, "success", tracker, logger);
-      } else {
-        // Agent completed successfully — close the issue regardless of PR creation status.
-        // The branch is pushed and available for manual PR creation or merge daemon pickup.
-        if (!prCreated && result.branch) {
-          logger.info("dispatcher", `No PR created for ${issue.identifier} (tracker may not support it) — branch ${result.branch} is pushed`);
-        }
+      } else if (prCreated || !result.branch) {
+        // Close the issue: PR was created, or no branch was produced (files-mode output)
         if (config.tracker?.auto_close) {
           // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)
           const closeState = config.tracker.terminal_states[0] ?? "closed";
@@ -650,6 +648,10 @@ async function executeWorkerAndHandle(
             logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
           });
         }
+      } else {
+        // PR creation failed — leave issue open for retry
+        logger.warn("dispatcher", `Issue ${issue.identifier} completed but PR creation failed — branch ${result.branch} is pushed, leaving issue open`);
+        tracker.updateLabels(issue.id, [], [orchestratorConfig.in_progress_label]).catch(() => {});
       }
 
       logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);

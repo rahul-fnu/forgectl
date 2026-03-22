@@ -228,7 +228,19 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         try {
           const [ghOwner, ghRepo] = config.tracker.repo.split("/");
           const installationOctokit = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
-          orchestrator.setGitHubContext({ octokit: installationOctokit, repo: { owner: ghOwner, repo: ghRepo } });
+          // Use merger app for PR creation if available (it has PR write permissions)
+          let prOctokit: unknown;
+          if (config.merger_app) {
+            try {
+              const { GitHubAppService } = await import("../github/app.js");
+              const mergerService = new GitHubAppService(config.merger_app);
+              prOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
+              daemonLogger.info("daemon", "Merger app octokit initialized for PR creation");
+            } catch (mergerErr) {
+              daemonLogger.warn("daemon", `Merger app init failed, PR creation will use creator app: ${mergerErr}`);
+            }
+          }
+          orchestrator.setGitHubContext({ octokit: installationOctokit, prOctokit, repo: { owner: ghOwner, repo: ghRepo } });
           daemonLogger.info("daemon", "GitHub context set on orchestrator for polling rollup");
         } catch (err) {
           daemonLogger.warn("daemon", `Failed to set GitHub context on orchestrator (rollup disabled): ${err}`);

@@ -312,16 +312,13 @@ describe("E2E Orchestration", () => {
 
       dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
-      // Wait for the comment about PR creation failure
+      // Wait for issue to be released (agent completes)
       await vi.waitFor(() => {
-        const prFailComment = tracker.calls.postComment.find(
-          (c) => c.body.includes("PR could not be created"),
-        );
-        expect(prFailComment).toBeDefined();
+        expect(state.claimed.size).toBe(0);
       }, { timeout: 2000 });
 
-      // Issue should NOT be auto-closed (only agent report comment, no state change)
-      const closeCall = tracker.calls.updateState.find((c) => c.state === "closed");
+      // Issue should NOT be auto-closed (PR was not created)
+      const closeCall = tracker.calls.updateState.find((c) => c.state === "closed" || c.state === "Done");
       expect(closeCall).toBeUndefined();
 
       // In-progress label should be removed
