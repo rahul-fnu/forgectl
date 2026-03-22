@@ -10,6 +10,7 @@ import type { RetryRepository } from "../storage/repositories/retries.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
+import type { ContextResult } from "../context/builder.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
@@ -274,6 +275,7 @@ export function dispatchIssue(
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
+  kgContext?: ContextResult,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -307,6 +309,7 @@ export function dispatchIssue(
     skills,
     validationConfig,
     outcomeDeps,
+    kgContext,
   );
 }
 
@@ -326,6 +329,7 @@ async function executeWorkerAndHandle(
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
+  kgContext?: ContextResult,
 ): Promise<void> {
   const orchestratorConfig = config.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -461,6 +465,7 @@ async function executeWorkerAndHandle(
       githubDeps,
       governanceWithRunId,
       skills,
+      kgContext,
     );
 
     // Remove from running
