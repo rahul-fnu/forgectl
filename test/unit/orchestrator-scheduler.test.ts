@@ -137,6 +137,53 @@ describe("tick", () => {
     expect(sortCandidates).toHaveBeenCalledWith(issues);
   });
 
+  it("dispatches critical-path issues first (DAG-aware ordering)", async () => {
+    const deps = makeDeps();
+    // Issue "1" is a root that "2" and "3" depend on
+    // Issue "2" is a leaf, "3" is also a leaf
+    // After "1" completes (terminal), "2" and "3" become eligible
+    // But if "1" is already done, among "2" and "3":
+    //   "2" unblocks "4", so it should dispatch before "3"
+    const issue2 = { ...makeIssue("2"), blocked_by: [] };
+    const issue3 = { ...makeIssue("3"), blocked_by: [] };
+    const issue4 = { ...makeIssue("4"), blocked_by: ["2"] };
+
+    // All three are candidates (full set for DAG computation)
+    const allCandidates = [issue2, issue3, issue4];
+    // Only issue2 and issue3 are eligible (issue4 is blocked by issue2)
+    const eligible = [issue3, issue2]; // intentionally reversed
+
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(allCandidates);
+    vi.mocked(filterCandidates).mockReturnValue(eligible);
+    vi.mocked(sortCandidates).mockReturnValue(eligible); // no priority reorder
+
+    await tick(deps);
+
+    // issue2 should be dispatched first because it unblocks issue4
+    expect(dispatchIssue).toHaveBeenCalledTimes(2);
+    const firstDispatched = vi.mocked(dispatchIssue).mock.calls[0][0];
+    const secondDispatched = vi.mocked(dispatchIssue).mock.calls[1][0];
+    expect(firstDispatched.id).toBe("2");
+    expect(secondDispatched.id).toBe("3");
+  });
+
+  it("never dispatches issues with unresolved blockers", async () => {
+    const deps = makeDeps();
+    // Issue "B" is blocked by "A", which is NOT in terminal state
+    const issueA = makeIssue("A");
+    const issueB = { ...makeIssue("B"), blocked_by: ["A"] };
+
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue([issueA, issueB]);
+    // filterCandidates already handles this — only issueA passes
+    vi.mocked(filterCandidates).mockReturnValue([issueA]);
+    vi.mocked(sortCandidates).mockReturnValue([issueA]);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchIssue).mock.calls[0][0].id).toBe("A");
+  });
+
   it("dispatches up to available slots", async () => {
     const deps = makeDeps();
     const issues = [makeIssue("1"), makeIssue("2"), makeIssue("3"), makeIssue("4")];

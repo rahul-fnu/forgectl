@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectIssueCycles, IssueDAGNode } from "../../src/tracker/sub-issue-dag.js";
+import { detectIssueCycles, computeCriticalPath, IssueDAGNode } from "../../src/tracker/sub-issue-dag.js";
 
 describe("detectIssueCycles", () => {
   it("returns null for empty graph", () => {
@@ -102,5 +102,97 @@ describe("detectIssueCycles", () => {
       { id: "30", blocked_by: ["20"] },
     ];
     expect(detectIssueCycles(nodes)).toBeNull();
+  });
+});
+
+describe("computeCriticalPath", () => {
+  it("returns empty map for empty input", () => {
+    expect(computeCriticalPath([])).toEqual(new Map());
+  });
+
+  it("returns 0 for single node with no dependents", () => {
+    const nodes: IssueDAGNode[] = [{ id: "A", blocked_by: [] }];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(0);
+  });
+
+  it("scores linear chain correctly (root unblocks most)", () => {
+    // A <- B <- C  (B blocked_by A, C blocked_by B)
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["B"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(2); // unblocks B and C
+    expect(scores.get("B")).toBe(1); // unblocks C
+    expect(scores.get("C")).toBe(0); // leaf
+  });
+
+  it("computes correct scores for diamond-shaped DAG", () => {
+    // A is root; B and C depend on A; D depends on B and C
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["A"] },
+      { id: "D", blocked_by: ["B", "C"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(3); // unblocks B, C, D
+    expect(scores.get("B")).toBe(1); // unblocks D
+    expect(scores.get("C")).toBe(1); // unblocks D
+    expect(scores.get("D")).toBe(0); // leaf
+  });
+
+  it("handles disconnected components", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "X", blocked_by: [] },
+      { id: "Y", blocked_by: ["X"] },
+      { id: "Z", blocked_by: ["X"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(1);
+    expect(scores.get("X")).toBe(2);
+    expect(scores.get("B")).toBe(0);
+    expect(scores.get("Y")).toBe(0);
+    expect(scores.get("Z")).toBe(0);
+  });
+
+  it("ignores external refs not in the input set", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: ["external-99"] },
+      { id: "B", blocked_by: ["A"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(1);
+    expect(scores.get("B")).toBe(0);
+  });
+
+  it("handles all independent nodes (no edges)", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: [] },
+      { id: "C", blocked_by: [] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("A")).toBe(0);
+    expect(scores.get("B")).toBe(0);
+    expect(scores.get("C")).toBe(0);
+  });
+
+  it("handles wide fan-out (one root, many dependents)", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "root", blocked_by: [] },
+      { id: "c1", blocked_by: ["root"] },
+      { id: "c2", blocked_by: ["root"] },
+      { id: "c3", blocked_by: ["root"] },
+      { id: "c4", blocked_by: ["root"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    expect(scores.get("root")).toBe(4);
+    expect(scores.get("c1")).toBe(0);
+    expect(scores.get("c2")).toBe(0);
   });
 });
