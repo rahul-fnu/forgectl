@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import type { RunPlan } from "../workflow/types.js";
 import type { ContextResult } from "./builder.js";
+import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
 
 const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
@@ -11,7 +12,23 @@ interface ContextArtifactSummary {
   size: number;
 }
 
-export function buildPrompt(plan: RunPlan, kgContext?: ContextResult): string {
+export interface PromptOptions {
+  kgContext?: ContextResult;
+  promotedFindings?: ReviewFindingRow[];
+}
+
+export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | PromptOptions): string {
+  let kgContext: ContextResult | undefined;
+  let promotedFindings: ReviewFindingRow[] | undefined;
+
+  if (kgContextOrOptions && "systemContext" in kgContextOrOptions) {
+    kgContext = kgContextOrOptions;
+  } else if (kgContextOrOptions) {
+    const opts = kgContextOrOptions as PromptOptions;
+    kgContext = opts.kgContext;
+    promotedFindings = opts.promotedFindings;
+  }
+
   const parts: string[] = [];
 
   // 1. Workflow system prompt
@@ -61,6 +78,17 @@ export function buildPrompt(plan: RunPlan, kgContext?: ContextResult): string {
       parts.push(kgContext.taskContext);
     }
     parts.push(`--- End Structural Context ---\n`);
+  }
+
+  // 2c. Promoted review conventions
+  if (promotedFindings && promotedFindings.length > 0) {
+    parts.push(`\n--- Review Conventions ---`);
+    parts.push("The following conventions were identified from recurring review findings:");
+    for (const finding of promotedFindings) {
+      const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
+      parts.push(`- Convention: ${desc} (flagged ${finding.occurrenceCount} times in review, module: ${finding.module})`);
+    }
+    parts.push(`--- End Review Conventions ---\n`);
   }
 
   // 3. Available tools description
