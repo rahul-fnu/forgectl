@@ -640,8 +640,9 @@ async function executeWorkerAndHandle(
         // Fallback: create PR via GitHub App when tracker doesn't support PR creation (e.g. Linear)
         try {
           const [owner, repo] = config.tracker.repo.split("/");
-          // Use prOctokit (merger app) if available, otherwise fall back to main octokit
+          const usingMergerApp = !!githubContext.prOctokit;
           const octokit = (githubContext.prOctokit ?? githubContext.octokit) as any;
+          logger.info("dispatcher", `Creating PR for ${issue.identifier} via GitHub App (${usingMergerApp ? "merger" : "creator"})`);
           const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
             owner, repo,
             title: `[forgectl] ${issue.title}`,
