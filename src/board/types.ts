@@ -57,6 +57,7 @@ export interface BoardCard {
   type: string;
   column: string;
   params: Record<string, string | number | boolean>;
+  depends_on?: string[];
   createdAt: string;
   updatedAt: string;
   statusVersion: number;

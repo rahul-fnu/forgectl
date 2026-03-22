@@ -8,7 +8,7 @@
  */
 
 export interface LoopPattern {
-  type: "repeated_file_writes" | "repeated_validation_error" | "repeated_tool_call";
+  type: "repeated_file_writes" | "repeated_validation_error" | "repeated_tool_call" | "repeated_review_comments";
   detail: string;
 }
 
@@ -16,6 +16,7 @@ export interface LoopDetectorState {
   fileWriteCounts: Map<string, number>;
   validationErrors: string[];
   toolCalls: string[];
+  reviewCommentHashes: string[];
 }
 
 export function createLoopDetectorState(): LoopDetectorState {
@@ -23,6 +24,7 @@ export function createLoopDetectorState(): LoopDetectorState {
     fileWriteCounts: new Map(),
     validationErrors: [],
     toolCalls: [],
+    reviewCommentHashes: [],
   };
 }
 
@@ -98,6 +100,39 @@ export function recordToolCall(state: LoopDetectorState, toolName: string, param
     return {
       type: "repeated_tool_call",
       detail: `Tool "${toolName}" called ${consecutiveCount} times with identical parameters`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Record review comments. Returns a loop pattern if the same set of comments appears 2+ times consecutively.
+ * The comments are normalized by sorting and hashing file+line+severity+message.
+ */
+export function recordReviewComments(
+  state: LoopDetectorState,
+  comments: Array<{ file: string; line: number; severity: string; message?: string; comment?: string }>,
+): LoopPattern | null {
+  const normalized = comments
+    .map(c => `${c.file}:${c.line}:${c.severity}:${c.message ?? c.comment ?? ""}`)
+    .sort()
+    .join("\n");
+  state.reviewCommentHashes.push(normalized);
+
+  let consecutiveCount = 0;
+  for (let i = state.reviewCommentHashes.length - 1; i >= 0; i--) {
+    if (state.reviewCommentHashes[i] === normalized) {
+      consecutiveCount++;
+    } else {
+      break;
+    }
+  }
+
+  if (consecutiveCount >= 2) {
+    return {
+      type: "repeated_review_comments",
+      detail: `Same review comments repeated ${consecutiveCount} times (${comments.length} comments)`,
     };
   }
 

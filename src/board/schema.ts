@@ -51,6 +51,7 @@ export const CreateCardSchema = z.object({
   type: z.string().min(1),
   column: z.string().optional(),
   params: z.record(primitiveParam).default({}),
+  depends_on: z.array(z.string().min(1)).default([]),
 });
 
 export const UpdateCardSchema = z.object({

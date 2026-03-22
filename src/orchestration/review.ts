@@ -9,11 +9,12 @@ import { createContainer, destroyContainer } from "../container/runner.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
-import { runValidationLoop } from "../validation/runner.js";
+import { runValidationLoop, runLintGate, type LintGateResult } from "../validation/runner.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
 import { emitRunEvent } from "../logging/events.js";
+import { createLoopDetectorState, recordReviewComments } from "../agent/loop-detector.js";
 
 export type ReviewSeverity = "MUST_FIX" | "SHOULD_FIX" | "NIT";
 
@@ -264,6 +265,30 @@ export async function executeReviewMode(
       }
     }
 
+    // --- Phase: Lint Gate ---
+    if (plan.validation.lintSteps.length > 0) {
+      emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "lint" } });
+      logger.info("validation", `Running ${plan.validation.lintSteps.length} lint steps...`);
+      const lintGateResult = await runLintGate(
+        container, plan.validation.lintSteps, plan.input.mountPath,
+        adapter, agentOptions, agentEnv, logger,
+      );
+      if (!lintGateResult.passed && plan.validation.onFailure === "abandon") {
+        emitRunEvent({ runId: plan.runId, type: "failed", timestamp: new Date().toISOString(), data: { reason: "lint_gate_failed" } });
+        return {
+          success: false,
+          validation: {
+            passed: false,
+            totalAttempts: lintGateResult.lintIterations,
+            stepResults: lintGateResult.stepResults,
+            lastOutput: lintGateResult.lastOutput,
+          },
+          durationMs: timer.elapsed(),
+          error: "Lint gate failed and on_failure is set to 'abandon'",
+        };
+      }
+    }
+
     // --- Phase: Validate ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "validate" } });
 
@@ -306,6 +331,7 @@ export async function executeReviewMode(
     let escalatedToHuman = false;
     const allReviewComments: ReviewComment[] = [];
     const reviewComments: Array<{ round: number; approved: boolean; feedback: string }> = [];
+    const reviewLoopState = createLoopDetectorState();
 
     for (let round = 1; round <= maxRounds; round++) {
       logger.info("review", `Starting review round ${round}/${maxRounds}...`);
@@ -356,6 +382,22 @@ export async function executeReviewMode(
       // Extract actionable comments (MUST_FIX + SHOULD_FIX only)
       const actionable = filterActionableComments(parsed.comments);
       allReviewComments.push(...parsed.comments);
+
+      // Check for repeated review comments (loop detection)
+      if (parsed.comments.length > 0) {
+        const reviewLoop = recordReviewComments(reviewLoopState, parsed.comments);
+        if (reviewLoop) {
+          logger.error("review", `Review loop detected: ${reviewLoop.detail}`);
+          emitRunEvent({
+            runId: plan.runId,
+            type: "loop_detected",
+            timestamp: new Date().toISOString(),
+            data: { pattern: reviewLoop.type, detail: reviewLoop.detail, round },
+          });
+          escalatedToHuman = true;
+          break;
+        }
+      }
 
       logger.warn("review", `✗ Review round ${round}: ${parsed.comments.length} comments (${actionable.length} actionable)`);
 
@@ -421,6 +463,8 @@ export async function executeReviewMode(
         data: { success: approved, output },
       });
 
+      const commentsJson = allReviewComments.length > 0 ? JSON.stringify(allReviewComments) : undefined;
+
       return {
         success: approved,
         output,
@@ -432,6 +476,7 @@ export async function executeReviewMode(
           approvedOnRound,
           comments: allReviewComments,
           escalatedToHuman,
+          reviewCommentsJson: commentsJson,
         },
       };
     }
@@ -444,12 +489,14 @@ export async function executeReviewMode(
       data: { reason: "review_not_approved" },
     });
 
+    const commentsJson = allReviewComments.length > 0 ? JSON.stringify(allReviewComments) : undefined;
+
     return {
       success: false,
       validation: validationResult,
       durationMs: timer.elapsed(),
       error: `Review not approved after ${maxRounds} rounds`,
-      review: { totalRounds: maxRounds, approved: false, comments: allReviewComments, escalatedToHuman },
+      review: { totalRounds: maxRounds, approved: false, comments: allReviewComments, escalatedToHuman, reviewCommentsJson: commentsJson },
     };
 
   } catch (err) {

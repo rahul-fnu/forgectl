@@ -186,6 +186,7 @@ export class BoardStore {
     type: string;
     column?: string;
     params?: Record<string, string | number | boolean>;
+    depends_on?: string[];
   }): Promise<BoardCard> {
     const payload = CreateCardSchema.parse(input);
     const lock = await this.acquireLock(boardId);
@@ -214,12 +215,21 @@ export class BoardStore {
 
       this.validateRequiredParams(template.params?.required ?? [], params);
 
+      // Validate depends_on references
+      const cardIds = new Set(board.cards.map(c => c.id));
+      for (const depId of payload.depends_on ?? []) {
+        if (!cardIds.has(depId)) {
+          throw new Error(`depends_on references unknown card "${depId}"`);
+        }
+      }
+
       const card: BoardCard = {
         id,
         title: payload.title,
         type: payload.type,
         column,
         params,
+        depends_on: (payload.depends_on ?? []).length > 0 ? payload.depends_on : undefined,
         createdAt: now,
         updatedAt: now,
         statusVersion: 1,
