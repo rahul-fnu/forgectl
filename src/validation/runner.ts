@@ -9,8 +9,11 @@ import { invokeAgent } from "../agent/invoke.js";
 import {
   createLoopDetectorState,
   recordValidationError,
+  recordFileWrite,
+  recordToolCall,
   type LoopPattern,
 } from "../agent/loop-detector.js";
+import { execInContainer } from "../container/runner.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -138,6 +141,49 @@ export async function runValidationLoop(
 
     if (fixResult.exitCode !== 0) {
       logger.warn("agent", `Agent fix attempt exited with code ${fixResult.exitCode}`);
+    }
+
+    // Track file writes via git diff after agent fix
+    try {
+      const diffResult = await execInContainer(container, [
+        "git", "diff", "--name-only", "HEAD",
+      ], { workingDir: plan.input.mountPath });
+      if (diffResult.exitCode === 0 && diffResult.stdout.trim()) {
+        const changedFiles = diffResult.stdout.trim().split("\n");
+        for (const file of changedFiles) {
+          const fileLoop = recordFileWrite(loopState, file);
+          if (fileLoop) {
+            detectedLoop = fileLoop;
+            logger.error("validation", `Loop detected: ${fileLoop.detail}`);
+          }
+        }
+      }
+    } catch {
+      // Best-effort — git diff may fail in non-git workspaces
+    }
+
+    // Track repeated tool calls by hashing the fix invocation
+    const toolLoop = recordToolCall(loopState, "agent-fix", feedback);
+    if (toolLoop) {
+      detectedLoop = toolLoop;
+      logger.error("validation", `Loop detected: ${toolLoop.detail}`);
+    }
+
+    // Halt immediately if file write or tool call loop detected
+    if (detectedLoop) {
+      logger.error("validation", `Halting agent — loop pattern: ${detectedLoop.type}`);
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: false,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: stepLastPassed[s.name],
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+        loopDetected: detectedLoop,
+      };
     }
   }
 
