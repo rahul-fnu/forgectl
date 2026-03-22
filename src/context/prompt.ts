@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import type { RunPlan } from "../workflow/types.js";
+import type { ContextResult } from "./builder.js";
 
 const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
@@ -10,7 +11,7 @@ interface ContextArtifactSummary {
   size: number;
 }
 
-export function buildPrompt(plan: RunPlan): string {
+export function buildPrompt(plan: RunPlan, kgContext?: ContextResult): string {
   const parts: string[] = [];
 
   // 1. Workflow system prompt
@@ -50,6 +51,16 @@ export function buildPrompt(plan: RunPlan): string {
       parts.push(`- ${artifact.name} (${artifact.type}, ${artifact.size} bytes)`);
     }
     parts.push("Use artifact metadata and nearby text context when reasoning about these files.");
+  }
+
+  // 2b. KG-derived structural context
+  if (kgContext) {
+    parts.push(`\n--- Structural Context (Knowledge Graph) ---`);
+    parts.push(kgContext.systemContext);
+    if (kgContext.taskContext) {
+      parts.push(kgContext.taskContext);
+    }
+    parts.push(`--- End Structural Context ---\n`);
   }
 
   // 3. Available tools description
