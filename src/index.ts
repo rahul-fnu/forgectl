@@ -618,30 +618,35 @@ kgCmd
   .command("build")
   .description("Full knowledge graph rebuild")
   .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgBuildCommand);
 
 kgCmd
   .command("update")
   .description("Incremental update (changed files since last build)")
   .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgUpdateCommand);
 
 kgCmd
   .command("query <module>")
   .description("Show dependencies, coupling, test coverage for a module")
   .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgQueryCommand);
 
 kgCmd
   .command("stats")
   .description("Show graph statistics")
   .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgStatsCommand);
 
 kgCmd
   .command("status")
   .description("Show root hash and change summary")
   .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgStatusCommand);
 
 /**

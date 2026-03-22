@@ -53,7 +53,29 @@ CREATE TABLE IF NOT EXISTS kg_meta (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS kg_outcome_files (
+  file_path TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  total_turns INTEGER NOT NULL DEFAULT 0,
+  avg_retries REAL NOT NULL DEFAULT 0,
+  last_seen TEXT NOT NULL,
+  PRIMARY KEY (file_path, task_type)
+);
 `;
+
+/**
+ * Resolve the KG database path for a workspace.
+ * Per-workspace KGs live at <workspaceDir>/.forgectl/kg.db so agents on
+ * stacked branches see code from upstream branches not yet merged to main.
+ */
+export function resolveKGPath(workspaceDir?: string, dbPath?: string): string {
+  if (dbPath) return dbPath;
+  if (workspaceDir) return join(workspaceDir, ".forgectl", "kg.db");
+  return join(process.env.HOME || "/tmp", ".forgectl", "kg.db");
+}
 
 /**
  * Create or open a KG SQLite database.
@@ -87,6 +109,23 @@ export function createKGDatabase(dbPath?: string): KGDatabase {
   }
   if (!colNames.has("token_count")) {
     db.exec("ALTER TABLE kg_modules ADD COLUMN token_count INTEGER");
+  }
+
+  // Migrate: add kg_outcome_files table if missing
+  const tables = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='kg_outcome_files'"
+  ).all();
+  if (tables.length === 0) {
+    db.exec(`CREATE TABLE IF NOT EXISTS kg_outcome_files (
+      file_path TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      total_turns INTEGER NOT NULL DEFAULT 0,
+      avg_retries REAL NOT NULL DEFAULT 0,
+      last_seen TEXT NOT NULL,
+      PRIMARY KEY (file_path, task_type)
+    )`);
   }
 
   return db;
@@ -354,4 +393,126 @@ export function deleteTestMappingsFor(db: KGDatabase, sourceFiles: string[]): vo
     }
   });
   tx();
+}
+
+// ── Outcome-based learning ──
+
+export interface OutcomeFileRecord {
+  filePath: string;
+  taskType: string;
+  successCount: number;
+  failureCount: number;
+  totalTurns: number;
+  avgRetries: number;
+  lastSeen: string;
+}
+
+/**
+ * Record outcome data for files touched during a run.
+ * Updates success/failure counts and average retries for the learning loop.
+ */
+export function recordOutcomeFiles(
+  db: KGDatabase,
+  files: string[],
+  taskType: string,
+  success: boolean,
+  turns: number,
+  retries: number,
+): void {
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    INSERT INTO kg_outcome_files (file_path, task_type, success_count, failure_count, total_turns, avg_retries, last_seen)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(file_path, task_type) DO UPDATE SET
+      success_count = success_count + excluded.success_count,
+      failure_count = failure_count + excluded.failure_count,
+      total_turns = total_turns + excluded.total_turns,
+      avg_retries = (avg_retries * (success_count + failure_count) + excluded.avg_retries) / (success_count + failure_count + 1),
+      last_seen = excluded.last_seen
+  `);
+
+  const tx = db.transaction(() => {
+    for (const filePath of files) {
+      stmt.run(
+        filePath,
+        taskType,
+        success ? 1 : 0,
+        success ? 0 : 1,
+        turns,
+        retries,
+        now,
+      );
+    }
+  });
+  tx();
+}
+
+/**
+ * Get outcome file records for a set of file paths.
+ */
+export function getOutcomeFiles(
+  db: KGDatabase,
+  filePaths: string[],
+  taskType?: string,
+): OutcomeFileRecord[] {
+  if (filePaths.length === 0) return [];
+
+  const placeholders = filePaths.map(() => "?").join(",");
+  const sql = taskType
+    ? `SELECT * FROM kg_outcome_files WHERE file_path IN (${placeholders}) AND task_type = ?`
+    : `SELECT * FROM kg_outcome_files WHERE file_path IN (${placeholders})`;
+  const params = taskType ? [...filePaths, taskType] : filePaths;
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    file_path: string;
+    task_type: string;
+    success_count: number;
+    failure_count: number;
+    total_turns: number;
+    avg_retries: number;
+    last_seen: string;
+  }>;
+
+  return rows.map(r => ({
+    filePath: r.file_path,
+    taskType: r.task_type,
+    successCount: r.success_count,
+    failureCount: r.failure_count,
+    totalTurns: r.total_turns,
+    avgRetries: r.avg_retries,
+    lastSeen: r.last_seen,
+  }));
+}
+
+/**
+ * Get all outcome file records, optionally filtered by task type.
+ */
+export function getAllOutcomeFiles(
+  db: KGDatabase,
+  taskType?: string,
+): OutcomeFileRecord[] {
+  const sql = taskType
+    ? "SELECT * FROM kg_outcome_files WHERE task_type = ? ORDER BY success_count DESC"
+    : "SELECT * FROM kg_outcome_files ORDER BY success_count DESC";
+  const rows = (taskType
+    ? db.prepare(sql).all(taskType)
+    : db.prepare(sql).all()) as Array<{
+    file_path: string;
+    task_type: string;
+    success_count: number;
+    failure_count: number;
+    total_turns: number;
+    avg_retries: number;
+    last_seen: string;
+  }>;
+
+  return rows.map(r => ({
+    filePath: r.file_path,
+    taskType: r.task_type,
+    successCount: r.success_count,
+    failureCount: r.failure_count,
+    totalTurns: r.total_turns,
+    avgRetries: r.avg_retries,
+    lastSeen: r.last_seen,
+  }));
 }
