@@ -44,6 +44,7 @@ export interface ReviewSummary {
   approvedOnRound?: number;
   comments?: import("./review.js").ReviewComment[];
   escalatedToHuman?: boolean;
+  reviewCommentsJson?: string;
 }
 
 export interface ExecutionResult {

@@ -17,6 +17,7 @@ import type { RunRepository } from "../storage/repositories/runs.js";
 import { resumeRun } from "../durability/pause.js";
 import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
+import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 
@@ -32,6 +33,7 @@ interface RouteServices {
   orchestrator?: Orchestrator;
   runRepo?: RunRepository;
   costRepo?: CostRepository;
+  outcomeRepo?: OutcomeRepository;
   budgetConfig?: BudgetConfig;
 }
 
@@ -42,6 +44,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const orchestrator = services.orchestrator;
   const runRepo = services.runRepo;
   const costRepo = services.costRepo;
+  const outcomeRepo = services.outcomeRepo;
   const budgetConfig = services.budgetConfig;
 
   // Health check
@@ -693,6 +696,45 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
         reply.code(409);
         return { error: { code: "CONFLICT", message } };
       }
+    },
+  );
+
+  // --- Human review result ---
+  const VALID_HUMAN_REVIEW_RESULTS = new Set(["rubber_stamp", "minor_changes", "major_rework", "rejected"]);
+
+  app.patch<{ Params: { id: string }; Body: { human_review_result: string; human_review_comments?: number } }>(
+    "/outcomes/:id/review",
+    async (request, reply) => {
+      if (!outcomeRepo) {
+        reply.code(503);
+        return { error: { code: "SERVICE_UNAVAILABLE", message: "Outcome repository not available" } };
+      }
+
+      const { id } = request.params;
+      const { human_review_result, human_review_comments } = request.body;
+
+      if (!human_review_result || !VALID_HUMAN_REVIEW_RESULTS.has(human_review_result)) {
+        reply.code(400);
+        return {
+          error: {
+            code: "INVALID_INPUT",
+            message: `human_review_result must be one of: ${[...VALID_HUMAN_REVIEW_RESULTS].join(", ")}`,
+          },
+        };
+      }
+
+      const existing = outcomeRepo.findById(id);
+      if (!existing) {
+        reply.code(404);
+        return { error: { code: "NOT_FOUND", message: `Outcome ${id} not found` } };
+      }
+
+      outcomeRepo.update(id, {
+        humanReviewResult: human_review_result,
+        ...(human_review_comments !== undefined ? { humanReviewComments: human_review_comments } : {}),
+      });
+
+      return { status: "updated", id, human_review_result };
     },
   );
 }
