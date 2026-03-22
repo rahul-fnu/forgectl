@@ -41,6 +41,23 @@ export async function executeRun(
 
   if (outcomeDeps?.outcomeRepo) {
     try {
+      // Determine failure mode from result context
+      let failureMode: string | undefined;
+      if (!result.success) {
+        if (result.validation.loopDetected) {
+          failureMode = "loop_detected";
+        } else if (result.error?.includes("Lint gate failed")) {
+          failureMode = "lint";
+        } else if (result.error?.includes("Review not approved") || result.review?.escalatedToHuman) {
+          failureMode = "review";
+        } else {
+          failureMode = "validation";
+        }
+      }
+
+      // Collect review comments JSON from either review summary or top-level
+      const commentsJson = result.review?.reviewCommentsJson ?? result.reviewCommentsJson;
+
       outcomeDeps.outcomeRepo.insert({
         id: plan.runId,
         startedAt,
@@ -48,8 +65,8 @@ export async function executeRun(
         status: result.success ? "success" : "failure",
         lintIterations: result.validation.totalAttempts || undefined,
         reviewRounds: result.review?.totalRounds ?? undefined,
-        reviewCommentsJson: result.review?.reviewCommentsJson ?? undefined,
-        failureMode: result.success ? undefined : "validation",
+        reviewCommentsJson: commentsJson,
+        failureMode,
         failureDetail: result.error?.slice(0, 2000),
         filesChanged: result.output?.mode === "git" ? result.output.filesChanged : undefined,
       });

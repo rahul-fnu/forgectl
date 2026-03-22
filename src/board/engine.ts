@@ -66,6 +66,7 @@ export class BoardEngine {
 
     this.assertConcurrentRunBudget(board);
     this.assertTriggerAllowed(board, card, mode);
+    this.assertDependenciesMet(board, card);
 
     const template = board.templates[card.type];
     const loaded = loadTemplatePipeline(template, card.params, board.definitionPath);
@@ -83,7 +84,11 @@ export class BoardEngine {
     const triggered: string[] = [];
 
     for (const board of boards) {
-      for (const card of board.cards) {
+      // Sort cards in DAG order: cards with no dependencies first,
+      // then cards whose dependencies are all completed
+      const sortedCards = this.topologicalSortCards(board.cards);
+
+      for (const card of sortedCards) {
         const template = board.templates[card.type];
         const schedule = template?.triggers?.schedule;
         if (!schedule?.enabled) continue;
@@ -101,6 +106,11 @@ export class BoardEngine {
         if (card.runHistory.some((entry) => entry.status === "running")) {
           const nextAt = new Date(now.getTime() + intervalMinutes * 60_000).toISOString();
           await this.store.setNextScheduledAt(board.boardId, card.id, nextAt);
+          continue;
+        }
+
+        // Skip cards whose dependencies haven't completed
+        if (!this.areDependenciesMet(board, card)) {
           continue;
         }
 
@@ -134,6 +144,83 @@ export class BoardEngine {
     } catch {
       // keep card move successful even if auto trigger fails; error is visible via API retries
     }
+  }
+
+  /**
+   * Check if a card's dependency cards have all completed their latest run.
+   */
+  private areDependenciesMet(board: BoardState, card: BoardCard): boolean {
+    if (!card.depends_on || card.depends_on.length === 0) return true;
+
+    for (const depId of card.depends_on) {
+      const depCard = board.cards.find((c) => c.id === depId);
+      if (!depCard) return false;
+      const lastRun = depCard.runHistory[depCard.runHistory.length - 1];
+      if (!lastRun || lastRun.status !== "completed") return false;
+    }
+    return true;
+  }
+
+  /**
+   * Assert that a card's dependencies are met before triggering.
+   */
+  private assertDependenciesMet(board: BoardState, card: BoardCard): void {
+    if (!card.depends_on || card.depends_on.length === 0) return;
+
+    const unmet: string[] = [];
+    for (const depId of card.depends_on) {
+      const depCard = board.cards.find((c) => c.id === depId);
+      if (!depCard) {
+        unmet.push(`${depId} (not found)`);
+        continue;
+      }
+      const lastRun = depCard.runHistory[depCard.runHistory.length - 1];
+      if (!lastRun || lastRun.status !== "completed") {
+        unmet.push(depId);
+      }
+    }
+    if (unmet.length > 0) {
+      throw new Error(`Card "${card.id}" has unmet dependencies: ${unmet.join(", ")}`);
+    }
+  }
+
+  /**
+   * Topological sort of cards based on depends_on. Cards with no deps come first.
+   * Falls back to original order if there are cycles.
+   */
+  private topologicalSortCards(cards: BoardCard[]): BoardCard[] {
+    const cardMap = new Map(cards.map((c) => [c.id, c]));
+    const inDegree = new Map<string, number>();
+    const dependents = new Map<string, string[]>();
+
+    for (const card of cards) {
+      inDegree.set(card.id, (card.depends_on ?? []).length);
+      if (!dependents.has(card.id)) dependents.set(card.id, []);
+      for (const dep of card.depends_on ?? []) {
+        if (!dependents.has(dep)) dependents.set(dep, []);
+        dependents.get(dep)!.push(card.id);
+      }
+    }
+
+    const queue: string[] = [];
+    for (const card of cards) {
+      if (inDegree.get(card.id) === 0) queue.push(card.id);
+    }
+
+    const sorted: BoardCard[] = [];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const card = cardMap.get(id);
+      if (card) sorted.push(card);
+      for (const depId of dependents.get(id) ?? []) {
+        const deg = (inDegree.get(depId) ?? 1) - 1;
+        inDegree.set(depId, deg);
+        if (deg === 0) queue.push(depId);
+      }
+    }
+
+    // If not all cards were sorted (cycle), return original order
+    return sorted.length === cards.length ? sorted : cards;
   }
 
   private assertConcurrentRunBudget(board: BoardState): void {
