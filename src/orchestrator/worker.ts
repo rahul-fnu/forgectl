@@ -26,6 +26,8 @@ import { buildPrompt } from "../context/prompt.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
+import { emitRunEvent } from "../logging/events.js";
+import { describeLoopPattern } from "../agent/loop-detector.js";
 import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
@@ -37,6 +39,7 @@ export interface WorkerResult {
   validationResult?: ValidationResult;
   branch?: string;
   pendingApproval?: boolean;
+  loopDetected?: boolean;
 }
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
@@ -351,6 +354,29 @@ export async function executeWorker(
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
     }
 
+    // Check for loop detection in validation result
+    if (validationResult?.loopDetected) {
+      const loopDesc = describeLoopPattern(validationResult.loopDetected);
+      logger.error("worker", `Loop detected for ${issue.identifier}: ${loopDesc}`);
+
+      emitRunEvent({
+        runId: plan.runId,
+        type: "loop_detected",
+        timestamp: new Date().toISOString(),
+        data: {
+          pattern: validationResult.loopDetected.kind,
+          description: loopDesc,
+          issueId: issue.identifier,
+        },
+      });
+
+      agentResult = {
+        ...agentResult,
+        status: "failed",
+        stderr: `Loop detected — halting agent: ${loopDesc}`,
+      };
+    }
+
     // Update progress: validating complete
     if (githubDeps) {
       try {
@@ -570,5 +596,6 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment, validationResult, branch, pendingApproval: pendingApproval || undefined };
+  const loopDetected = validationResult?.loopDetected ? true : undefined;
+  return { agentResult, comment, validationResult, branch, pendingApproval: pendingApproval || undefined, loopDetected };
 }

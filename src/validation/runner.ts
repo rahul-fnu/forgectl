@@ -6,6 +6,7 @@ import type { ValidationStep } from "../config/schema.js";
 import { runValidationStep, type StepResult } from "./step.js";
 import { formatFeedback } from "./feedback.js";
 import { invokeAgent } from "../agent/invoke.js";
+import { LoopDetector, describeLoopPattern, type LoopPattern } from "../agent/loop-detector.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -17,6 +18,8 @@ export interface ValidationResult {
   }>;
   /** Combined stdout+stderr from all steps in the final validation pass. Undefined when no steps are configured. */
   lastOutput?: string;
+  /** Set when the validation loop was halted by the loop detector. */
+  loopDetected?: LoopPattern;
 }
 
 /**
@@ -45,6 +48,7 @@ export async function runValidationLoop(
     stepLastPassed[step.name] = false;
   }
 
+  const loopDetector = new LoopDetector();
   let attempt = 0;
   let lastResults: StepResult[] = [];
 
@@ -93,6 +97,28 @@ export async function runValidationLoop(
 
     // Feed errors back to agent
     const failedSteps = results.filter(r => !r.passed);
+
+    // Check for loop: feed each failed step's error signature to the detector
+    for (const failed of failedSteps) {
+      const errorSig = `${failed.step.name}::${failed.exitCode}::${failed.stderr.trim()}`;
+      const loopPattern = loopDetector.recordValidationError(errorSig);
+      if (loopPattern) {
+        logger.error("validation", `Loop detected: ${describeLoopPattern(loopPattern)}`);
+        const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+        return {
+          passed: false,
+          totalAttempts: attempt,
+          stepResults: steps.map(s => ({
+            name: s.name,
+            passed: stepLastPassed[s.name],
+            attempts: stepAttemptCounts[s.name],
+          })),
+          lastOutput: lastOutput || undefined,
+          loopDetected: loopPattern,
+        };
+      }
+    }
+
     const feedback = formatFeedback(failedSteps, plan.workflow.name);
     logger.info("validation", `${failedSteps.length} step(s) failed, sending feedback to agent`);
 
