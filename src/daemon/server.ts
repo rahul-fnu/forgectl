@@ -16,6 +16,7 @@ import { createLockRepository } from "../storage/repositories/locks.js";
 import { createCostRepository } from "../storage/repositories/costs.js";
 import { createRetryRepository } from "../storage/repositories/retries.js";
 import { createEventRepository } from "../storage/repositories/events.js";
+import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
 import { EventRecorder } from "../logging/recorder.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
@@ -58,6 +59,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const costRepo = createCostRepository(db);
   const retryRepo = createRetryRepository(db);
   const eventRepo = createEventRepository(db);
+  const outcomeRepo = createOutcomeRepository(db);
   const recorder = new EventRecorder(eventRepo, snapshotRepo);
 
   // --- Startup recovery (before accepting requests) ---
@@ -80,7 +82,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     const runConfig = loadConfig(configPath);
     const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
-    return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid, runRepo });
+    return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid, runRepo }, { outcomeRepo });
   });
 
   const pipelineService = new PipelineRunService(pipelineRepo);
@@ -168,6 +170,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     boardEngine,
     orchestrator: orchestrator ?? undefined,
     runRepo,
+    outcomeRepo,
   });
 
   // GitHub App initialization (optional, only when config.github_app is present)

@@ -305,6 +305,7 @@ export async function executeReviewMode(
     let approvedOnRound: number | undefined;
     let escalatedToHuman = false;
     const allReviewComments: ReviewComment[] = [];
+    const reviewComments: Array<{ round: number; approved: boolean; feedback: string }> = [];
 
     for (let round = 1; round <= maxRounds; round++) {
       logger.info("review", `Starting review round ${round}/${maxRounds}...`);
@@ -343,6 +344,8 @@ export async function executeReviewMode(
       // Destroy reviewer container for this round
       await destroyContainer(reviewerContainer);
       reviewerCleanup.container = undefined;
+
+      reviewComments.push({ round, approved: parsed.approved, feedback: parsed.feedback });
 
       if (parsed.approved) {
         logger.info("review", `✔ Review round ${round}: APPROVED`);
