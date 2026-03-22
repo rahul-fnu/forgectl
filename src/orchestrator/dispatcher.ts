@@ -494,6 +494,16 @@ async function executeWorkerAndHandle(
       });
     }
 
+    // Post loop-specific comment if loop was detected
+    if (result.validationResult?.loopDetected) {
+      const loop = result.validationResult.loopDetected;
+      const loopComment = `**forgectl:** Agent halted — loop detected.\n\n**Pattern:** ${loop.type}\n**Detail:** ${loop.detail}`;
+      tracker.postComment(issue.id, loopComment).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to post loop comment for ${issue.identifier}: ${msg}`);
+      });
+    }
+
     // Post comment (best-effort)
     tracker.postComment(issue.id, result.comment).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -556,6 +566,9 @@ async function executeWorkerAndHandle(
           }
         }
         const runId = issue.identifier;
+        // Use LOOP failure mode when loop was detected in validation
+        const isLoop = result.validationResult?.loopDetected != null;
+        const failureMode = isLoop ? "LOOP" : (outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined);
         outcomeDeps.outcomeRepo.insert({
           id: runId,
           taskId: issue.id,
@@ -563,7 +576,7 @@ async function executeWorkerAndHandle(
           completedAt: new Date().toISOString(),
           status: outcomeStatus,
           totalTurns: result.agentResult.turnCount ?? undefined,
-          failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
+          failureMode,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
           rawEventsJson,
         });

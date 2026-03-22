@@ -26,6 +26,7 @@ import { buildPrompt } from "../context/prompt.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
+import { emitRunEvent } from "../logging/events.js";
 import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
@@ -349,6 +350,25 @@ export async function executeWorker(
     if (plan.validation.steps.length > 0) {
       logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
+
+      // Halt on loop detection
+      if (validationResult.loopDetected) {
+        const loop = validationResult.loopDetected;
+        logger.error("worker", `Loop detected for ${issue.identifier}: ${loop.type} — ${loop.detail}`);
+
+        emitRunEvent({
+          runId: plan.runId,
+          type: "loop_detected",
+          timestamp: new Date().toISOString(),
+          data: { issueId: issue.id, identifier: issue.identifier, loopType: loop.type, detail: loop.detail },
+        });
+
+        agentResult = {
+          ...agentResult,
+          status: "failed",
+          stderr: `Loop detected (${loop.type}): ${loop.detail}`,
+        };
+      }
     }
 
     // Update progress: validating complete

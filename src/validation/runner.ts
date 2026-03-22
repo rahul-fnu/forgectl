@@ -6,6 +6,11 @@ import type { ValidationStep } from "../config/schema.js";
 import { runValidationStep, type StepResult } from "./step.js";
 import { formatFeedback } from "./feedback.js";
 import { invokeAgent } from "../agent/invoke.js";
+import {
+  createLoopDetectorState,
+  recordValidationError,
+  type LoopPattern,
+} from "../agent/loop-detector.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -17,6 +22,8 @@ export interface ValidationResult {
   }>;
   /** Combined stdout+stderr from all steps in the final validation pass. Undefined when no steps are configured. */
   lastOutput?: string;
+  /** Set when a loop pattern is detected during validation retries. */
+  loopDetected?: LoopPattern;
 }
 
 /**
@@ -47,6 +54,8 @@ export async function runValidationLoop(
 
   let attempt = 0;
   let lastResults: StepResult[] = [];
+  const loopState = createLoopDetectorState();
+  let detectedLoop: LoopPattern | null = null;
 
   while (attempt <= maxRetries) {
     attempt++;
@@ -67,10 +76,35 @@ export async function runValidationLoop(
       } else {
         logger.warn("validation", `✗ ${step.name} failed (exit ${result.exitCode})`);
         allPassed = false;
+
+        // Check for repeated validation errors
+        const errorOutput = [result.stdout, result.stderr].filter(Boolean).join("\n");
+        const loopCheck = recordValidationError(loopState, errorOutput);
+        if (loopCheck) {
+          detectedLoop = loopCheck;
+          logger.error("validation", `Loop detected: ${loopCheck.detail}`);
+        }
       }
     }
 
     lastResults = results;
+
+    // Halt immediately on loop detection
+    if (detectedLoop) {
+      logger.error("validation", `Halting agent — loop pattern: ${detectedLoop.type}`);
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: false,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: stepLastPassed[s.name],
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+        loopDetected: detectedLoop,
+      };
+    }
 
     if (allPassed) {
       logger.info("validation", "All validation steps passed");
