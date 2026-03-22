@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS kg_modules (
   imports_json TEXT NOT NULL,
   is_test INTEGER NOT NULL DEFAULT 0,
   last_modified TEXT,
+  content_hash TEXT,
+  tree_hash TEXT,
+  compressed_content TEXT,
+  token_count INTEGER,
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -69,6 +73,22 @@ export function createKGDatabase(dbPath?: string): KGDatabase {
   // Initialize schema
   db.exec(SCHEMA_SQL);
 
+  // Migrate existing databases: add new columns if missing
+  const columns = db.prepare("PRAGMA table_info(kg_modules)").all() as Array<{ name: string }>;
+  const colNames = new Set(columns.map(c => c.name));
+  if (!colNames.has("content_hash")) {
+    db.exec("ALTER TABLE kg_modules ADD COLUMN content_hash TEXT");
+  }
+  if (!colNames.has("tree_hash")) {
+    db.exec("ALTER TABLE kg_modules ADD COLUMN tree_hash TEXT");
+  }
+  if (!colNames.has("compressed_content")) {
+    db.exec("ALTER TABLE kg_modules ADD COLUMN compressed_content TEXT");
+  }
+  if (!colNames.has("token_count")) {
+    db.exec("ALTER TABLE kg_modules ADD COLUMN token_count INTEGER");
+  }
+
   return db;
 }
 
@@ -77,8 +97,8 @@ export function createKGDatabase(dbPath?: string): KGDatabase {
  */
 export function saveModules(db: KGDatabase, modules: ModuleInfo[]): void {
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO kg_modules (path, exports_json, imports_json, is_test, last_modified, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    INSERT OR REPLACE INTO kg_modules (path, exports_json, imports_json, is_test, last_modified, content_hash, tree_hash, compressed_content, token_count, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
 
   const tx = db.transaction(() => {
@@ -89,6 +109,10 @@ export function saveModules(db: KGDatabase, modules: ModuleInfo[]): void {
         JSON.stringify(mod.imports),
         mod.isTest ? 1 : 0,
         mod.lastModified || null,
+        mod.contentHash || null,
+        mod.treeHash || null,
+        mod.compressedContent || null,
+        mod.tokenCount || null,
       );
     }
   });
@@ -173,6 +197,10 @@ export function getModule(db: KGDatabase, path: string): ModuleInfo | undefined 
     imports_json: string;
     is_test: number;
     last_modified: string | null;
+    content_hash: string | null;
+    tree_hash: string | null;
+    compressed_content: string | null;
+    token_count: number | null;
   } | undefined;
 
   if (!row) return undefined;
@@ -183,6 +211,10 @@ export function getModule(db: KGDatabase, path: string): ModuleInfo | undefined 
     imports: JSON.parse(row.imports_json),
     isTest: row.is_test === 1,
     lastModified: row.last_modified || undefined,
+    contentHash: row.content_hash || undefined,
+    treeHash: row.tree_hash || undefined,
+    compressedContent: row.compressed_content || undefined,
+    tokenCount: row.token_count || undefined,
   };
 }
 
@@ -262,6 +294,14 @@ export function getStats(db: KGDatabase): KnowledgeGraphStats {
 
   const lastFullBuild = getMeta(db, "last_full_build");
   const lastIncremental = getMeta(db, "last_incremental");
+  const rootHash = getMeta(db, "root_hash");
+  const lastRootHash = getMeta(db, "last_root_hash");
+
+  let changedSinceLastBuild: number | undefined;
+  if (rootHash && lastRootHash) {
+    changedSinceLastBuild = rootHash === lastRootHash ? 0 :
+      (db.prepare("SELECT COUNT(*) as count FROM kg_modules WHERE content_hash IS NOT NULL AND content_hash != COALESCE((SELECT value FROM kg_meta WHERE key = 'prev_content_hash_' || kg_modules.path), '')").get() as { count: number }).count;
+  }
 
   return {
     totalModules: moduleCount,
@@ -270,6 +310,8 @@ export function getStats(db: KGDatabase): KnowledgeGraphStats {
     totalCouplingPairs: couplingCount,
     lastFullBuild: lastFullBuild || undefined,
     lastIncremental: lastIncremental || undefined,
+    rootHash: rootHash || undefined,
+    changedSinceLastBuild,
   };
 }
 

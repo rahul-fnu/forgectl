@@ -181,11 +181,63 @@ export async function kgStatsCommand(options: { db?: string }): Promise<void> {
   }
 }
 
+/**
+ * forgectl kg status — Show root hash and change summary.
+ */
+export async function kgStatusCommand(options: { db?: string }): Promise<void> {
+  const db = createKGDatabase(options.db);
+
+  try {
+    const stats = getStats(db);
+    const rootHash = getMeta(db, "root_hash");
+    const lastRootHash = getMeta(db, "last_root_hash");
+
+    console.log(chalk.bold.white("\nKnowledge Graph Status"));
+
+    if (rootHash) {
+      console.log(`  ${chalk.dim("Root Hash:")}     ${rootHash}`);
+    } else {
+      console.log(chalk.yellow("  No root hash computed. Run 'forgectl kg build' first."));
+    }
+
+    if (rootHash && lastRootHash) {
+      if (rootHash === lastRootHash) {
+        console.log(chalk.green("  Cache: full hit (no semantic changes since last build)"));
+      } else {
+        console.log(chalk.yellow("  Cache: invalidated (semantic changes detected)"));
+      }
+    }
+
+    if (stats.changedSinceLastBuild !== undefined) {
+      console.log(`  ${chalk.dim("Changed modules:")} ${stats.changedSinceLastBuild}`);
+    }
+
+    console.log(`  ${chalk.dim("Total modules:")}  ${stats.totalModules}`);
+
+    if (stats.lastFullBuild) {
+      console.log(`  ${chalk.dim("Last Full Build:")} ${stats.lastFullBuild}`);
+    }
+    if (stats.lastIncremental) {
+      console.log(`  ${chalk.dim("Last Incremental:")} ${stats.lastIncremental}`);
+    }
+
+    console.log();
+  } finally {
+    db.close();
+  }
+}
+
 function printStats(stats: KnowledgeGraphStats): void {
   console.log(`  ${chalk.dim("Modules:")}       ${stats.totalModules}`);
   console.log(`  ${chalk.dim("Edges:")}         ${stats.totalEdges}`);
   console.log(`  ${chalk.dim("Test Mappings:")} ${stats.totalTestMappings}`);
   console.log(`  ${chalk.dim("Coupling Pairs:")} ${stats.totalCouplingPairs}`);
+  if (stats.rootHash) {
+    console.log(`  ${chalk.dim("Root Hash:")}     ${stats.rootHash}`);
+  }
+  if (stats.changedSinceLastBuild !== undefined) {
+    console.log(`  ${chalk.dim("Changed Since Last Build:")} ${stats.changedSinceLastBuild}`);
+  }
   if (stats.lastFullBuild) {
     console.log(`  ${chalk.dim("Last Full Build:")} ${stats.lastFullBuild}`);
   }
