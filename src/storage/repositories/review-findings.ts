@@ -38,6 +38,7 @@ export interface ReviewFindingsRepository {
   findAll(): ReviewFindingRow[];
   recordCalibration(module: string, total: number, overridden: number): void;
   getCalibration(module: string): CalibrationRow | undefined;
+  getAllCalibration(): CalibrationRow[];
   getMiscalibratedModules(threshold?: number): CalibrationRow[];
 }
 
@@ -191,6 +192,14 @@ export function createReviewFindingsRepository(db: AppDatabase): ReviewFindingsR
         .where(eq(reviewCalibration.module, module))
         .get();
       return row ? deserializeCalibration(row) : undefined;
+    },
+
+    getAllCalibration(): CalibrationRow[] {
+      return db
+        .select()
+        .from(reviewCalibration)
+        .all()
+        .map(deserializeCalibration);
     },
 
     getMiscalibratedModules(threshold?: number): CalibrationRow[] {

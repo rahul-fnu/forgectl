@@ -171,6 +171,15 @@ describe("reviewCalibration", () => {
     expect(miscalibrated[0].module).toBe("src/storage");
   });
 
+  it("getAllCalibration returns all calibration rows", () => {
+    repo.recordCalibration("src/storage", 10, 4);
+    repo.recordCalibration("src/agent", 10, 1);
+
+    const all = repo.getAllCalibration();
+    expect(all).toHaveLength(2);
+    expect(all.map(c => c.module).sort()).toEqual(["src/agent", "src/storage"]);
+  });
+
   it("false positive rate tracked per module", () => {
     repo.recordCalibration("src/storage", 10, 4);
     repo.recordCalibration("src/agent", 10, 1);
