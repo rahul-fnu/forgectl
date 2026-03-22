@@ -91,3 +91,54 @@ function dfs(
   color.set(nodeId, BLACK);
   return null;
 }
+
+/**
+ * Build a forward adjacency map: for each issue, list the issues that depend on it.
+ * Only considers edges where both endpoints are in the input set.
+ */
+export function buildIssueDependentsMap(issues: IssueDAGNode[]): Map<string, string[]> {
+  const knownIds = new Set(issues.map(i => i.id));
+  const dependents = new Map<string, string[]>();
+  for (const issue of issues) {
+    if (!dependents.has(issue.id)) dependents.set(issue.id, []);
+  }
+  for (const issue of issues) {
+    for (const dep of issue.blocked_by) {
+      if (!knownIds.has(dep)) continue;
+      if (!dependents.has(dep)) dependents.set(dep, []);
+      dependents.get(dep)!.push(issue.id);
+    }
+  }
+  return dependents;
+}
+
+/**
+ * Compute the number of transitive descendants for each issue in the DAG.
+ * An issue's descendant count represents how much downstream work completing
+ * that issue would unblock. Higher counts indicate critical-path issues.
+ *
+ * Uses the same graph structure as the 3-color DFS cycle detection above.
+ */
+export function computeDescendantCounts(issues: IssueDAGNode[]): Map<string, number> {
+  if (issues.length === 0) return new Map();
+
+  const dependents = buildIssueDependentsMap(issues);
+  const counts = new Map<string, number>();
+
+  for (const issue of issues) {
+    if (counts.has(issue.id)) continue;
+    const descendants = new Set<string>();
+    const stack = [...(dependents.get(issue.id) ?? [])];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (descendants.has(cur)) continue;
+      descendants.add(cur);
+      for (const child of dependents.get(cur) ?? []) {
+        if (!descendants.has(child)) stack.push(child);
+      }
+    }
+    counts.set(issue.id, descendants.size);
+  }
+
+  return counts;
+}

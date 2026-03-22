@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectIssueCycles, IssueDAGNode } from "../../src/tracker/sub-issue-dag.js";
+import { detectIssueCycles, computeDescendantCounts, buildIssueDependentsMap, IssueDAGNode } from "../../src/tracker/sub-issue-dag.js";
 
 describe("detectIssueCycles", () => {
   it("returns null for empty graph", () => {
@@ -102,5 +102,119 @@ describe("detectIssueCycles", () => {
       { id: "30", blocked_by: ["20"] },
     ];
     expect(detectIssueCycles(nodes)).toBeNull();
+  });
+});
+
+describe("buildIssueDependentsMap", () => {
+  it("returns empty map for empty input", () => {
+    const result = buildIssueDependentsMap([]);
+    expect(result.size).toBe(0);
+  });
+
+  it("builds correct forward adjacency for linear chain", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["B"] },
+    ];
+    const result = buildIssueDependentsMap(nodes);
+    expect(result.get("A")).toEqual(["B"]);
+    expect(result.get("B")).toEqual(["C"]);
+    expect(result.get("C")).toEqual([]);
+  });
+
+  it("ignores external references not in the input set", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: ["external-1"] },
+      { id: "B", blocked_by: ["A"] },
+    ];
+    const result = buildIssueDependentsMap(nodes);
+    expect(result.get("A")).toEqual(["B"]);
+    expect(result.has("external-1")).toBe(false);
+  });
+});
+
+describe("computeDescendantCounts", () => {
+  it("returns empty map for empty input", () => {
+    const result = computeDescendantCounts([]);
+    expect(result.size).toBe(0);
+  });
+
+  it("returns 0 for isolated nodes", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: [] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(0);
+    expect(result.get("B")).toBe(0);
+  });
+
+  it("counts correctly for linear chain A->B->C", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["B"] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(2); // B, C
+    expect(result.get("B")).toBe(1); // C
+    expect(result.get("C")).toBe(0);
+  });
+
+  it("counts correctly for diamond DAG (A->B, A->C, B+C->D)", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["A"] },
+      { id: "D", blocked_by: ["B", "C"] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(3); // B, C, D
+    expect(result.get("B")).toBe(1); // D
+    expect(result.get("C")).toBe(1); // D
+    expect(result.get("D")).toBe(0);
+  });
+
+  it("counts correctly for fan-out (A->B, A->C, A->D)", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["A"] },
+      { id: "D", blocked_by: ["A"] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(3);
+    expect(result.get("B")).toBe(0);
+    expect(result.get("C")).toBe(0);
+    expect(result.get("D")).toBe(0);
+  });
+
+  it("handles complex DAG with multiple paths", () => {
+    // A -> B -> D -> E
+    // A -> C -> D -> E
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: [] },
+      { id: "B", blocked_by: ["A"] },
+      { id: "C", blocked_by: ["A"] },
+      { id: "D", blocked_by: ["B", "C"] },
+      { id: "E", blocked_by: ["D"] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(4); // B, C, D, E
+    expect(result.get("B")).toBe(2); // D, E
+    expect(result.get("C")).toBe(2); // D, E
+    expect(result.get("D")).toBe(1); // E
+    expect(result.get("E")).toBe(0);
+  });
+
+  it("ignores external references", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A", blocked_by: ["external-1"] },
+      { id: "B", blocked_by: ["A"] },
+    ];
+    const result = computeDescendantCounts(nodes);
+    expect(result.get("A")).toBe(1); // B
+    expect(result.get("B")).toBe(0);
   });
 });

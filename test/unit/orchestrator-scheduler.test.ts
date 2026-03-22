@@ -15,7 +15,7 @@ vi.mock("../../src/orchestrator/reconciler.js", () => ({
 // Mock dispatcher
 vi.mock("../../src/orchestrator/dispatcher.js", () => ({
   filterCandidates: vi.fn().mockReturnValue([]),
-  sortCandidates: vi.fn().mockReturnValue([]),
+  sortCandidates: vi.fn((issues: any[]) => [...issues]),
   dispatchIssue: vi.fn(),
 }));
 
@@ -129,7 +129,6 @@ describe("tick", () => {
     const issues = [makeIssue("1"), makeIssue("2")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
     vi.mocked(filterCandidates).mockReturnValue(issues);
-    vi.mocked(sortCandidates).mockReturnValue(issues);
 
     await tick(deps);
 
@@ -142,7 +141,6 @@ describe("tick", () => {
     const issues = [makeIssue("1"), makeIssue("2"), makeIssue("3"), makeIssue("4")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
     vi.mocked(filterCandidates).mockReturnValue(issues);
-    vi.mocked(sortCandidates).mockReturnValue(issues);
 
     // SlotManager with max 3 — should dispatch only 3
     await tick(deps);
@@ -157,7 +155,6 @@ describe("tick", () => {
     const issues = [makeIssue("1")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
     vi.mocked(filterCandidates).mockReturnValue(issues);
-    vi.mocked(sortCandidates).mockReturnValue(issues);
 
     await tick(deps);
 
@@ -270,6 +267,106 @@ describe("tick", () => {
       expect(terminalIds.has("20")).toBe(true); // "done" is terminal
       expect(terminalIds.has("21")).toBe(false); // "open" is not terminal
     });
+  });
+});
+
+describe("DAG-aware scheduling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("dispatches critical-path issues first (most downstream dependents)", async () => {
+    // Diamond DAG: A (root, 3 descendants) -> B (1 desc), A -> C (1 desc), B+C -> D (0 desc)
+    // All are eligible. A should be dispatched first.
+    const issueA = { ...makeIssue("A"), blocked_by: [] };
+    const issueB = { ...makeIssue("B"), blocked_by: ["A"] };
+    const issueC = { ...makeIssue("C"), blocked_by: ["A"] };
+    const issueD = { ...makeIssue("D"), blocked_by: ["B", "C"] };
+
+    const allCandidates = [issueA, issueB, issueC, issueD];
+    // Only A is eligible (B, C, D have unresolved blockers)
+    const eligible = [issueA];
+
+    const deps = makeDeps();
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(allCandidates);
+    vi.mocked(filterCandidates).mockReturnValue(eligible);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchIssue).mock.calls[0][0].id).toBe("A");
+  });
+
+  it("issues with unresolved blockers are never dispatched", async () => {
+    const issueA = { ...makeIssue("A"), blocked_by: [] };
+    const issueB = { ...makeIssue("B"), blocked_by: ["A"] };
+
+    const allCandidates = [issueA, issueB];
+    // filterCandidates already excludes B (blocked by A which is not terminal)
+    const eligible = [issueA];
+
+    const deps = makeDeps();
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(allCandidates);
+    vi.mocked(filterCandidates).mockReturnValue(eligible);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(1);
+    const dispatchedIds = vi.mocked(dispatchIssue).mock.calls.map(c => c[0].id);
+    expect(dispatchedIds).toContain("A");
+    expect(dispatchedIds).not.toContain("B");
+  });
+
+  it("orders eligible issues by descendant count (critical path first)", async () => {
+    // Two independent subgraphs:
+    //   X -> Y -> Z  (X has 2 descendants)
+    //   W             (W has 0 descendants)
+    // Both X and W are eligible roots. X should be dispatched before W.
+    const issueX = { ...makeIssue("X"), blocked_by: [] };
+    const issueY = { ...makeIssue("Y"), blocked_by: ["X"] };
+    const issueZ = { ...makeIssue("Z"), blocked_by: ["Y"] };
+    const issueW = { ...makeIssue("W"), blocked_by: [] };
+
+    const allCandidates = [issueW, issueX, issueY, issueZ];
+    // X and W are eligible (no blockers); Y and Z are blocked
+    const eligible = [issueW, issueX]; // W comes first in input
+
+    const deps = makeDeps();
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(allCandidates);
+    vi.mocked(filterCandidates).mockReturnValue(eligible);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(2);
+    // X (2 descendants) should be dispatched before W (0 descendants)
+    expect(vi.mocked(dispatchIssue).mock.calls[0][0].id).toBe("X");
+    expect(vi.mocked(dispatchIssue).mock.calls[1][0].id).toBe("W");
+  });
+
+  it("critical path is correct for diamond-shaped DAGs", async () => {
+    // Diamond: A -> B, A -> C, B+C -> D
+    // After A completes (terminal), B and C become eligible.
+    // Both B and C have 1 descendant (D). Order among them uses priority tiebreaker.
+    const issueA = { ...makeIssue("A"), blocked_by: [] };
+    const issueB = { ...makeIssue("B"), blocked_by: ["A"] };
+    const issueC = { ...makeIssue("C"), blocked_by: ["A"] };
+    const issueD = { ...makeIssue("D"), blocked_by: ["B", "C"] };
+
+    const allCandidates = [issueA, issueB, issueC, issueD];
+    // Simulate A already terminal: B and C are now eligible
+    const eligible = [issueB, issueC];
+
+    const deps = makeDeps();
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(allCandidates);
+    vi.mocked(filterCandidates).mockReturnValue(eligible);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(2);
+    // Both have equal descendant count (1), so both get dispatched
+    const dispatchedIds = vi.mocked(dispatchIssue).mock.calls.map(c => c[0].id);
+    expect(dispatchedIds).toContain("B");
+    expect(dispatchedIds).toContain("C");
   });
 });
 

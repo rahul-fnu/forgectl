@@ -14,6 +14,8 @@ import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
+import { computeDescendantCounts } from "../tracker/sub-issue-dag.js";
+import type { IssueDAGNode } from "../tracker/sub-issue-dag.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -102,8 +104,22 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   logger.info("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
 
-  // Step 5: Sort candidates
-  const sorted = sortCandidates(eligible);
+  // Step 5: Sort candidates (DAG-aware: critical-path first, then priority/date)
+  // Build DAG from ALL candidates (not just eligible) to capture the full dependency graph
+  const dagNodes: IssueDAGNode[] = candidates.map(c => ({
+    id: c.id,
+    blocked_by: c.blocked_by,
+  }));
+  const descendantCounts = computeDescendantCounts(dagNodes);
+
+  // First sort by priority/date, then stable-sort by descendant count so
+  // critical-path issues (most downstream dependents) are dispatched first.
+  // Stable sort preserves priority ordering among issues with equal descendant counts.
+  const sorted = sortCandidates(eligible).sort((a, b) => {
+    const countA = descendantCounts.get(a.id) ?? 0;
+    const countB = descendantCounts.get(b.id) ?? 0;
+    return countB - countA;
+  });
 
   // Step 6: Get available top-level slots (children have their own pool)
   const available = slotManager.availableTopLevelSlots();
