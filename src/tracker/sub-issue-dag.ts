@@ -91,3 +91,67 @@ function dfs(
   color.set(nodeId, BLACK);
   return null;
 }
+
+/**
+ * Compute how many downstream issues each issue transitively unblocks.
+ *
+ * Given a set of issues with blocked_by edges, this builds a reverse adjacency
+ * (blocker -> dependents) and counts transitive descendants for each node.
+ * Higher scores mean the issue is on the critical path — completing it
+ * unblocks more downstream work.
+ *
+ * External refs (IDs not in the input set) are silently ignored.
+ * Returns a Map from issue ID to downstream count (0 = leaf, nothing depends on it).
+ */
+export function computeCriticalPath(issues: IssueDAGNode[]): Map<string, number> {
+  if (issues.length === 0) return new Map();
+
+  const knownIds = new Set<string>(issues.map(i => i.id));
+
+  // Build reverse adjacency: blocker -> list of issues it unblocks
+  const reverseAdj = new Map<string, string[]>();
+  for (const id of knownIds) {
+    reverseAdj.set(id, []);
+  }
+  for (const issue of issues) {
+    for (const dep of issue.blocked_by) {
+      if (knownIds.has(dep)) {
+        reverseAdj.get(dep)!.push(issue.id);
+      }
+    }
+  }
+
+  // Memoized DFS to count transitive descendants
+  const memo = new Map<string, number>();
+
+  function countDescendants(nodeId: string, visiting: Set<string>): number {
+    if (memo.has(nodeId)) return memo.get(nodeId)!;
+    if (visiting.has(nodeId)) return 0; // cycle guard
+
+    visiting.add(nodeId);
+    const reachable = new Set<string>();
+    const stack = [...(reverseAdj.get(nodeId) ?? [])];
+
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (reachable.has(cur) || cur === nodeId) continue;
+      reachable.add(cur);
+      for (const next of reverseAdj.get(cur) ?? []) {
+        if (!reachable.has(next)) {
+          stack.push(next);
+        }
+      }
+    }
+
+    visiting.delete(nodeId);
+    const count = reachable.size;
+    memo.set(nodeId, count);
+    return count;
+  }
+
+  const result = new Map<string, number>();
+  for (const id of knownIds) {
+    result.set(id, countDescendants(id, new Set()));
+  }
+  return result;
+}
