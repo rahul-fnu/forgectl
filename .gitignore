@@ -4,3 +4,21 @@ dist/
 .forgectl/config.yaml
 
 forge-output/
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.*
+target/
+*.rlib
+*.o
+*.so
+*.dylib
+*.exe
+*.dll
+*.class
+__pycache__/
+*.pyc
+.next/
+coverage/

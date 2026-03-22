@@ -43,7 +43,7 @@ describe("WorkflowSchema autonomy field", () => {
     expect(withoutAutonomy.description).toBe("");
     expect(withoutAutonomy.tools).toEqual([]);
     expect(withoutAutonomy.system).toBe("");
-    expect(withoutAutonomy.validation).toEqual({ steps: [], on_failure: "abandon" });
+    expect(withoutAutonomy.validation).toEqual({ steps: [], lint_steps: [], on_failure: "abandon" });
     expect(withoutAutonomy.output).toEqual({ mode: "git", path: "/workspace", collect: [] });
     expect(withoutAutonomy.review).toEqual({ enabled: false, system: "" });
   });
