@@ -1,4 +1,4 @@
-CREATE TABLE `review_findings` (
+CREATE TABLE IF NOT EXISTS `review_findings` (
 	`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`category` TEXT NOT NULL,
 	`pattern` TEXT NOT NULL,
@@ -9,8 +9,8 @@ CREATE TABLE `review_findings` (
 	`promoted_to_convention` INTEGER NOT NULL DEFAULT 0,
 	`example_comment` TEXT
 );--> statement-breakpoint
-CREATE UNIQUE INDEX `review_findings_category_pattern_module_unique` ON `review_findings` (`category`, `pattern`, `module`);--> statement-breakpoint
-CREATE TABLE `review_calibration` (
+CREATE UNIQUE INDEX IF NOT EXISTS `review_findings_category_pattern_module_unique` ON `review_findings` (`category`, `pattern`, `module`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `review_calibration` (
 	`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`module` TEXT NOT NULL,
 	`total_comments` INTEGER NOT NULL DEFAULT 0,
@@ -18,4 +18,4 @@ CREATE TABLE `review_calibration` (
 	`false_positive_rate` REAL NOT NULL DEFAULT 0,
 	`last_updated` TEXT NOT NULL
 );--> statement-breakpoint
-CREATE UNIQUE INDEX `review_calibration_module_unique` ON `review_calibration` (`module`);
+CREATE UNIQUE INDEX IF NOT EXISTS `review_calibration_module_unique` ON `review_calibration` (`module`);
