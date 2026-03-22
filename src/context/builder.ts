@@ -4,6 +4,7 @@ import type { KGDatabase } from "../kg/storage.js";
 import { getModule, getMeta, getCoupledFiles, getTestsFor } from "../kg/storage.js";
 import { estimateTokenCount } from "../kg/merkle.js";
 import type { ModuleInfo } from "../kg/types.js";
+import { computeLearningBoosts, type LearningResult, type AgenticSearchHint } from "./learning.js";
 
 export interface ContextResult {
   systemContext: string;
@@ -11,6 +12,13 @@ export interface ContextResult {
   budget: { used: number; max: number; reservedForAgent: number };
   merkleRoot: string;
   includedFiles: Array<{ path: string; tier: "full" | "exports" | "name"; tokens: number }>;
+  learningInsights?: LearningInsights;
+}
+
+export interface LearningInsights {
+  searchHints: AgenticSearchHint[];
+  taskTypeStats: LearningResult["taskTypeStats"];
+  boostedFiles: number;
 }
 
 interface ScoredFile {
@@ -36,6 +44,7 @@ export async function buildContext(
   task: TaskSpec,
   kgDb: KGDatabase,
   budget?: number,
+  taskType?: string,
 ): Promise<ContextResult> {
   const totalBudget = budget ?? DEFAULT_BUDGET;
   const reservedForAgent = Math.floor(totalBudget * AGENT_RESERVE_RATIO);
@@ -168,6 +177,46 @@ export async function buildContext(
     }
   }
 
+  // 2b. Apply learning boosts from outcome history
+  let learningInsights: LearningInsights | undefined;
+  const effectiveTaskType = taskType ?? inferTaskType(task);
+
+  if (effectiveTaskType) {
+    try {
+      const learningResult = computeLearningBoosts(kgDb, effectiveTaskType, referencedFiles);
+
+      if (learningResult.boosts.length > 0 || learningResult.searchHints.length > 0) {
+        let boostedCount = 0;
+
+        for (const boost of learningResult.boosts) {
+          const existing = scored.get(boost.filePath);
+          if (existing) {
+            existing.score = Math.max(0, Math.min(1.0, existing.score + boost.boost));
+            boostedCount++;
+          } else if (boost.boost > 0) {
+            const mod = getModule(kgDb, boost.filePath);
+            if (mod) {
+              scored.set(boost.filePath, {
+                path: boost.filePath,
+                score: Math.min(0.6, 0.3 + boost.boost),
+                module: mod,
+              });
+              boostedCount++;
+            }
+          }
+        }
+
+        learningInsights = {
+          searchHints: learningResult.searchHints,
+          taskTypeStats: learningResult.taskTypeStats,
+          boostedFiles: boostedCount,
+        };
+      }
+    } catch {
+      // Learning is best-effort
+    }
+  }
+
   // 3. Sort by score descending
   const sortedFiles = [...scored.values()].sort((a, b) => b.score - a.score);
 
@@ -215,15 +264,37 @@ export async function buildContext(
   }
 
   // Build system context header
-  const systemContext = [
+  const systemLines = [
     "# Codebase Context (auto-generated from Knowledge Graph)",
     `Merkle root: ${merkleRoot}`,
     `Files included: ${includedFiles.length}`,
     `Token budget: ${tokensUsed}/${preBuildBudget} (${reservedForAgent} reserved for agent exploration)`,
-    "",
-  ].join("\n");
+  ];
 
-  const taskContext = contextParts.join("\n\n");
+  if (learningInsights) {
+    const stats = learningInsights.taskTypeStats;
+    if (stats.totalRuns > 0) {
+      systemLines.push(`Learning: ${stats.totalRuns} prior runs, ${(stats.successRate * 100).toFixed(0)}% success rate, avg ${stats.avgTurns} turns`);
+    }
+    if (learningInsights.boostedFiles > 0) {
+      systemLines.push(`Outcome-boosted files: ${learningInsights.boostedFiles}`);
+    }
+  }
+
+  systemLines.push("");
+  const systemContext = systemLines.join("\n");
+
+  // Append agentic search hints if available
+  const searchHintParts: string[] = [];
+  if (learningInsights?.searchHints.length) {
+    searchHintParts.push("\n## Agentic Search Hints");
+    searchHintParts.push("Based on outcome history, consider exploring these areas:");
+    for (const hint of learningInsights.searchHints) {
+      searchHintParts.push(`- [${hint.priority}] ${hint.pattern}: ${hint.reason}`);
+    }
+  }
+
+  const taskContext = contextParts.join("\n\n") + (searchHintParts.length > 0 ? "\n" + searchHintParts.join("\n") : "");
 
   const result: ContextResult = {
     systemContext,
@@ -231,6 +302,7 @@ export async function buildContext(
     budget: { used: tokensUsed, max: totalBudget, reservedForAgent },
     merkleRoot,
     includedFiles,
+    learningInsights,
   };
 
   // Cache result
@@ -292,4 +364,26 @@ function renderTier(entry: ScoredFile, tier: "full" | "exports" | "name"): strin
 function renderExportsTier(header: string, mod: ModuleInfo): string {
   const exports = mod.exports.map(e => `  export ${e.kind} ${e.name}`).join("\n");
   return exports ? `${header}\n${exports}` : header;
+}
+
+/**
+ * Infer task type from task spec for learning loop lookups.
+ * Uses the task ID prefix, metadata, or falls back to context-based heuristics.
+ */
+function inferTaskType(task: TaskSpec): string | undefined {
+  if (task.metadata?.taskType) return task.metadata.taskType;
+
+  const id = task.id.toLowerCase();
+  if (id.startsWith("fix") || id.includes("bug")) return "bugfix";
+  if (id.startsWith("feat") || id.includes("feature")) return "feature";
+  if (id.startsWith("refactor")) return "refactor";
+  if (id.startsWith("test")) return "test";
+
+  const desc = (task.description ?? task.title).toLowerCase();
+  if (desc.includes("fix") || desc.includes("bug")) return "bugfix";
+  if (desc.includes("add") || desc.includes("implement") || desc.includes("feature")) return "feature";
+  if (desc.includes("refactor") || desc.includes("clean")) return "refactor";
+  if (desc.includes("test")) return "test";
+
+  return undefined;
 }

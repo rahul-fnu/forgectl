@@ -8,6 +8,14 @@ export interface AnalysisReport {
   riskyModules: Array<{ module: string; failureRate: number; avgRetries: number }>;
   turnEstimationBias: number;
   recommendations: string[];
+  contextSuggestions?: ContextSuggestion[];
+}
+
+export interface ContextSuggestion {
+  module: string;
+  action: "boost" | "demote" | "watch";
+  reason: string;
+  confidence: number;
 }
 
 export interface AnalyzeOptions {
@@ -195,6 +203,9 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     );
   }
 
+  // Context suggestions: advise the context engine on file relevance
+  const contextSuggestions = generateContextSuggestions(moduleStats, riskyModules);
+
   return {
     period: { from, to },
     totalRuns,
@@ -203,5 +214,57 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     riskyModules,
     turnEstimationBias,
     recommendations,
+    contextSuggestions,
   };
+}
+
+/**
+ * Generate context suggestions for the learning loop.
+ * These feed back into the Context Engine to improve file selection.
+ */
+function generateContextSuggestions(
+  moduleStats: Map<string, { total: number; failures: number; totalRetries: number }>,
+  riskyModules: Array<{ module: string; failureRate: number; avgRetries: number }>,
+): ContextSuggestion[] {
+  const suggestions: ContextSuggestion[] = [];
+
+  for (const risky of riskyModules) {
+    const stats = moduleStats.get(risky.module);
+    if (!stats || stats.total < 2) continue;
+
+    if (risky.failureRate >= 0.5 && stats.total >= 3) {
+      suggestions.push({
+        module: risky.module,
+        action: "watch",
+        reason: `${Math.round(risky.failureRate * 100)}% failure rate across ${stats.total} runs — include more context for this module`,
+        confidence: Math.min(1, risky.failureRate * stats.total / 5),
+      });
+    }
+
+    if (risky.avgRetries >= 3) {
+      suggestions.push({
+        module: risky.module,
+        action: "boost",
+        reason: `avg ${risky.avgRetries.toFixed(1)} retries — agent needs more context upfront to avoid loops`,
+        confidence: Math.min(1, risky.avgRetries / 5),
+      });
+    }
+  }
+
+  // Modules with high success and low retries can be demoted to save budget
+  for (const [module, stats] of moduleStats) {
+    if (stats.total < 3) continue;
+    const failureRate = stats.failures / stats.total;
+    const avgRetries = stats.totalRetries / stats.total;
+    if (failureRate <= 0.1 && avgRetries <= 1) {
+      suggestions.push({
+        module,
+        action: "demote",
+        reason: `${Math.round((1 - failureRate) * 100)}% success with avg ${avgRetries.toFixed(1)} retries — safe to use compressed context`,
+        confidence: Math.min(1, (1 - failureRate) * stats.total / 5),
+      });
+    }
+  }
+
+  return suggestions.sort((a, b) => b.confidence - a.confidence);
 }

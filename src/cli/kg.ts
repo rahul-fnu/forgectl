@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildFullGraph, buildIncrementalGraph } from "../kg/builder.js";
-import { createKGDatabase, getStats, getMeta } from "../kg/storage.js";
+import { createKGDatabase, getStats, getMeta, resolveKGPath } from "../kg/storage.js";
 import type { KnowledgeGraphStats } from "../kg/types.js";
 import { queryModule } from "../kg/query.js";
 
@@ -11,12 +11,13 @@ const execFileAsync = promisify(execFile);
 /**
  * forgectl kg build — Full knowledge graph rebuild.
  */
-export async function kgBuildCommand(options: { db?: string }): Promise<void> {
-  const repoPath = process.cwd();
-  console.log(chalk.blue("Building knowledge graph..."));
+export async function kgBuildCommand(options: { db?: string; workspace?: string }): Promise<void> {
+  const repoPath = options.workspace ?? process.cwd();
+  const dbPath = resolveKGPath(options.workspace, options.db);
+  console.log(chalk.blue(`Building knowledge graph${options.workspace ? ` for workspace ${options.workspace}` : ""}...`));
   const start = Date.now();
 
-  const stats = await buildFullGraph(repoPath, options.db);
+  const stats = await buildFullGraph(repoPath, dbPath);
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
   console.log(chalk.green("\nKnowledge graph built successfully!"));
@@ -27,9 +28,9 @@ export async function kgBuildCommand(options: { db?: string }): Promise<void> {
 /**
  * forgectl kg update — Incremental update based on git changes since last build.
  */
-export async function kgUpdateCommand(options: { db?: string }): Promise<void> {
-  const repoPath = process.cwd();
-  const dbPath = options.db;
+export async function kgUpdateCommand(options: { db?: string; workspace?: string }): Promise<void> {
+  const repoPath = options.workspace ?? process.cwd();
+  const dbPath = resolveKGPath(options.workspace, options.db);
 
   // Find last build time
   const db = createKGDatabase(dbPath);
@@ -86,8 +87,8 @@ export async function kgUpdateCommand(options: { db?: string }): Promise<void> {
 /**
  * forgectl kg query <module> — Show module dependencies, coupling, test coverage.
  */
-export async function kgQueryCommand(modulePath: string, options: { db?: string }): Promise<void> {
-  const db = createKGDatabase(options.db);
+export async function kgQueryCommand(modulePath: string, options: { db?: string; workspace?: string }): Promise<void> {
+  const db = createKGDatabase(resolveKGPath(options.workspace, options.db));
 
   try {
     const result = queryModule(db, modulePath);
@@ -168,8 +169,8 @@ export async function kgQueryCommand(modulePath: string, options: { db?: string 
 /**
  * forgectl kg stats — Show graph statistics.
  */
-export async function kgStatsCommand(options: { db?: string }): Promise<void> {
-  const db = createKGDatabase(options.db);
+export async function kgStatsCommand(options: { db?: string; workspace?: string }): Promise<void> {
+  const db = createKGDatabase(resolveKGPath(options.workspace, options.db));
 
   try {
     const stats = getStats(db);
@@ -184,8 +185,8 @@ export async function kgStatsCommand(options: { db?: string }): Promise<void> {
 /**
  * forgectl kg status — Show root hash and change summary.
  */
-export async function kgStatusCommand(options: { db?: string }): Promise<void> {
-  const db = createKGDatabase(options.db);
+export async function kgStatusCommand(options: { db?: string; workspace?: string }): Promise<void> {
+  const db = createKGDatabase(resolveKGPath(options.workspace, options.db));
 
   try {
     const stats = getStats(db);
