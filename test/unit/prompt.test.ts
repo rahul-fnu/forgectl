@@ -126,4 +126,47 @@ describe("buildPrompt", () => {
     const prompt = buildPrompt(plan);
     expect(prompt).not.toContain("Save all output files");
   });
+
+  it("includes promoted review findings as conventions", () => {
+    const plan = makeMinimalPlan();
+    const prompt = buildPrompt(plan, {
+      promotedFindings: [
+        {
+          id: 1,
+          category: "error_handling",
+          pattern: "error_handling",
+          module: "src/storage",
+          occurrenceCount: 5,
+          firstSeen: "2026-01-01T00:00:00Z",
+          lastSeen: "2026-03-01T00:00:00Z",
+          promotedToConvention: true,
+          exampleComment: "Always handle errors in database calls with typed errors",
+        },
+      ],
+    });
+    expect(prompt).toContain("Review Conventions");
+    expect(prompt).toContain("Always handle errors in database calls with typed errors");
+    expect(prompt).toContain("flagged 5 times in review");
+    expect(prompt).toContain("module: src/storage");
+  });
+
+  it("omits conventions section when no promoted findings", () => {
+    const plan = makeMinimalPlan();
+    const prompt = buildPrompt(plan, { promotedFindings: [] });
+    expect(prompt).not.toContain("Review Conventions");
+  });
+
+  it("still works with ContextResult as second argument (backward compat)", () => {
+    const plan = makeMinimalPlan();
+    const kgContext = {
+      systemContext: "KG system context",
+      taskContext: "KG task context",
+      budget: { used: 100, max: 1000, reservedForAgent: 500 },
+      merkleRoot: "abc123",
+      includedFiles: [],
+    };
+    const prompt = buildPrompt(plan, kgContext);
+    expect(prompt).toContain("KG system context");
+    expect(prompt).toContain("KG task context");
+  });
 });

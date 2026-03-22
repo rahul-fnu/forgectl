@@ -1,4 +1,4 @@
-import { integer, primaryKey as drizzlePrimaryKey, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey as drizzlePrimaryKey, real, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -115,3 +115,32 @@ export const runOutcomes = sqliteTable("run_outcomes", {
   testsAdded: integer("tests_added"),
   rawEventsJson: text("raw_events_json"),
 });
+
+export const reviewFindings = sqliteTable(
+  "review_findings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    category: text("category").notNull(),
+    pattern: text("pattern").notNull(),
+    module: text("module").notNull(),
+    occurrenceCount: integer("occurrence_count").notNull().default(1),
+    firstSeen: text("first_seen").notNull(),
+    lastSeen: text("last_seen").notNull(),
+    promotedToConvention: integer("promoted_to_convention").notNull().default(0),
+    exampleComment: text("example_comment"),
+  },
+  (table) => [unique().on(table.category, table.pattern, table.module)]
+);
+
+export const reviewCalibration = sqliteTable(
+  "review_calibration",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    module: text("module").notNull(),
+    totalComments: integer("total_comments").notNull().default(0),
+    overriddenComments: integer("overridden_comments").notNull().default(0),
+    falsePositiveRate: real("false_positive_rate").notNull().default(0),
+    lastUpdated: text("last_updated").notNull(),
+  },
+  (table) => [unique().on(table.module)]
+);

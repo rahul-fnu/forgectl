@@ -1,6 +1,7 @@
 import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "../agent/types.js";
 import type { Logger } from "../logging/logger.js";
+import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 import { invokeAgent } from "../agent/invoke.js";
 import { load as yamlLoad } from "js-yaml";
 
@@ -210,4 +211,64 @@ export async function runReviewAgent(
   );
 
   return output;
+}
+
+/**
+ * Extract the module directory from a file path.
+ * e.g. "src/storage/repositories/runs.ts" -> "src/storage"
+ */
+export function extractModule(filePath: string): string {
+  const parts = filePath.split("/");
+  if (parts.length >= 2) {
+    return parts.slice(0, 2).join("/");
+  }
+  return parts[0] || "*";
+}
+
+/**
+ * Accumulate review findings from a review output.
+ * Upserts each comment's category+pattern+module into the findings table,
+ * then promotes any findings that have reached the threshold.
+ */
+export function accumulateFindings(
+  output: ReviewOutput,
+  repo: ReviewFindingsRepository,
+  logger: Logger,
+): number {
+  for (const comment of output.comments) {
+    const module = extractModule(comment.file);
+    repo.upsertFinding({
+      category: comment.category,
+      pattern: comment.category,
+      module,
+      exampleComment: comment.comment,
+    });
+  }
+
+  const promoted = repo.promoteEligible();
+  if (promoted > 0) {
+    logger.info("review-agent", `Promoted ${promoted} recurring findings to conventions`);
+  }
+  return promoted;
+}
+
+/**
+ * Record calibration data from human review overrides.
+ * Call this when a human overrides review agent comments.
+ */
+export function recordReviewCalibration(
+  repo: ReviewFindingsRepository,
+  module: string,
+  totalComments: number,
+  overriddenComments: number,
+  logger: Logger,
+): void {
+  repo.recordCalibration(module, totalComments, overriddenComments);
+  const calibration = repo.getCalibration(module);
+  if (calibration && calibration.falsePositiveRate > 0.3) {
+    logger.warn(
+      "review-agent",
+      `Miscalibration detected for module ${module}: ${(calibration.falsePositiveRate * 100).toFixed(1)}% false positive rate`,
+    );
+  }
 }
