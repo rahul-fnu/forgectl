@@ -297,6 +297,13 @@ export class Orchestrator {
           retryRepo: this.retryRepo,
         }
       : undefined;
+    // Merge webhook-provided context with stored context so prOctokit (merger app) is always available
+    let mergedContext = githubContext;
+    if (mergedContext && this.githubContext?.prOctokit && !mergedContext.prOctokit) {
+      mergedContext = { ...mergedContext, prOctokit: this.githubContext.prOctokit };
+    } else if (!mergedContext && this.githubContext) {
+      mergedContext = this.githubContext;
+    }
     dispatchIssueImpl(
       issue,
       this.state,
@@ -307,7 +314,7 @@ export class Orchestrator {
       this.logger,
       this.metrics,
       governance,
-      githubContext,
+      mergedContext,
       this.delegationManager,
       this.subIssueCache,
       this.skills,
