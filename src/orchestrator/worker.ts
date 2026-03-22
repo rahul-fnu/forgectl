@@ -628,6 +628,5 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-<<<<<<< HEAD
   return { agentResult, comment, validationResult, lintIterations, branch, pendingApproval: pendingApproval || undefined, reviewOutput };
 }

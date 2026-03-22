@@ -26,6 +26,7 @@ Rules:
       { name: "terraform-fmt", command: "find /workspace -name '*.tf' -exec terraform fmt -check {} + 2>/dev/null || true", retries: 2, description: "Terraform formatting" },
       { name: "terraform-validate", command: "cd /workspace && terraform init -backend=false 2>/dev/null && terraform validate 2>/dev/null || true", retries: 2, description: "Terraform configuration validation" },
     ],
+    lint_steps: [],
     on_failure: "output-wip",
   },
   output: { mode: "git", path: "/workspace", collect: [] },

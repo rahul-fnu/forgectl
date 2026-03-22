@@ -569,9 +569,6 @@ async function executeWorkerAndHandle(
           }
         }
         const runId = issue.identifier;
-        // Use LOOP failure mode when loop was detected in validation
-        const isLoop = result.validationResult?.loopDetected != null;
-        const failureMode = isLoop ? "LOOP" : (outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined);
         outcomeDeps.outcomeRepo.insert({
           id: runId,
           taskId: issue.id,
@@ -650,8 +647,8 @@ async function executeWorkerAndHandle(
           tracker.updateState(issue.id, closeState).then(() => {
             // Invalidate sub-issue cache so the parent's children reflect the new terminal state.
             // This ensures blocked issues see this issue as terminal on the next tick.
-            if (subIssueCache && issue.extra?.parentId) {
-              subIssueCache.invalidate(issue.extra.parentId as string);
+            if (subIssueCache && issue.metadata?.parentId) {
+              subIssueCache.invalidate(issue.metadata.parentId as string);
             }
           }).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);

@@ -2,7 +2,8 @@ import chalk from "chalk";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildFullGraph, buildIncrementalGraph } from "../kg/builder.js";
-import { createKGDatabase, getStats, getMeta, saveMeta } from "../kg/storage.js";
+import { createKGDatabase, getStats, getMeta } from "../kg/storage.js";
+import type { KnowledgeGraphStats } from "../kg/types.js";
 import { queryModule } from "../kg/query.js";
 
 const execFileAsync = promisify(execFile);

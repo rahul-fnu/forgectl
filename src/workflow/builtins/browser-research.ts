@@ -29,6 +29,7 @@ Rules:
       { name: "has-content", command: "wc -w /output/report.md | awk '{if($1<200) exit 1}'", retries: 1, description: "Report has at least 200 words" },
       { name: "has-sources", command: "grep -c 'http' /output/report.md | awk '{if($1<2) exit 1}'", retries: 1, description: "Report cites at least 2 URLs" },
     ],
+    lint_steps: [],
     on_failure: "output-wip",
   },
   output: { mode: "files", path: "/output", collect: ["**/*.md", "**/*.json", "**/*.png", "**/*.jpg"] },

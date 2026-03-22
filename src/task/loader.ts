@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, extname } from "node:path";
+import { join } from "node:path";
 import yaml from "js-yaml";
 import { TaskSpecSchema } from "./schema.js";
 import type { TaskSpec } from "./types.js";

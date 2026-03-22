@@ -12,7 +12,6 @@ import {
   saveChangeCoupling,
   saveMeta,
   getStats,
-  getModule,
   deleteEdgesFrom,
   deleteTestMappingsFor,
 } from "./storage.js";
@@ -22,7 +21,7 @@ import type { KnowledgeGraphStats, ModuleInfo } from "./types.js";
  * Glob for TypeScript files in a repo, excluding common non-source directories.
  */
 async function globTypeScriptFiles(repoPath: string): Promise<string[]> {
-  const { glob } = await import("node:fs/promises").then(async () => {
+  await import("node:fs/promises").then(async () => {
     // Node 22+ has fs.glob, but for Node 20 compatibility, use a manual walk
     return { glob: null };
   });
@@ -89,7 +88,7 @@ export async function buildFullGraph(
     const testMappings = buildTestMappings(modules);
 
     // 5. Analyze change coupling from git history
-    let couplings;
+    let couplings: Awaited<ReturnType<typeof analyzeChangeCoupling>>;
     try {
       couplings = await analyzeChangeCoupling(repoPath, {
         maxCommits: 500,

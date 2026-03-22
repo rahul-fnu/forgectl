@@ -27,6 +27,7 @@ Rules:
       { name: "test", command: "npm test", retries: 3, description: "Unit and integration tests" },
       { name: "build", command: "npm run build", retries: 1, description: "Production build" },
     ],
+    lint_steps: [],
     on_failure: "abandon",
   },
   output: { mode: "git", path: "/workspace", collect: [] },

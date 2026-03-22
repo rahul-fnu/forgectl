@@ -27,6 +27,7 @@ Rules:
       { name: "has-sources", command: "grep -c 'http' /output/*.md | awk -F: '{s+=$2} END {if(s<3) exit 1}'", retries: 2, description: "Report includes at least 3 source URLs" },
       { name: "min-length", command: "wc -w /output/*.md | tail -1 | awk '{if($1<500) exit 1}'", retries: 1, description: "Report is at least 500 words" },
     ],
+    lint_steps: [],
     on_failure: "output-wip",
   },
   output: { mode: "files", path: "/output", collect: ["**/*.md", "**/*.pdf", "**/*.json"] },

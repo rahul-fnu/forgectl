@@ -236,7 +236,15 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
           if (config.merger_app) {
             try {
               const { GitHubAppService } = await import("../github/app.js");
-              const mergerService = new GitHubAppService(config.merger_app);
+              const mergerService = new GitHubAppService({
+                appId: config.merger_app.app_id,
+                privateKeyPath: config.merger_app.private_key_path,
+                webhookSecret: config.merger_app.webhook_secret,
+                installationId: config.merger_app.installation_id,
+              });
+              if (!config.merger_app.installation_id) {
+                throw new Error("merger_app.installation_id is required");
+              }
               prOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
               daemonLogger.info("daemon", "Merger app octokit initialized for PR creation");
             } catch (mergerErr) {

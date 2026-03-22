@@ -40,6 +40,7 @@ for f in glob.glob('/output/data/*'):
         description: "Check output for PII (SSN, email patterns)",
       },
     ],
+    lint_steps: [],
     on_failure: "abandon",
   },
   output: { mode: "files", path: "/output", collect: ["**/*"] },

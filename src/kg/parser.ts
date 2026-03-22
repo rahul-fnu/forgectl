@@ -1,4 +1,4 @@
-import { join, dirname, relative, resolve, extname, basename } from "node:path";
+import { join, dirname, relative, resolve, extname } from "node:path";
 import { existsSync } from "node:fs";
 import type { ModuleInfo, ExportEntry, ImportEntry } from "./types.js";
 

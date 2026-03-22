@@ -22,6 +22,8 @@ import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispa
 /** GitHub context passed from webhook handler through to dispatcher. */
 export interface GitHubContext {
   octokit: unknown;
+  /** Separate octokit with PR write permissions (e.g. merger app). Falls back to octokit if not set. */
+  prOctokit?: unknown;
   repo: RepoContext;
 }
 

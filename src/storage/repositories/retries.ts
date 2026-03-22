@@ -1,4 +1,4 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { runRetries } from "../schema.js";
 import type { AppDatabase } from "../database.js";
 

@@ -1,5 +1,5 @@
 import { writeFileSync, existsSync } from "node:fs";
-import { resolve, join, relative } from "node:path";
+import { resolve, relative } from "node:path";
 import chalk from "chalk";
 import { loadTaskSpec, findTaskSpecs, validateTaskSpec, scaffoldTaskSpec } from "../task/index.js";
 
