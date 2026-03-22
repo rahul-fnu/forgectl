@@ -589,17 +589,38 @@ async function executeWorkerAndHandle(
       }
     }
 
+    // Record the branch for this issue (used for stacked PR bases)
+    if (result.branch) {
+      state.issueBranches.set(issue.id, result.branch);
+    }
+
     // Create PR (fire-and-forget) — the merge daemon handles merging.
     // Close the issue after successful agent run regardless of merge status.
     let prCreated = false;
+    let prUrl: string | undefined;
     if (result.branch && failureType === "continuation") {
+      // Determine PR base: use blocker's branch for stacked diffs, otherwise default base
+      const defaultBase = config.repo?.branch?.base ?? "main";
+      let prBase = defaultBase;
+      if (issue.blocked_by.length > 0) {
+        // Find the most recent blocker that has a branch — stack on top of it
+        for (const blockerId of issue.blocked_by) {
+          const blockerBranch = state.issueBranches.get(blockerId);
+          if (blockerBranch) {
+            prBase = blockerBranch;
+            logger.info("dispatcher", `Stacking ${issue.identifier} PR on blocker branch: ${blockerBranch}`);
+            break;
+          }
+        }
+      }
+
       if (tracker.createPullRequest) {
         try {
-          const prUrl = await tracker.createPullRequest(
+          prUrl = await tracker.createPullRequest(
             result.branch,
             `[forgectl] ${issue.title}`,
             `Closes #${issue.id}\n\nAutomated changes by forgectl for ${issue.identifier}.`,
-          );
+          ) ?? undefined;
           if (prUrl) {
             logger.info("dispatcher", `PR created for ${issue.identifier}: ${prUrl}`);
             prCreated = true;
@@ -612,22 +633,30 @@ async function executeWorkerAndHandle(
         // Fallback: create PR via GitHub App when tracker doesn't support PR creation (e.g. Linear)
         try {
           const [owner, repo] = config.tracker.repo.split("/");
-          const base = config.repo?.branch?.base ?? "main";
           // Use prOctokit (merger app) if available, otherwise fall back to main octokit
           const octokit = (githubContext.prOctokit ?? githubContext.octokit) as any;
           const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
             owner, repo,
             title: `[forgectl] ${issue.title}`,
             head: result.branch,
-            base,
+            base: prBase,
             body: `Automated changes by forgectl for ${issue.identifier}.\n\nLinear: ${issue.identifier}`,
           });
-          logger.info("dispatcher", `PR created via GitHub App for ${issue.identifier}: ${pr.html_url}`);
+          prUrl = pr.html_url;
+          logger.info("dispatcher", `PR created via GitHub App for ${issue.identifier}: ${prUrl}`);
           prCreated = true;
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn("dispatcher", `Failed to create PR via GitHub App for ${issue.identifier}: ${msg}`);
         }
+      }
+
+      // Post PR link as comment on the tracker issue
+      if (prUrl) {
+        tracker.postComment(issue.id, `**forgectl:** PR created → ${prUrl}`).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to post PR comment for ${issue.identifier}: ${msg}`);
+        });
       }
     }
 

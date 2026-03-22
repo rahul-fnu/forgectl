@@ -32,6 +32,8 @@ export interface OrchestratorState {
   running: Map<string, WorkerInfo>;
   retryTimers: Map<string, ReturnType<typeof setTimeout>>;
   retryAttempts: Map<string, number>;
+  /** Maps issue ID → branch name produced by that issue's agent run. Used for stacked PRs. */
+  issueBranches: Map<string, string>;
 }
 
 /**
@@ -43,6 +45,7 @@ export function createState(): OrchestratorState {
     running: new Map(),
     retryTimers: new Map(),
     retryAttempts: new Map(),
+    issueBranches: new Map(),
   };
 }
 
