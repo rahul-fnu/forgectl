@@ -116,6 +116,14 @@ program
   .option("--workflow <name>", "Show costs for a specific workflow")
   .action(costsCommand);
 
+// forgectl analyze
+program
+  .command("analyze")
+  .description("Analyze run outcomes for patterns and recommendations")
+  .option("--since <duration>", "Analysis period (e.g. 7d, 24h, 30d)")
+  .option("--module <path>", "Filter to runs touching this module (e.g. src/auth)")
+  .action(analyzeCommand);
+
 // forgectl orchestrate — start daemon with orchestration enabled
 program
   .command("orchestrate")
@@ -572,6 +580,7 @@ cacheCmd
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
+import { analyzeCommand } from "./cli/analyze.js";
 
 const repoCmd = program
   .command("repo")
