@@ -69,6 +69,8 @@ describe("storage/repositories/outcomes", () => {
     expect(row!.filesChanged).toBeNull();
     expect(row!.testsAdded).toBeNull();
     expect(row!.rawEventsJson).toBeNull();
+    expect(row!.contextEnabled).toBeNull();
+    expect(row!.contextFilesJson).toBeNull();
   });
 
   it("findById() returns undefined for nonexistent id", () => {

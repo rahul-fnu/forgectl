@@ -2,11 +2,12 @@ import chalk from "chalk";
 import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
-import { analyzeOutcomes, type AnalysisReport } from "../analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, type AnalysisReport, type ContextComparisonReport } from "../analysis/outcome-analyzer.js";
 
 interface AnalyzeCommandOptions {
   since?: string;
   module?: string;
+  compareContext?: boolean;
 }
 
 function formatReport(report: AnalysisReport): void {
@@ -40,12 +41,41 @@ function formatReport(report: AnalysisReport): void {
   console.log("");
 }
 
+function formatContextComparison(report: ContextComparisonReport): void {
+  console.log(chalk.bold("\nContext Comparison Report"));
+  console.log(chalk.bold("\n  With KG Context:"));
+  formatGroupStats(report.withContext);
+  console.log(chalk.bold("\n  Without KG Context:"));
+  formatGroupStats(report.withoutContext);
+  console.log(chalk.bold("\n  Context Hit Rate:"));
+  console.log(`    ${(report.contextHitRate * 100).toFixed(1)}% of pre-provided files were relevant`);
+  console.log("");
+}
+
+function formatGroupStats(stats: ContextComparisonReport["withContext"]): void {
+  console.log(`    Runs:                ${stats.runCount}`);
+  console.log(`    Avg turns:           ${stats.avgTurns}`);
+  console.log(`    Avg files explored:  ${stats.avgFilesExplored}`);
+  console.log(`    Avg duration:        ${stats.avgDurationMs > 0 ? `${(stats.avgDurationMs / 1000).toFixed(1)}s` : "N/A"}`);
+  console.log(`    Success rate:        ${(stats.successRate * 100).toFixed(1)}%`);
+  console.log(`    First-pass validation: ${(stats.firstPassValidation * 100).toFixed(1)}%`);
+}
+
 export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void> {
   const db = createDatabase();
   try {
     runMigrations(db);
     const outcomeRepo = createOutcomeRepository(db);
     const allRows = outcomeRepo.findAll();
+
+    if (opts.compareContext) {
+      const comparison = compareContextOutcomes(allRows, {
+        since: opts.since,
+        module: opts.module,
+      });
+      formatContextComparison(comparison);
+      return;
+    }
 
     const report = analyzeOutcomes(allRows, {
       since: opts.since,

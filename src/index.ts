@@ -55,6 +55,7 @@ program
   .option("--no-cleanup", "Leave container running after run")
   .option("--dry-run", "Show run plan without executing")
   .option("--no-skills", "Disable skill/config bind-mounting for this run")
+  .option("--no-context", "Skip KG context building for this run")
   .option("--no-team", "Disable agent team mode for this run")
   .option("--team-size <n>", "Override team size (2-5)", parseInt)
   .action(runCommand);
@@ -122,6 +123,7 @@ program
   .description("Analyze run outcomes for patterns and recommendations")
   .option("--since <duration>", "Analysis period (e.g. 7d, 24h, 30d)")
   .option("--module <path>", "Filter to runs touching this module (e.g. src/auth)")
+  .option("--compare-context", "Compare context-enabled vs disabled runs side-by-side")
   .action(analyzeCommand);
 
 // forgectl orchestrate — start daemon with orchestration enabled

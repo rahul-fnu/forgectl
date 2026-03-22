@@ -587,6 +587,8 @@ async function executeWorkerAndHandle(
           failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
           rawEventsJson,
+          contextEnabled: kgContext ? 1 : 0,
+          contextFilesJson: kgContext ? JSON.stringify(kgContext.includedFiles.map(f => f.path)) : undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -782,6 +784,7 @@ async function executeWorkerAndHandle(
           status: "failure",
           failureMode: "unexpected_error",
           failureDetail: msg.slice(0, 2000),
+          contextEnabled: kgContext ? 1 : 0,
         });
       } catch {
         // Best-effort — don't mask the original error

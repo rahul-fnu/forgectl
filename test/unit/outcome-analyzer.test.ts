@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { analyzeOutcomes, type AnalysisReport } from "../../src/analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, computeContextHitRate, type AnalysisReport } from "../../src/analysis/outcome-analyzer.js";
 import type { OutcomeRow } from "../../src/storage/repositories/outcomes.js";
 
 function makeRow(overrides: Partial<OutcomeRow> & { id: string }): OutcomeRow {
@@ -20,6 +20,8 @@ function makeRow(overrides: Partial<OutcomeRow> & { id: string }): OutcomeRow {
     filesChanged: null,
     testsAdded: null,
     rawEventsJson: null,
+    contextEnabled: null,
+    contextFilesJson: null,
     ...overrides,
   };
 }
@@ -238,5 +240,55 @@ describe("analyzeOutcomes", () => {
     // Should not throw
     const report = analyzeOutcomes(rows, {});
     expect(report.totalRuns).toBe(1);
+  });
+});
+
+describe("compareContextOutcomes", () => {
+  it("splits rows by contextEnabled and computes group stats", () => {
+    const rows = [
+      makeRow({ id: "1", contextEnabled: 1, status: "success", totalTurns: 5, startedAt: "2026-03-20T10:00:00Z", completedAt: "2026-03-20T10:05:00Z" }),
+      makeRow({ id: "2", contextEnabled: 1, status: "success", totalTurns: 3, startedAt: "2026-03-20T11:00:00Z", completedAt: "2026-03-20T11:02:00Z" }),
+      makeRow({ id: "3", contextEnabled: 0, status: "success", totalTurns: 10, startedAt: "2026-03-20T12:00:00Z", completedAt: "2026-03-20T12:10:00Z" }),
+      makeRow({ id: "4", contextEnabled: 0, status: "failure", totalTurns: 15, startedAt: "2026-03-20T13:00:00Z", completedAt: "2026-03-20T13:20:00Z" }),
+    ];
+
+    const report = compareContextOutcomes(rows, {});
+    expect(report.withContext.runCount).toBe(2);
+    expect(report.withoutContext.runCount).toBe(2);
+    expect(report.withContext.avgTurns).toBe(4);
+    expect(report.withoutContext.avgTurns).toBe(12.5);
+    expect(report.withContext.successRate).toBe(1);
+    expect(report.withoutContext.successRate).toBe(0.5);
+  });
+
+  it("returns empty stats when no rows", () => {
+    const report = compareContextOutcomes([], {});
+    expect(report.withContext.runCount).toBe(0);
+    expect(report.withoutContext.runCount).toBe(0);
+    expect(report.contextHitRate).toBe(0);
+  });
+
+  it("computes context hit rate from events", () => {
+    const contextFiles = JSON.stringify(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    const events = JSON.stringify([
+      { type: "tool_use", data: { tool: "Read", file: "src/a.ts" } },
+      { type: "tool_use", data: { tool: "Read", file: "src/b.ts" } },
+      { type: "tool_use", data: { tool: "Read", file: "src/d.ts" } },
+    ]);
+
+    const rows = [
+      makeRow({ id: "1", contextEnabled: 1, contextFilesJson: contextFiles, rawEventsJson: events }),
+    ];
+
+    const hitRate = computeContextHitRate(rows);
+    // 2 out of 3 context files were read
+    expect(hitRate).toBeCloseTo(0.6667, 3);
+  });
+
+  it("returns 0 hit rate when no context files", () => {
+    const rows = [
+      makeRow({ id: "1", contextEnabled: 0 }),
+    ];
+    expect(computeContextHitRate(rows)).toBe(0);
   });
 });

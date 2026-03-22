@@ -20,6 +20,8 @@ export interface OutcomeInsertParams {
   filesChanged?: number;
   testsAdded?: number;
   rawEventsJson?: string; // JSON string
+  contextEnabled?: number; // 1 = enabled, 0 = disabled
+  contextFilesJson?: string; // JSON array of pre-provided context file paths
 }
 
 export interface OutcomeRow {
@@ -40,6 +42,8 @@ export interface OutcomeRow {
   filesChanged: number | null;
   testsAdded: number | null;
   rawEventsJson: string | null;
+  contextEnabled: number | null;
+  contextFilesJson: string | null;
 }
 
 export interface OutcomeRepository {
@@ -69,6 +73,8 @@ function deserializeRow(raw: typeof runOutcomes.$inferSelect): OutcomeRow {
     filesChanged: raw.filesChanged,
     testsAdded: raw.testsAdded,
     rawEventsJson: raw.rawEventsJson,
+    contextEnabled: raw.contextEnabled,
+    contextFilesJson: raw.contextFilesJson,
   };
 }
 
@@ -93,6 +99,8 @@ export function createOutcomeRepository(db: AppDatabase): OutcomeRepository {
         filesChanged: params.filesChanged ?? null,
         testsAdded: params.testsAdded ?? null,
         rawEventsJson: params.rawEventsJson ?? null,
+        contextEnabled: params.contextEnabled ?? null,
+        contextFilesJson: params.contextFilesJson ?? null,
       };
       db.insert(runOutcomes).values(values).run();
     },
@@ -137,6 +145,8 @@ export function createOutcomeRepository(db: AppDatabase): OutcomeRepository {
       if (params.filesChanged !== undefined) values.filesChanged = params.filesChanged;
       if (params.testsAdded !== undefined) values.testsAdded = params.testsAdded;
       if (params.rawEventsJson !== undefined) values.rawEventsJson = params.rawEventsJson;
+      if (params.contextEnabled !== undefined) values.contextEnabled = params.contextEnabled;
+      if (params.contextFilesJson !== undefined) values.contextFilesJson = params.contextFilesJson;
 
       if (Object.keys(values).length > 0) {
         db.update(runOutcomes).set(values).where(eq(runOutcomes.id, id)).run();
