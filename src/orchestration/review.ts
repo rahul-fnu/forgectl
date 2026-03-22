@@ -9,7 +9,7 @@ import { createContainer, destroyContainer } from "../container/runner.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
-import { runValidationLoop, runLintGate, type LintGateResult } from "../validation/runner.js";
+import { runValidationLoop, runLintGate } from "../validation/runner.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
