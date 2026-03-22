@@ -14,6 +14,7 @@ import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
+import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -108,8 +109,21 @@ export async function tick(deps: TickDeps): Promise<void> {
   }
   logger.info("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
 
-  // Step 5: Sort candidates
-  const sorted = sortCandidates(eligible);
+  // Step 5: Compute critical-path scores from the full candidate set,
+  // then sort eligible issues so critical-path issues dispatch first.
+  const dagNodes: IssueDAGNode[] = candidates.map(c => ({
+    id: c.id,
+    blocked_by: c.blocked_by,
+  }));
+  const criticalScores = computeCriticalPath(dagNodes);
+
+  const prioritySorted = sortCandidates(eligible);
+  const sorted = [...prioritySorted].sort((a, b) => {
+    const scoreA = criticalScores.get(a.id) ?? 0;
+    const scoreB = criticalScores.get(b.id) ?? 0;
+    // Higher score = more downstream work unblocked = dispatch first
+    return scoreB - scoreA;
+  });
 
   // Step 6: Get available top-level slots (children have their own pool)
   const available = slotManager.availableTopLevelSlots();
