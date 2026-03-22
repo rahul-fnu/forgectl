@@ -139,6 +139,10 @@ vi.mock("../../src/governance/rules.js", () => ({
   evaluateAutoApprove: vi.fn(),
 }));
 
+vi.mock("../../src/kg/builder.js", () => ({
+  buildFullGraph: vi.fn().mockResolvedValue({ modules: 0, edges: 0 }),
+}));
+
 const { buildOrchestratedRunPlan, executeWorker } = await import("../../src/orchestrator/worker.js");
 const { prepareExecution } = await import("../../src/orchestration/single.js");
 const { createAgentSession } = await import("../../src/agent/session.js");

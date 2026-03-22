@@ -138,34 +138,48 @@ export async function tick(deps: TickDeps): Promise<void> {
     : undefined;
 
   // Step 8: Build KG context for eligible issues (open + close db per tick)
+  // Prefer per-workspace kg.db if it exists, fall back to the shared kg.db
   const kgContextMap = new Map<string, ContextResult>();
-  const resolvedKgPath = deps.kgDbPath ?? resolveDefaultKgPath(config);
-  if (sorted.length > 0 && existsSync(resolvedKgPath)) {
-    let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-    try {
-      const { createKGDatabase } = await import("../kg/storage.js");
-      kgDb = createKGDatabase(resolvedKgPath);
-      const { buildContext } = await import("../context/builder.js");
+  const sharedKgPath = deps.kgDbPath ?? resolveDefaultKgPath(config);
+  if (sorted.length > 0) {
+    const { createKGDatabase } = await import("../kg/storage.js");
+    const { buildContext } = await import("../context/builder.js");
+    const maxAgents = config.orchestrator?.max_concurrent_agents ?? 1;
 
-      for (const issue of sorted.slice(0, available)) {
-        try {
-          const taskSpec = issueToTaskSpec(issue);
-          const ctx = await buildContext(taskSpec, kgDb);
-          kgContextMap.set(issue.id, ctx);
-          logger.info("scheduler", `KG context for ${issue.identifier}: ${ctx.includedFiles.length} files, ${ctx.budget.used}/${ctx.budget.max} tokens`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("scheduler", `Failed to build KG context for ${issue.identifier}: ${msg}`);
+    for (const issue of sorted.slice(0, available)) {
+      // Resolve per-workspace kg.db path, fall back to shared kg.db
+      let kgPath = sharedKgPath;
+      try {
+        const workspaceId = maxAgents > 1
+          ? issue.identifier
+          : (config.tracker?.repo?.replace("/", "_") ?? issue.identifier);
+        const wsKgPath = workspaceManager.getWorkspacePath(workspaceId) + "/kg.db";
+        if (existsSync(wsKgPath)) {
+          kgPath = wsKgPath;
         }
+      } catch {
+        // Workspace path resolution failed, use shared kg.db
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn("scheduler", `Failed to open KG database: ${msg}`);
-    } finally {
-      try { kgDb?.close(); } catch { /* best-effort */ }
+
+      if (!existsSync(kgPath)) {
+        logger.warn("scheduler", `KG database not found for ${issue.identifier} (tried ${wsKgPath} and ${sharedKgPath})`);
+        continue;
+      }
+
+      let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+      try {
+        kgDb = createKGDatabase(kgPath);
+        const taskSpec = issueToTaskSpec(issue);
+        const ctx = await buildContext(taskSpec, kgDb);
+        kgContextMap.set(issue.id, ctx);
+        logger.info("scheduler", `KG context for ${issue.identifier}: ${ctx.includedFiles.length} files, ${ctx.budget.used}/${ctx.budget.max} tokens (db=${kgPath})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("scheduler", `Failed to build KG context for ${issue.identifier}: ${msg}`);
+      } finally {
+        try { kgDb?.close(); } catch { /* best-effort */ }
+      }
     }
-  } else if (sorted.length > 0) {
-    logger.warn("scheduler", `KG database not found at ${resolvedKgPath}, dispatching without context`);
   }
 
   // Step 9: Dispatch up to available slots
