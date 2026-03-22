@@ -319,15 +319,12 @@ export function createLinearAdapter(
     const sdkIssue = issue as unknown as LinearSdkIssue;
     const blockers: string[] = [];
 
-    // Forward relations: this issue's relations where type is "blocks"
-    const relations = await sdkIssue.relations();
-    for (const rel of relations.nodes) {
-      if (rel.type === "blocks" && rel.relatedIssueId) {
-        blockers.push(rel.relatedIssueId);
-      }
-    }
+    // Forward relations: if this issue has type "blocks", the relatedIssue is downstream
+    // (this issue blocks it) — NOT a blocker of this issue. Skip forward "blocks".
 
-    // Inverse relations: other issues that block this one
+    // Inverse relations: other issues that block this one.
+    // If another issue has a "blocks" relation pointing at this issue,
+    // that other issue appears here — it IS a blocker.
     const inverseRelations = await sdkIssue.inverseRelations();
     for (const rel of inverseRelations.nodes) {
       if (rel.type === "blocks" && rel.issueId) {
@@ -380,7 +377,9 @@ export function createLinearAdapter(
         const normalized = normalizeLinearIssue(issueData, childIds, blockedByIds);
         enriched.push(normalized);
 
-        // Auto-discover children not already in candidate set
+        // Auto-discover children not already in candidate set.
+        // Skip children in terminal states (Done, Canceled, etc.)
+        const terminalTypes = new Set(["completed", "canceled"]);
         for (const childId of childIds) {
           if (!candidateIds.has(childId)) {
             candidateIds.add(childId);
@@ -390,6 +389,8 @@ export function createLinearAdapter(
                 childIssue as unknown as LinearSdkIssue,
                 labelMapping,
               );
+              // Skip children in terminal states — they're already done
+              if (terminalTypes.has(childData.stateType)) continue;
               const childNormalized = normalizeLinearIssue(childData, [], []);
               enriched.push(childNormalized);
             } catch {

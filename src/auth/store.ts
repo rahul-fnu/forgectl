@@ -64,6 +64,10 @@ class FileStore implements KeytarLike {
 async function loadStore(): Promise<KeytarLike> {
   try {
     const keytar = await import("keytar");
+    // Verify keytar actually works by attempting a no-op read.
+    // On systems without a secrets service (e.g., Docker, headless Linux),
+    // keytar imports fine but throws at runtime.
+    await keytar.default.getPassword("forgectl-probe", "test");
     return keytar.default;
   } catch {
     return new FileStore();

@@ -100,6 +100,12 @@ export async function tick(deps: TickDeps): Promise<void> {
   const doneLabel = config.tracker?.done_label;
   const eligible = filterCandidates(candidates, state, terminalIds, doneLabel);
 
+  if (eligible.length === 0 && candidates.length > 0) {
+    for (const c of candidates) {
+      logger.info("scheduler", `  candidate ${c.identifier}: blocked_by=[${c.blocked_by.join(",")}] labels=[${c.labels.join(",")}] id=${c.id}`);
+    }
+    logger.info("scheduler", `  terminalIds: [${[...terminalIds].join(",")}]`);
+  }
   logger.info("scheduler", `Tick: ${candidates.length} candidates, ${eligible.length} eligible, claimed=${state.claimed.size}, running=${state.running.size}`);
 
   // Step 5: Sort candidates

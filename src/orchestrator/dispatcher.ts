@@ -592,6 +592,26 @@ async function executeWorkerAndHandle(
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn("dispatcher", `Failed to create PR for ${issue.identifier}: ${msg}`);
         }
+      } else if (githubContext && config.tracker?.repo) {
+        // Fallback: create PR via GitHub App when tracker doesn't support PR creation (e.g. Linear)
+        try {
+          const [owner, repo] = config.tracker.repo.split("/");
+          const base = config.repo?.branch?.base ?? "main";
+          const octokit = githubContext.octokit as any;
+          const pulls = octokit.rest?.pulls ?? octokit.pulls;
+          const { data: pr } = await pulls.create({
+            owner, repo,
+            title: `[forgectl] ${issue.title}`,
+            head: result.branch,
+            base,
+            body: `Automated changes by forgectl for ${issue.identifier}.\n\nLinear: ${issue.identifier}`,
+          });
+          logger.info("dispatcher", `PR created via GitHub App for ${issue.identifier}: ${pr.html_url}`);
+          prCreated = true;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to create PR via GitHub App for ${issue.identifier}: ${msg}`);
+        }
       }
     }
 
@@ -603,10 +623,22 @@ async function executeWorkerAndHandle(
 
       if (isSynthesizerRun) {
         handleSynthesizerOutcome(issue, "success", tracker, logger);
-      } else if (prCreated || !result.branch) {
-        // Fire-and-forget: close the issue after PR creation (merge daemon handles merging)
+      } else {
+        // Agent completed successfully — close the issue regardless of PR creation status.
+        // The branch is pushed and available for manual PR creation or merge daemon pickup.
+        if (!prCreated && result.branch) {
+          logger.info("dispatcher", `No PR created for ${issue.identifier} (tracker may not support it) — branch ${result.branch} is pushed`);
+        }
         if (config.tracker?.auto_close) {
-          tracker.updateState(issue.id, "closed").catch((err: unknown) => {
+          // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)
+          const closeState = config.tracker.terminal_states[0] ?? "closed";
+          tracker.updateState(issue.id, closeState).then(() => {
+            // Invalidate sub-issue cache so the parent's children reflect the new terminal state.
+            // This ensures blocked issues see this issue as terminal on the next tick.
+            if (subIssueCache && issue.extra?.parentId) {
+              subIssueCache.invalidate(issue.extra.parentId as string);
+            }
+          }).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             logger.warn("dispatcher", `Failed to auto-close ${issue.identifier}: ${msg}`);
           });
@@ -618,14 +650,6 @@ async function executeWorkerAndHandle(
             logger.warn("dispatcher", `Failed to add done label for ${issue.identifier}: ${msg}`);
           });
         }
-      } else {
-        // PR creation failed — leave issue open
-        logger.warn("dispatcher", `Issue ${issue.identifier} completed but PR creation failed — leaving issue open`);
-        tracker.postComment(
-          issue.id,
-          "**forgectl:** Agent completed work but PR could not be created. Issue left open for manual resolution.",
-        ).catch(() => {});
-        tracker.updateLabels(issue.id, [], [orchestratorConfig.in_progress_label]).catch(() => {});
       }
 
       logger.info("dispatcher", `Releasing completed issue ${issue.identifier} (id=${issue.id}) from claimed set`);
