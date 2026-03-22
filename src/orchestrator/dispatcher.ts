@@ -666,6 +666,13 @@ async function executeWorkerAndHandle(
     }
 
     if (failureType === "continuation") {
+      // Always invalidate sub-issue cache when an issue completes successfully.
+      // This ensures downstream blocked issues see this issue's new state on the next tick,
+      // regardless of whether PR creation succeeds or fails.
+      if (subIssueCache && issue.metadata?.parentId) {
+        subIssueCache.invalidate(issue.metadata.parentId as string);
+      }
+
       // Synthesizer-gated close: if this issue has the forge:synthesize label, it is
       // a synthesizer run. Close the parent and remove the label instead of the
       // normal auto_close / done_label path.
@@ -678,13 +685,7 @@ async function executeWorkerAndHandle(
         if (config.tracker?.auto_close) {
           // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)
           const closeState = config.tracker.terminal_states[0] ?? "closed";
-          tracker.updateState(issue.id, closeState).then(() => {
-            // Invalidate sub-issue cache so the parent's children reflect the new terminal state.
-            // This ensures blocked issues see this issue as terminal on the next tick.
-            if (subIssueCache && issue.metadata?.parentId) {
-              subIssueCache.invalidate(issue.metadata.parentId as string);
-            }
-          }).catch((err: unknown) => {
+          tracker.updateState(issue.id, closeState).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             logger.warn("dispatcher", `Failed to auto-close ${issue.identifier}: ${msg}`);
           });
