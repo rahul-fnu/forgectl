@@ -25,6 +25,7 @@ import { createPRForBranch } from "../github/pr-description.js";
 import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { buildPrompt } from "../context/prompt.js";
+import type { ContextResult } from "../context/builder.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
@@ -237,6 +238,7 @@ export async function executeWorker(
   githubDeps?: GitHubDeps,
   governance?: GovernanceOpts,
   skills?: string[],
+  kgContext?: ContextResult,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -336,7 +338,7 @@ export async function executeWorker(
     }
 
     // 7. Invoke agent with full prompt (includes validation step descriptions)
-    const fullPrompt = buildPrompt(plan);
+    const fullPrompt = buildPrompt(plan, kgContext);
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(fullPrompt);
 
