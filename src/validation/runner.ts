@@ -6,6 +6,14 @@ import type { ValidationStep } from "../config/schema.js";
 import { runValidationStep, type StepResult } from "./step.js";
 import { formatFeedback, formatLintFeedback } from "./feedback.js";
 import { invokeAgent } from "../agent/invoke.js";
+import {
+  createLoopDetectorState,
+  recordValidationError,
+  recordFileWrite,
+  recordToolCall,
+  type LoopPattern,
+} from "../agent/loop-detector.js";
+import { execInContainer } from "../container/runner.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -17,6 +25,8 @@ export interface ValidationResult {
   }>;
   /** Combined stdout+stderr from all steps in the final validation pass. Undefined when no steps are configured. */
   lastOutput?: string;
+  /** Set when a loop pattern is detected during validation retries. */
+  loopDetected?: LoopPattern;
 }
 
 /**
@@ -47,6 +57,8 @@ export async function runValidationLoop(
 
   let attempt = 0;
   let lastResults: StepResult[] = [];
+  const loopState = createLoopDetectorState();
+  let detectedLoop: LoopPattern | null = null;
 
   while (attempt <= maxRetries) {
     attempt++;
@@ -67,10 +79,35 @@ export async function runValidationLoop(
       } else {
         logger.warn("validation", `✗ ${step.name} failed (exit ${result.exitCode})`);
         allPassed = false;
+
+        // Check for repeated validation errors
+        const errorOutput = [result.stdout, result.stderr].filter(Boolean).join("\n");
+        const loopCheck = recordValidationError(loopState, errorOutput);
+        if (loopCheck) {
+          detectedLoop = loopCheck;
+          logger.error("validation", `Loop detected: ${loopCheck.detail}`);
+        }
       }
     }
 
     lastResults = results;
+
+    // Halt immediately on loop detection
+    if (detectedLoop) {
+      logger.error("validation", `Halting agent — loop pattern: ${detectedLoop.type}`);
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: false,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: stepLastPassed[s.name],
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+        loopDetected: detectedLoop,
+      };
+    }
 
     if (allPassed) {
       logger.info("validation", "All validation steps passed");
@@ -104,6 +141,49 @@ export async function runValidationLoop(
 
     if (fixResult.exitCode !== 0) {
       logger.warn("agent", `Agent fix attempt exited with code ${fixResult.exitCode}`);
+    }
+
+    // Track file writes via git diff after agent fix
+    try {
+      const diffResult = await execInContainer(container, [
+        "git", "diff", "--name-only", "HEAD",
+      ], { workingDir: plan.input.mountPath });
+      if (diffResult.exitCode === 0 && diffResult.stdout.trim()) {
+        const changedFiles = diffResult.stdout.trim().split("\n");
+        for (const file of changedFiles) {
+          const fileLoop = recordFileWrite(loopState, file);
+          if (fileLoop) {
+            detectedLoop = fileLoop;
+            logger.error("validation", `Loop detected: ${fileLoop.detail}`);
+          }
+        }
+      }
+    } catch {
+      // Best-effort — git diff may fail in non-git workspaces
+    }
+
+    // Track repeated tool calls by hashing the fix invocation
+    const toolLoop = recordToolCall(loopState, "agent-fix", feedback);
+    if (toolLoop) {
+      detectedLoop = toolLoop;
+      logger.error("validation", `Loop detected: ${toolLoop.detail}`);
+    }
+
+    // Halt immediately if file write or tool call loop detected
+    if (detectedLoop) {
+      logger.error("validation", `Halting agent — loop pattern: ${detectedLoop.type}`);
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: false,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: stepLastPassed[s.name],
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+        loopDetected: detectedLoop,
+      };
     }
   }
 

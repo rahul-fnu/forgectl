@@ -12,6 +12,9 @@ vi.mock("../../src/validation/feedback.js", () => ({
 vi.mock("../../src/agent/invoke.js", () => ({
   invokeAgent: vi.fn(),
 }));
+vi.mock("../../src/container/runner.js", () => ({
+  execInContainer: vi.fn(),
+}));
 
 const { runValidationGate } = await import("../../src/validation/runner.js");
 const { runValidationStep } = await import("../../src/validation/step.js");
