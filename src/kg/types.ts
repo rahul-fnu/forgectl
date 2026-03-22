@@ -4,6 +4,10 @@ export interface ModuleInfo {
   imports: ImportEntry[];
   isTest: boolean;
   lastModified?: string;  // ISO timestamp
+  contentHash?: string;   // SHA256 of semantic content
+  treeHash?: string;      // SHA256 of sorted child tree hashes
+  compressedContent?: string; // compact representation (signatures, imports, exports)
+  tokenCount?: number;    // estimated token count of compressed content
 }
 
 export interface ExportEntry {
@@ -45,6 +49,8 @@ export interface KnowledgeGraphStats {
   totalCouplingPairs: number;
   lastFullBuild?: string;
   lastIncremental?: string;
+  rootHash?: string;
+  changedSinceLastBuild?: number;
 }
 
 export interface ModuleQueryResult {

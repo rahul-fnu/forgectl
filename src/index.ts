@@ -570,7 +570,7 @@ cacheCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
-import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand } from "./cli/kg.js";
+import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 
 const repoCmd = program
@@ -627,6 +627,12 @@ kgCmd
   .description("Show graph statistics")
   .option("--db <path>", "Custom database path")
   .action(kgStatsCommand);
+
+kgCmd
+  .command("status")
+  .description("Show root hash and change summary")
+  .option("--db <path>", "Custom database path")
+  .action(kgStatusCommand);
 
 /**
  * Resolve --config or --repo to a config file path.

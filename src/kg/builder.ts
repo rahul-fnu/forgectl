@@ -15,6 +15,14 @@ import {
   deleteEdgesFrom,
   deleteTestMappingsFor,
 } from "./storage.js";
+import {
+  applyContentHashes,
+  applyTreeHashes,
+  computeRootHash,
+  findAffectedPaths,
+  computeTreeHashes,
+  updateTreeHashesInDb,
+} from "./merkle.js";
 import type { KnowledgeGraphStats, ModuleInfo } from "./types.js";
 
 /**
@@ -81,13 +89,19 @@ export async function buildFullGraph(
       }
     }
 
-    // 3. Build dependency graph
+    // 3. Compute content hashes and compressed content
+    applyContentHashes(modules);
+
+    // 4. Build dependency graph
     const edges = buildDependencyGraph(modules);
 
-    // 4. Build test mappings
+    // 5. Compute tree hashes
+    applyTreeHashes(modules, edges);
+
+    // 6. Build test mappings
     const testMappings = buildTestMappings(modules);
 
-    // 5. Analyze change coupling from git history
+    // 7. Analyze change coupling from git history
     let couplings: Awaited<ReturnType<typeof analyzeChangeCoupling>>;
     try {
       couplings = await analyzeChangeCoupling(repoPath, {
@@ -100,13 +114,17 @@ export async function buildFullGraph(
       couplings = [];
     }
 
-    // 6. Save everything to SQLite
+    // 8. Save everything to SQLite
     saveModules(db, modules);
     saveEdges(db, edges);
     saveTestMappings(db, testMappings);
     saveChangeCoupling(db, couplings);
 
+    // 9. Compute and save root hash
+    const rootHash = computeRootHash(modules);
     const now = new Date().toISOString();
+    saveMeta(db, "root_hash", rootHash);
+    saveMeta(db, "last_root_hash", rootHash);
     saveMeta(db, "last_full_build", now);
 
     return getStats(db);
@@ -145,16 +163,18 @@ export async function buildIncrementalGraph(
       }
     }
 
-    // 2. Update modules in DB
+    // 2. Compute content hashes for changed modules
+    applyContentHashes(modules);
+
+    // 3. Update modules in DB
     if (modules.length > 0) {
       saveModules(db, modules);
     }
 
-    // 3. Re-build edges for changed files
+    // 4. Re-build edges for changed files
     deleteEdgesFrom(db, changedRelPaths);
+    const allModules = loadAllModulesFromDb(db);
     if (modules.length > 0) {
-      // Load all modules from DB to build edges correctly
-      const allModules = loadAllModulesFromDb(db);
       const edges = buildDependencyGraph(allModules);
       // Only save edges from changed files
       const changedEdges = edges.filter(e => changedRelPaths.includes(e.from));
@@ -172,11 +192,26 @@ export async function buildIncrementalGraph(
       }
     }
 
-    // 4. Re-build test mappings for changed files
+    // 5. Recompute tree hashes for affected subtree only
+    const allEdges = loadAllEdgesFromDb(db);
+    const allPaths = allModules.map(m => m.path);
+    const affected = findAffectedPaths(changedRelPaths, allEdges, allPaths);
+    const treeHashes = computeTreeHashes(allModules, allEdges);
+
+    // Only update tree hashes for affected modules
+    const affectedHashes = new Map<string, string>();
+    for (const path of affected) {
+      const hash = treeHashes.get(path);
+      if (hash) affectedHashes.set(path, hash);
+    }
+    if (affectedHashes.size > 0) {
+      updateTreeHashesInDb(db, affectedHashes);
+    }
+
+    // 6. Re-build test mappings for changed files
     const sourceChanged = changedRelPaths.filter(p => !p.includes('.test.') && !p.includes('.spec.'));
     if (sourceChanged.length > 0) {
       deleteTestMappingsFor(db, sourceChanged);
-      const allModules = loadAllModulesFromDb(db);
       const mappings = buildTestMappings(allModules);
       const relevantMappings = mappings.filter(m => sourceChanged.includes(m.sourceFile));
       if (relevantMappings.length > 0) {
@@ -195,7 +230,12 @@ export async function buildIncrementalGraph(
       }
     }
 
-    // 5. Skip git history re-analysis (expensive, only on full build)
+    // 7. Recompute root hash
+    const updatedModules = loadAllModulesFromDb(db);
+    const rootHash = computeRootHash(updatedModules);
+    saveMeta(db, "root_hash", rootHash);
+
+    // 8. Skip git history re-analysis (expensive, only on full build)
 
     const now = new Date().toISOString();
     saveMeta(db, "last_incremental", now);
@@ -213,6 +253,10 @@ function loadAllModulesFromDb(db: ReturnType<typeof createKGDatabase>): ModuleIn
     imports_json: string;
     is_test: number;
     last_modified: string | null;
+    content_hash: string | null;
+    tree_hash: string | null;
+    compressed_content: string | null;
+    token_count: number | null;
   }>;
 
   return rows.map(r => ({
@@ -221,5 +265,25 @@ function loadAllModulesFromDb(db: ReturnType<typeof createKGDatabase>): ModuleIn
     imports: JSON.parse(r.imports_json),
     isTest: r.is_test === 1,
     lastModified: r.last_modified || undefined,
+    contentHash: r.content_hash || undefined,
+    treeHash: r.tree_hash || undefined,
+    compressedContent: r.compressed_content || undefined,
+    tokenCount: r.token_count || undefined,
+  }));
+}
+
+function loadAllEdgesFromDb(db: ReturnType<typeof createKGDatabase>): import("./types.js").DependencyEdge[] {
+  const rows = db.prepare("SELECT * FROM kg_edges").all() as Array<{
+    from_path: string;
+    to_path: string;
+    imports_json: string;
+    is_type_only: number;
+  }>;
+
+  return rows.map(r => ({
+    from: r.from_path,
+    to: r.to_path,
+    imports: JSON.parse(r.imports_json),
+    isTypeOnly: r.is_type_only === 1,
   }));
 }
