@@ -17,6 +17,8 @@ import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
 import { prepareSkillMounts } from "../skills/mount.js";
 import { runValidationLoop } from "../validation/runner.js";
+import { runReviewAgent, serializeReviewOutput } from "../validation/review-agent.js";
+import type { ReviewOutput } from "../validation/review-agent.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
@@ -49,6 +51,7 @@ export interface ExecutionResult {
   durationMs: number;
   error?: string;
   review?: ReviewSummary;
+  reviewCommentsJson?: string;
 }
 
 /**
@@ -257,6 +260,20 @@ export async function executeSingleAgent(
     );
     if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
+    // --- Phase: Review Agent (only after lint passes) ---
+    let reviewOutput: ReviewOutput | undefined;
+    if (validationResult.passed) {
+      try {
+        reviewOutput = await runReviewAgent(
+          container, adapter, agentOptions, agentEnv, plan.task, logger,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("review-agent", `Review agent failed (non-blocking): ${msg}`);
+      }
+    }
+    const reviewCommentsJson = reviewOutput ? serializeReviewOutput(reviewOutput) : undefined;
+
     // --- Phase: Collect Output ---
     if (validationResult.passed || plan.validation.onFailure === "output-wip") {
       emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "output" } });
@@ -288,6 +305,7 @@ export async function executeSingleAgent(
             output,
             validation: validationResult,
             durationMs: timer.elapsed(),
+            reviewCommentsJson,
           };
         }
       }
@@ -304,6 +322,7 @@ export async function executeSingleAgent(
         output,
         validation: validationResult,
         durationMs: timer.elapsed(),
+        reviewCommentsJson,
       };
     }
 
