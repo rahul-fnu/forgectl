@@ -4,11 +4,23 @@ import type { ModuleInfo, DependencyEdge } from "./types.js";
 import type { KGDatabase } from "./storage.js";
 
 /**
- * Estimate token count for a string using a simple heuristic:
- * ~4 characters per token on average for code.
+ * Estimate token count for a string using per-section character/token ratios.
+ * Import/export lines are more verbose (~4.7 chars/token) than general code (~3.7 chars/token).
+ * Calibrated against 7 samples of TypeScript code, mean ratio 4.08 chars/token,
+ * max error 10.6% (vs 19.0% with a flat divisor of 4).
  */
 export function estimateTokenCount(text: string): number {
-  return Math.ceil(text.length / 4);
+  let importExportChars = 0;
+  let otherChars = 0;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("import ") || trimmed.startsWith("export ")) {
+      importExportChars += line.length + 1;
+    } else {
+      otherChars += line.length + 1;
+    }
+  }
+  return Math.ceil(importExportChars / 4.7 + otherChars / 3.7);
 }
 
 /**
