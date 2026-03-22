@@ -18,6 +18,7 @@ import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
 import { createProgressComment } from "../github/comments.js";
+import { serializeReviewOutput } from "../validation/review-agent.js";
 import { emitRunEvent } from "../logging/events.js";
 import { needsPreApproval } from "../governance/autonomy.js";
 import { enterPendingApproval } from "../governance/approval.js";
@@ -581,6 +582,7 @@ async function executeWorkerAndHandle(
           lintIterations: result.lintIterations ?? undefined,
           failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
+          reviewCommentsJson: result.reviewOutput ? serializeReviewOutput(result.reviewOutput) : undefined,
           rawEventsJson,
         });
       } catch (err) {

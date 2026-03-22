@@ -12,6 +12,8 @@ import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { runValidationLoop, runValidationGate, runLintGate } from "../validation/runner.js";
+import { runReviewAgent } from "../validation/review-agent.js";
+import type { ReviewOutput } from "../validation/review-agent.js";
 import { collectGitOutput, recordPreAgentSha } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
@@ -39,6 +41,7 @@ export interface WorkerResult {
   lintIterations?: number;
   branch?: string;
   pendingApproval?: boolean;
+  reviewOutput?: ReviewOutput;
 }
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
@@ -297,6 +300,7 @@ export async function executeWorker(
   let branch: string | undefined;
   let checkRunId: number | undefined;
   let pendingApproval = false;
+  let reviewOutput: ReviewOutput | undefined;
 
   // Create check run at start (if headSha available)
   if (githubDeps?.headSha && githubDeps?.repoContext) {
@@ -441,6 +445,18 @@ export async function executeWorker(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to update check run: ${msg}`);
+      }
+    }
+
+    // 8.5. Run review agent — only after lint gate passes
+    if (agentResult.status !== "failed" && validationResult?.passed !== false) {
+      try {
+        reviewOutput = await runReviewAgent(
+          container, adapter, agentOptions, agentEnv, plan.task, logger,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Review agent failed (non-blocking): ${msg}`);
       }
     }
 
@@ -612,5 +628,6 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment, validationResult, lintIterations, branch, pendingApproval: pendingApproval || undefined };
+<<<<<<< HEAD
+  return { agentResult, comment, validationResult, lintIterations, branch, pendingApproval: pendingApproval || undefined, reviewOutput };
 }
