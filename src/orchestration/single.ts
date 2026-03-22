@@ -42,6 +42,8 @@ export interface ReviewSummary {
   totalRounds: number;
   approved: boolean;
   approvedOnRound?: number;
+  comments?: import("./review.js").ReviewComment[];
+  escalatedToHuman?: boolean;
 }
 
 export interface ExecutionResult {

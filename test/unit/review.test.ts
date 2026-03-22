@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   parseReviewResult,
+  parseReviewComments,
+  filterActionableComments,
   buildReviewPrompt,
   buildFixPrompt,
+  buildStructuredFixPrompt,
+  buildDiffScopedReviewPrompt,
 } from "../../src/orchestration/review.js";
+import type { ReviewComment } from "../../src/orchestration/review.js";
 import type { RunPlan } from "../../src/workflow/types.js";
 
 function makePlan(overrides: Partial<RunPlan> = {}): RunPlan {
@@ -193,10 +198,13 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("LGTM");
   });
 
-  it("includes instruction to list issues", () => {
+  it("includes structured output instructions", () => {
     const plan = makePlan();
     const prompt = buildReviewPrompt(plan, 1);
-    expect(prompt).toContain("list them numbered");
+    expect(prompt).toContain("JSON array");
+    expect(prompt).toContain("MUST_FIX");
+    expect(prompt).toContain("SHOULD_FIX");
+    expect(prompt).toContain("NIT");
   });
 });
 
@@ -226,5 +234,148 @@ describe("buildFixPrompt", () => {
   it("mentions reviewer will check again", () => {
     const prompt = buildFixPrompt("issue", 1);
     expect(prompt).toContain("reviewer will check again");
+  });
+});
+
+describe("parseReviewComments", () => {
+  it("parses valid structured JSON comments", () => {
+    const output = `Some preamble text\n\`\`\`json\n[{"file":"src/foo.ts","line":42,"severity":"MUST_FIX","message":"Missing null check","suggested_fix":"Add guard"}]\n\`\`\``;
+    const comments = parseReviewComments(output);
+    expect(comments).toHaveLength(1);
+    expect(comments[0].file).toBe("src/foo.ts");
+    expect(comments[0].line).toBe(42);
+    expect(comments[0].severity).toBe("MUST_FIX");
+    expect(comments[0].message).toBe("Missing null check");
+    expect(comments[0].suggested_fix).toBe("Add guard");
+  });
+
+  it("parses multiple comments", () => {
+    const output = '```json\n[{"file":"a.ts","line":1,"severity":"MUST_FIX","message":"bug"},{"file":"b.ts","line":2,"severity":"SHOULD_FIX","message":"style"},{"file":"c.ts","line":3,"severity":"NIT","message":"nit"}]\n```';
+    const comments = parseReviewComments(output);
+    expect(comments).toHaveLength(3);
+  });
+
+  it("returns empty array for no JSON block", () => {
+    expect(parseReviewComments("Just plain text feedback")).toEqual([]);
+  });
+
+  it("returns empty array for invalid JSON", () => {
+    expect(parseReviewComments("```json\nnot json\n```")).toEqual([]);
+  });
+
+  it("returns empty array for non-array JSON", () => {
+    expect(parseReviewComments('```json\n{"file":"a.ts"}\n```')).toEqual([]);
+  });
+
+  it("filters out comments with invalid severity", () => {
+    const output = '```json\n[{"file":"a.ts","line":1,"severity":"CRITICAL","message":"bug"}]\n```';
+    expect(parseReviewComments(output)).toEqual([]);
+  });
+
+  it("filters out comments with missing required fields", () => {
+    const output = '```json\n[{"file":"a.ts","severity":"MUST_FIX","message":"bug"}]\n```';
+    expect(parseReviewComments(output)).toEqual([]);
+  });
+});
+
+describe("filterActionableComments", () => {
+  const comments: ReviewComment[] = [
+    { file: "a.ts", line: 1, severity: "MUST_FIX", message: "bug" },
+    { file: "b.ts", line: 2, severity: "SHOULD_FIX", message: "style" },
+    { file: "c.ts", line: 3, severity: "NIT", message: "nit" },
+  ];
+
+  it("keeps MUST_FIX and SHOULD_FIX, drops NIT", () => {
+    const result = filterActionableComments(comments);
+    expect(result).toHaveLength(2);
+    expect(result[0].severity).toBe("MUST_FIX");
+    expect(result[1].severity).toBe("SHOULD_FIX");
+  });
+
+  it("returns empty array when all are NITs", () => {
+    const nits: ReviewComment[] = [
+      { file: "a.ts", line: 1, severity: "NIT", message: "nit1" },
+      { file: "b.ts", line: 2, severity: "NIT", message: "nit2" },
+    ];
+    expect(filterActionableComments(nits)).toEqual([]);
+  });
+});
+
+describe("buildStructuredFixPrompt", () => {
+  it("includes file:line for each comment", () => {
+    const comments: ReviewComment[] = [
+      { file: "src/foo.ts", line: 42, severity: "MUST_FIX", message: "Missing null check", suggested_fix: "Add guard" },
+    ];
+    const prompt = buildStructuredFixPrompt(comments, 1);
+    expect(prompt).toContain("src/foo.ts:42");
+    expect(prompt).toContain("MUST_FIX");
+    expect(prompt).toContain("Missing null check");
+    expect(prompt).toContain("Suggested fix: Add guard");
+  });
+
+  it("includes round number", () => {
+    const prompt = buildStructuredFixPrompt([], 2);
+    expect(prompt).toContain("round 2");
+  });
+
+  it("includes fix instruction", () => {
+    const prompt = buildStructuredFixPrompt([], 1);
+    expect(prompt).toContain("Fix all MUST_FIX and SHOULD_FIX issues");
+  });
+});
+
+describe("buildDiffScopedReviewPrompt", () => {
+  it("lists changed files", () => {
+    const plan = makePlan();
+    const prompt = buildDiffScopedReviewPrompt(plan, 2, ["src/foo.ts", "src/bar.ts"], []);
+    expect(prompt).toContain("src/foo.ts");
+    expect(prompt).toContain("src/bar.ts");
+    expect(prompt).toContain("re-review round 2");
+  });
+
+  it("lists previously flagged issues", () => {
+    const plan = makePlan();
+    const prev: ReviewComment[] = [
+      { file: "src/foo.ts", line: 42, severity: "MUST_FIX", message: "Missing null check" },
+    ];
+    const prompt = buildDiffScopedReviewPrompt(plan, 2, ["src/foo.ts"], prev);
+    expect(prompt).toContain("Previously flagged issues");
+    expect(prompt).toContain("src/foo.ts:42");
+    expect(prompt).toContain("Missing null check");
+  });
+
+  it("instructs not to review files outside the list", () => {
+    const plan = makePlan();
+    const prompt = buildDiffScopedReviewPrompt(plan, 2, ["src/foo.ts"], []);
+    expect(prompt).toContain("Do NOT review files outside the list");
+  });
+
+  it("includes reviewer system prompt", () => {
+    const plan = makePlan();
+    const prompt = buildDiffScopedReviewPrompt(plan, 2, [], []);
+    expect(prompt).toContain("You are a senior code reviewer");
+  });
+});
+
+describe("parseReviewResult with structured comments", () => {
+  it("extracts structured comments from non-approved output", () => {
+    const output = 'Issues found:\n```json\n[{"file":"src/foo.ts","line":42,"severity":"MUST_FIX","message":"Missing null check"}]\n```';
+    const result = parseReviewResult(output);
+    expect(result.approved).toBe(false);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0].severity).toBe("MUST_FIX");
+  });
+
+  it("returns empty comments array when approved", () => {
+    const result = parseReviewResult("LGTM");
+    expect(result.approved).toBe(true);
+    expect(result.comments).toEqual([]);
+  });
+
+  it("returns empty comments array when no JSON block present", () => {
+    const result = parseReviewResult("1. Issue A\n2. Issue B");
+    expect(result.approved).toBe(false);
+    expect(result.comments).toEqual([]);
+    expect(result.feedback).toContain("Issue A");
   });
 });

@@ -75,6 +75,8 @@ export async function runCommand(options: CLIOptions): Promise<void> {
   if (result.review) {
     if (result.review.approved) {
       console.log(chalk.gray(`  Review: ${result.review.totalRounds} round(s), approved on round ${result.review.approvedOnRound}`));
+    } else if (result.review.escalatedToHuman) {
+      console.log(chalk.yellow(`  Review: ${result.review.totalRounds} round(s), escalated to human`));
     } else {
       console.log(chalk.gray(`  Review: ${result.review.totalRounds} round(s), not approved`));
     }

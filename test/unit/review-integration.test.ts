@@ -81,6 +81,7 @@ vi.mock("../../src/logging/events.js", () => ({
 }));
 
 import { executeReviewMode } from "../../src/orchestration/review.js";
+import { emitRunEvent } from "../../src/logging/events.js";
 import { invokeAgent } from "../../src/agent/invoke.js";
 import { runValidationLoop } from "../../src/validation/runner.js";
 import { destroyContainer } from "../../src/container/runner.js";
@@ -118,7 +119,7 @@ function makePlan(overrides: Partial<RunPlan> = {}): RunPlan {
       review: {
         enabled: true,
         system: "You are a code reviewer.",
-        maxRounds: 3,
+        maxRounds: 2,
         agent: "claude-code",
         model: "",
       },
@@ -327,5 +328,115 @@ describe("executeReviewMode", () => {
     expect(result.review!.approved).toBe(false);
     // Output still collected because validation passed
     expect(result.output).toBeDefined();
+  });
+
+  it("self-addresses MUST_FIX comments with structured context", async () => {
+    const structuredOutput = 'Issues found:\n```json\n[{"file":"src/foo.ts","line":42,"severity":"MUST_FIX","message":"Missing null check","suggested_fix":"Add if (x != null) guard"}]\n```';
+
+    vi.mocked(invokeAgent)
+      // implementer initial run
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "done", stderr: "", durationMs: 1000 })
+      // reviewer round 1 — structured comments
+      .mockResolvedValueOnce({ exitCode: 0, stdout: structuredOutput, stderr: "", durationMs: 500 })
+      // implementer fix
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "fixed", stderr: "", durationMs: 1000 })
+      // reviewer round 2 — approved
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "LGTM", stderr: "", durationMs: 500 });
+
+    const plan = makePlan();
+    const result = await executeReviewMode(plan, logger);
+
+    expect(result.success).toBe(true);
+    expect(result.review!.approved).toBe(true);
+    expect(result.review!.approvedOnRound).toBe(2);
+    expect(result.review!.comments).toHaveLength(1);
+    expect(result.review!.comments![0].severity).toBe("MUST_FIX");
+  });
+
+  it("escalates to human after 2 failed review rounds", async () => {
+    vi.mocked(invokeAgent)
+      // implementer initial run
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "done", stderr: "", durationMs: 1000 })
+      // reviewer round 1 — issues
+      .mockResolvedValueOnce({ exitCode: 0, stdout: '```json\n[{"file":"a.ts","line":1,"severity":"MUST_FIX","message":"bug"}]\n```', stderr: "", durationMs: 500 })
+      // implementer fix
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "fixed", stderr: "", durationMs: 1000 })
+      // reviewer round 2 — still issues
+      .mockResolvedValueOnce({ exitCode: 0, stdout: '```json\n[{"file":"a.ts","line":1,"severity":"MUST_FIX","message":"still buggy"}]\n```', stderr: "", durationMs: 500 });
+
+    const plan = makePlan();
+    const result = await executeReviewMode(plan, logger);
+
+    expect(result.success).toBe(false);
+    expect(result.review!.approved).toBe(false);
+    expect(result.review!.totalRounds).toBe(2);
+    expect(result.review!.escalatedToHuman).toBe(true);
+    // Escalation event should be emitted
+    const escalationCalls = vi.mocked(emitRunEvent).mock.calls.filter(
+      (call) => call[0].type === "escalation",
+    );
+    expect(escalationCalls).toHaveLength(1);
+    expect(escalationCalls[0][0].data).toEqual(
+      expect.objectContaining({ reason: "review_max_rounds_exhausted", rounds: 2 }),
+    );
+  });
+
+  it("caps maxRounds at 2 even when plan specifies higher", async () => {
+    vi.mocked(invokeAgent)
+      // implementer initial run
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "done", stderr: "", durationMs: 1000 })
+      // reviewer round 1 — issues
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "1. Issue A", stderr: "", durationMs: 500 })
+      // implementer fix
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "fixed", stderr: "", durationMs: 1000 })
+      // reviewer round 2 — still issues
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "1. Issue B", stderr: "", durationMs: 500 });
+
+    const plan = makePlan({
+      orchestration: {
+        mode: "review",
+        review: { enabled: true, system: "Review.", maxRounds: 5, agent: "claude-code", model: "" },
+      },
+    });
+
+    const result = await executeReviewMode(plan, logger);
+
+    // Should stop at 2 rounds even though plan says 5
+    expect(result.review!.totalRounds).toBe(2);
+    expect(result.review!.escalatedToHuman).toBe(true);
+    // Only 4 invokeAgent calls: implementer + reviewer1 + fix + reviewer2
+    expect(vi.mocked(invokeAgent)).toHaveBeenCalledTimes(4);
+  });
+
+  it("populates review_rounds in review summary", async () => {
+    vi.mocked(invokeAgent)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "done", stderr: "", durationMs: 1000 })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "LGTM", stderr: "", durationMs: 500 });
+
+    const plan = makePlan();
+    const result = await executeReviewMode(plan, logger);
+
+    expect(result.review).toBeDefined();
+    expect(result.review!.totalRounds).toBe(1);
+  });
+
+  it("ignores NIT comments in self-addressing loop", async () => {
+    // Only NITs — no actionable comments to fix, but still not approved
+    const nitOutput = '```json\n[{"file":"a.ts","line":1,"severity":"NIT","message":"trailing whitespace"}]\n```';
+
+    vi.mocked(invokeAgent)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "done", stderr: "", durationMs: 1000 })
+      // reviewer round 1 — only NITs
+      .mockResolvedValueOnce({ exitCode: 0, stdout: nitOutput, stderr: "", durationMs: 500 })
+      // implementer fix (uses plain feedback since no actionable structured comments)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "fixed", stderr: "", durationMs: 1000 })
+      // reviewer round 2
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "LGTM", stderr: "", durationMs: 500 });
+
+    const plan = makePlan();
+    const result = await executeReviewMode(plan, logger);
+
+    expect(result.success).toBe(true);
+    expect(result.review!.approved).toBe(true);
   });
 });

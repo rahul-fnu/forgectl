@@ -580,9 +580,10 @@ async function executeWorkerAndHandle(
           status: outcomeStatus,
           totalTurns: result.agentResult.turnCount ?? undefined,
           lintIterations: result.lintIterations ?? undefined,
+          reviewRounds: result.executionResult?.review?.totalRounds,
+          reviewCommentsJson: result.reviewOutput ? serializeReviewOutput(result.reviewOutput) : undefined,
           failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
-          reviewCommentsJson: result.reviewOutput ? serializeReviewOutput(result.reviewOutput) : undefined,
           rawEventsJson,
         });
       } catch (err) {
