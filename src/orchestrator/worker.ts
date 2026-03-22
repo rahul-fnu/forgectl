@@ -290,6 +290,17 @@ export async function executeWorker(
     };
   }
 
+  // 2.7. Build per-workspace KG so agent context reflects the branch state
+  try {
+    const { buildFullGraph } = await import("../kg/builder.js");
+    const wsKgPath = pathJoin(workspacePath, "kg.db");
+    await buildFullGraph(workspacePath, wsKgPath);
+    logger.info("worker", `Built per-workspace KG at ${wsKgPath}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("worker", `Failed to build per-workspace KG (continuing without): ${msg}`);
+  }
+
   // 3. Build RunPlan (with optional validationConfig and skills)
   const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
 
