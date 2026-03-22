@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import type { ModuleInfo, DependencyEdge, ExportEntry, ImportEntry } from "./types.js";
+import type { ModuleInfo, DependencyEdge } from "./types.js";
 import type { KGDatabase } from "./storage.js";
 
 /**
@@ -191,7 +191,7 @@ export function applyTreeHashes(modules: ModuleInfo[], edges: DependencyEdge[]):
 export function findAffectedPaths(
   changedPaths: string[],
   edges: DependencyEdge[],
-  allPaths: string[],
+  _allPaths: string[],
 ): Set<string> {
   // Reverse adjacency: dependency -> dependents
   const reverseAdj = new Map<string, Set<string>>();
