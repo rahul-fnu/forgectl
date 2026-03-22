@@ -565,6 +565,7 @@ async function executeWorkerAndHandle(
           completedAt: new Date().toISOString(),
           status: outcomeStatus,
           totalTurns: result.agentResult.turnCount ?? undefined,
+          lintIterations: result.lintIterations ?? undefined,
           failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
           rawEventsJson,

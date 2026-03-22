@@ -57,6 +57,7 @@ export const WorkflowSchema = z.object({
   system: z.string().default(""),
   validation: z.object({
     steps: z.array(ValidationStepSchema).default([]),
+    lint_steps: z.array(ValidationStepSchema).default([]),
     on_failure: FailureAction.default("abandon"),
   }).default({}),
   output: z.object({

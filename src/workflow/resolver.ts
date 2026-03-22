@@ -184,6 +184,7 @@ export function resolveRunPlan(
     },
     validation: {
       steps: workflow.validation.steps,
+      lintSteps: workflow.validation.lint_steps ?? [],
       onFailure: workflow.validation.on_failure,
     },
     output: {

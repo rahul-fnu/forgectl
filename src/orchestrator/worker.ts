@@ -11,7 +11,7 @@ import type { ValidationResult } from "../validation/runner.js";
 import { prepareExecution } from "../orchestration/single.js";
 import { createAgentSession } from "../agent/session.js";
 import { cleanupRun } from "../container/cleanup.js";
-import { runValidationLoop, runValidationGate } from "../validation/runner.js";
+import { runValidationLoop, runValidationGate, runLintGate } from "../validation/runner.js";
 import { collectGitOutput, recordPreAgentSha } from "../output/git.js";
 import { buildResultComment as buildGHResultComment } from "../github/comments.js";
 import type { RunResult } from "../github/comments.js";
@@ -35,6 +35,7 @@ export interface WorkerResult {
   comment: string;
   executionResult?: ExecutionResult;
   validationResult?: ValidationResult;
+  lintIterations?: number;
   branch?: string;
   pendingApproval?: boolean;
 }
@@ -109,7 +110,7 @@ export function buildOrchestratedRunPlan(
   workspacePath: string,
   promptTemplate: string,
   attempt: number,
-  validationConfig?: { steps: ValidationStep[]; on_failure: string },
+  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string },
   skills?: string[],
 ): RunPlan {
   const runId = crypto.randomUUID();
@@ -138,6 +139,7 @@ export function buildOrchestratedRunPlan(
       system: "",
       validation: {
         steps: validationConfig?.steps ?? [],
+        lint_steps: validationConfig?.lint_steps ?? [],
         on_failure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
       },
       output: { mode: "git", path: "/workspace", collect: [] },
@@ -177,6 +179,7 @@ export function buildOrchestratedRunPlan(
     },
     validation: {
       steps: validationConfig?.steps ?? [],
+      lintSteps: validationConfig?.lint_steps ?? [],
       onFailure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
     },
     output: {
@@ -226,7 +229,7 @@ export async function executeWorker(
   attempt: number,
   logger: Logger,
   onActivity?: () => void,
-  validationConfig?: { steps: ValidationStep[]; on_failure: string },
+  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string },
   githubDeps?: GitHubDeps,
   governance?: GovernanceOpts,
   skills?: string[],
@@ -289,6 +292,7 @@ export async function executeWorker(
 
   let agentResult: AgentResult;
   let validationResult: ValidationResult | undefined;
+  let lintIterations: number | undefined;
   let branch: string | undefined;
   let checkRunId: number | undefined;
   let pendingApproval = false;
@@ -345,8 +349,26 @@ export async function executeWorker(
       }
     }
 
+    // 7.5. Run lint gate BEFORE validation loop (deterministic checks first)
+    if (plan.validation.lintSteps.length > 0) {
+      logger.info("worker", `Running ${plan.validation.lintSteps.length} lint steps for ${issue.identifier}`);
+      const lintResult = await runLintGate(
+        container, plan.validation.lintSteps, plan.input.mountPath,
+        adapter, agentOptions, agentEnv, logger,
+      );
+      lintIterations = lintResult.lintIterations;
+      if (!lintResult.passed) {
+        logger.error("worker", `Lint gate failed for ${issue.identifier} after ${lintResult.lintIterations} iterations`);
+        agentResult = {
+          ...agentResult,
+          status: "failed",
+          stderr: "Lint gate failed: lint checks did not pass after retries",
+        };
+      }
+    }
+
     // 8. Run validation loop BEFORE closing session (container must be alive)
-    if (plan.validation.steps.length > 0) {
+    if (plan.validation.steps.length > 0 && agentResult.status !== "failed") {
       logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
     }
@@ -570,5 +592,5 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment, validationResult, branch, pendingApproval: pendingApproval || undefined };
+  return { agentResult, comment, validationResult, lintIterations, branch, pendingApproval: pendingApproval || undefined };
 }

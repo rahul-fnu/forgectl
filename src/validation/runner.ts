@@ -4,7 +4,7 @@ import type { Logger } from "../logging/logger.js";
 import type { AgentAdapter, AgentOptions } from "../agent/types.js";
 import type { ValidationStep } from "../config/schema.js";
 import { runValidationStep, type StepResult } from "./step.js";
-import { formatFeedback } from "./feedback.js";
+import { formatFeedback, formatLintFeedback } from "./feedback.js";
 import { invokeAgent } from "../agent/invoke.js";
 
 export interface ValidationResult {
@@ -114,6 +114,118 @@ export async function runValidationLoop(
     passed: false,
     totalAttempts: attempt,
     stepResults: steps.map(s => ({
+      name: s.name,
+      passed: stepLastPassed[s.name],
+      attempts: stepAttemptCounts[s.name],
+    })),
+    lastOutput: lastOutput || undefined,
+  };
+}
+
+export interface LintGateResult {
+  passed: boolean;
+  lintIterations: number;
+  stepResults: Array<{
+    name: string;
+    passed: boolean;
+    attempts: number;
+  }>;
+  lastOutput?: string;
+}
+
+/**
+ * Run lint steps as the first validation pass before any LLM-based review.
+ * Lint failures go directly back to the executing agent with exact error output.
+ * Returns a structured result with lint_iterations count.
+ */
+export async function runLintGate(
+  container: Docker.Container,
+  lintSteps: ValidationStep[],
+  workingDir: string,
+  adapter: AgentAdapter,
+  agentOptions: AgentOptions,
+  agentEnv: string[],
+  logger: Logger,
+): Promise<LintGateResult> {
+  if (lintSteps.length === 0) {
+    return { passed: true, lintIterations: 0, stepResults: [] };
+  }
+
+  const maxRetries = Math.max(...lintSteps.map(s => s.retries));
+  const stepAttemptCounts: Record<string, number> = {};
+  const stepLastPassed: Record<string, boolean> = {};
+  for (const step of lintSteps) {
+    stepAttemptCounts[step.name] = 0;
+    stepLastPassed[step.name] = false;
+  }
+
+  let iteration = 0;
+  let lastResults: StepResult[] = [];
+
+  while (iteration <= maxRetries) {
+    iteration++;
+    logger.info("validation", `Lint gate iteration ${iteration}/${maxRetries + 1}`);
+
+    const results: StepResult[] = [];
+    let allPassed = true;
+
+    for (const step of lintSteps) {
+      logger.debug("validation", `Lint: ${step.name} — ${step.command}`);
+      const result = await runValidationStep(container, step, workingDir);
+      results.push(result);
+      stepAttemptCounts[step.name]++;
+      stepLastPassed[step.name] = result.passed;
+
+      if (result.passed) {
+        logger.info("validation", `Lint ✔ ${step.name} passed (${result.durationMs}ms)`);
+      } else {
+        logger.warn("validation", `Lint ✗ ${step.name} failed (exit ${result.exitCode})`);
+        allPassed = false;
+      }
+    }
+
+    lastResults = results;
+
+    if (allPassed) {
+      logger.info("validation", "All lint checks passed");
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: true,
+        lintIterations: iteration,
+        stepResults: lintSteps.map(s => ({
+          name: s.name,
+          passed: true,
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+      };
+    }
+
+    if (iteration > maxRetries) {
+      break;
+    }
+
+    // Feed lint errors directly back to agent
+    const failedSteps = results.filter(r => !r.passed);
+    const feedback = formatLintFeedback(failedSteps);
+    logger.info("validation", `${failedSteps.length} lint step(s) failed, sending exact errors to agent`);
+
+    logger.info("agent", "Agent fixing lint failures...");
+    const fixResult = await invokeAgent(
+      container, adapter, feedback, agentOptions, agentEnv, `lint-fix-${iteration}`
+    );
+
+    if (fixResult.exitCode !== 0) {
+      logger.warn("agent", `Agent lint fix attempt exited with code ${fixResult.exitCode}`);
+    }
+  }
+
+  logger.error("validation", `Lint gate failed after ${iteration} iterations`);
+  const lastOutput = lastResults.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+  return {
+    passed: false,
+    lintIterations: iteration,
+    stepResults: lintSteps.map(s => ({
       name: s.name,
       passed: stepLastPassed[s.name],
       attempts: stepAttemptCounts[s.name],

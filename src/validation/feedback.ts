@@ -37,6 +37,33 @@ export function formatFeedback(failedSteps: StepResult[], workflowName: string):
   return parts.join("\n");
 }
 
+/**
+ * Format lint failure into structured feedback for the agent.
+ * Lint errors are deterministic — the agent gets exact error output with no LLM review.
+ */
+export function formatLintFeedback(failedSteps: StepResult[]): string {
+  const parts: string[] = [
+    "LINT CHECK FAILED. Fix the following lint/type errors before proceeding:\n",
+  ];
+
+  for (const { step, exitCode, stdout, stderr } of failedSteps) {
+    parts.push(`--- ${step.name} (exit code ${exitCode}) ---`);
+    parts.push(`Command: ${step.command}`);
+    if (stdout.trim()) {
+      parts.push(`STDOUT:\n${truncate(stdout, 3000)}`);
+    }
+    if (stderr.trim()) {
+      parts.push(`STDERR:\n${truncate(stderr, 3000)}`);
+    }
+    parts.push("");
+  }
+
+  parts.push("Fix the exact errors above. Do NOT weaken linting rules or disable checks.");
+  parts.push("\nLint checks will run again after your fix.");
+
+  return parts.join("\n");
+}
+
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   const half = Math.floor(maxLen / 2);

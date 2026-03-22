@@ -45,6 +45,7 @@ export interface WorkflowFileConfig {
   };
   validation?: {
     steps: ValidationStep[];
+    lint_steps?: ValidationStep[];
     on_failure: "abandon" | "output-wip" | "pause";
   };
   delegation?: {
@@ -130,6 +131,7 @@ export interface RunPlan {
   };
   validation: {
     steps: ValidationStep[];
+    lintSteps: ValidationStep[];
     onFailure: "abandon" | "output-wip" | "pause";
   };
   output: {
