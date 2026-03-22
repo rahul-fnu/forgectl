@@ -580,6 +580,7 @@ cacheCmd
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
+import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
 
 const repoCmd = program
@@ -695,5 +696,19 @@ taskCmd
   .command("list [dir]")
   .description("Find and list task specs in a directory")
   .action(taskListCommand);
+
+// forgectl plan
+program
+  .command("plan <goal-or-file>")
+  .description("Generate an ExecutionPlan from a goal or task spec")
+  .option("--db <path>", "Custom KG database path")
+  .option("-o, --output <path>", "Write planning prompt to this file")
+  .action(planCommand);
+
+program
+  .command("plan-validate <response-file>")
+  .description("Validate a plan response (use - for stdin)")
+  .option("--db <path>", "Custom KG database path")
+  .action(planValidateResponseCommand);
 
 program.parse();
