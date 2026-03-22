@@ -21,6 +21,22 @@ export interface ContextSuggestion {
 export interface AnalyzeOptions {
   since?: string;
   module?: string;
+  compareContext?: boolean;
+}
+
+export interface ContextComparisonReport {
+  withContext: ContextGroupStats;
+  withoutContext: ContextGroupStats;
+  contextHitRate: number;
+}
+
+export interface ContextGroupStats {
+  runCount: number;
+  avgTurns: number;
+  avgFilesExplored: number;
+  avgDurationMs: number;
+  successRate: number;
+  firstPassValidation: number;
 }
 
 function parseSinceDuration(since: string): Date {
@@ -267,4 +283,129 @@ function generateContextSuggestions(
   }
 
   return suggestions.sort((a, b) => b.confidence - a.confidence);
+}
+
+function computeGroupStats(rows: OutcomeRow[]): ContextGroupStats {
+  const total = rows.length;
+  if (total === 0) {
+    return { runCount: 0, avgTurns: 0, avgFilesExplored: 0, avgDurationMs: 0, successRate: 0, firstPassValidation: 0 };
+  }
+
+  const withTurns = rows.filter(r => r.totalTurns !== null);
+  const avgTurns = withTurns.length > 0
+    ? withTurns.reduce((s, r) => s + r.totalTurns!, 0) / withTurns.length
+    : 0;
+
+  let totalFilesExplored = 0;
+  for (const r of rows) {
+    totalFilesExplored += countFileReads(r.rawEventsJson);
+  }
+  const avgFilesExplored = totalFilesExplored / total;
+
+  let totalDuration = 0;
+  let durationCount = 0;
+  for (const r of rows) {
+    if (r.startedAt && r.completedAt) {
+      totalDuration += new Date(r.completedAt).getTime() - new Date(r.startedAt).getTime();
+      durationCount++;
+    }
+  }
+  const avgDurationMs = durationCount > 0 ? totalDuration / durationCount : 0;
+
+  const successes = rows.filter(r => r.status === "success").length;
+  const successRate = successes / total;
+
+  const firstPass = rows.filter(r => (r.lintIterations ?? 0) <= 1 && r.status === "success").length;
+  const firstPassValidation = firstPass / total;
+
+  return {
+    runCount: total,
+    avgTurns: Math.round(avgTurns * 100) / 100,
+    avgFilesExplored: Math.round(avgFilesExplored * 100) / 100,
+    avgDurationMs: Math.round(avgDurationMs),
+    successRate: Math.round(successRate * 10000) / 10000,
+    firstPassValidation: Math.round(firstPassValidation * 10000) / 10000,
+  };
+}
+
+function countFileReads(rawEventsJson: string | null): number {
+  if (!rawEventsJson) return 0;
+  try {
+    const events: Array<{ type?: string; data?: { tool?: string } }> = JSON.parse(rawEventsJson);
+    return events.filter(e =>
+      e.type === "tool_use" && (e.data?.tool === "Read" || e.data?.tool === "file_read")
+    ).length;
+  } catch {
+    return 0;
+  }
+}
+
+export function computeContextHitRate(rows: OutcomeRow[]): number {
+  let totalProvided = 0;
+  let totalUsed = 0;
+
+  for (const r of rows) {
+    if (r.contextEnabled !== 1 || !r.contextFilesJson || !r.rawEventsJson) continue;
+
+    let contextFiles: string[];
+    try {
+      contextFiles = JSON.parse(r.contextFilesJson);
+    } catch {
+      continue;
+    }
+
+    let readFiles: Set<string>;
+    try {
+      const events: Array<{ type?: string; data?: { tool?: string; file?: string; path?: string } }> = JSON.parse(r.rawEventsJson);
+      readFiles = new Set(
+        events
+          .filter(e => e.type === "tool_use" && (e.data?.tool === "Read" || e.data?.tool === "file_read"))
+          .map(e => e.data?.file ?? e.data?.path ?? "")
+          .filter(p => p.length > 0)
+      );
+    } catch {
+      continue;
+    }
+
+    totalProvided += contextFiles.length;
+    for (const cf of contextFiles) {
+      if (readFiles.has(cf)) {
+        totalUsed++;
+      }
+    }
+  }
+
+  return totalProvided > 0 ? Math.round((totalUsed / totalProvided) * 10000) / 10000 : 0;
+}
+
+export function compareContextOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): ContextComparisonReport {
+  let filtered = rows;
+
+  if (opts.since) {
+    const sinceDate = parseSinceDuration(opts.since);
+    const sinceIso = sinceDate.toISOString();
+    filtered = filtered.filter(r => (r.completedAt ?? r.startedAt ?? "") >= sinceIso);
+  }
+
+  if (opts.module) {
+    const mod = opts.module;
+    filtered = filtered.filter(r => {
+      if (!r.modulesTouched) return false;
+      try {
+        const modules: string[] = JSON.parse(r.modulesTouched);
+        return modules.some(m => m === mod || m.startsWith(mod + "/"));
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  const withContext = filtered.filter(r => r.contextEnabled === 1);
+  const withoutContext = filtered.filter(r => r.contextEnabled === 0);
+
+  return {
+    withContext: computeGroupStats(withContext),
+    withoutContext: computeGroupStats(withoutContext),
+    contextHitRate: computeContextHitRate(withContext),
+  };
 }

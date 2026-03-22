@@ -35,6 +35,8 @@ export interface CLIOptions {
   team?: boolean;
   // Numeric override from --team-size
   teamSize?: number;
+  // Commander sets context=false when --no-context is passed, undefined when omitted
+  context?: boolean;
 }
 
 /**
@@ -213,6 +215,7 @@ export function resolveRunPlan(
       sign: config.commit.sign,
     },
     noSkills: options.skills === false,
+    noContext: options.context === false || undefined,
     noTeam: resolvedNoTeam || undefined,
     skipCheckpoints: hasTeam || undefined,
     team: hasTeam ? { size: effectiveTeamSize!, slotWeight: effectiveTeamSize! } : undefined,

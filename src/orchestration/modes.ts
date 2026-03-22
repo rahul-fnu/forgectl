@@ -69,6 +69,7 @@ export async function executeRun(
         failureMode,
         failureDetail: result.error?.slice(0, 2000),
         filesChanged: result.output?.mode === "git" ? result.output.filesChanged : undefined,
+        contextEnabled: plan.noContext ? 0 : 1,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

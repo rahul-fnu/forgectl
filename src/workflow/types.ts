@@ -147,6 +147,7 @@ export interface RunPlan {
   commit: CommitConfig;
   noSkills?: boolean;
   noTeam?: boolean;
+  noContext?: boolean;
   skipCheckpoints?: boolean;
   team?: {
     size: number;
