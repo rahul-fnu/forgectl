@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { OrchestratorState } from "./state.js";
 import type { TwoTierSlotManager } from "./state.js";
 import type { TrackerAdapter } from "../tracker/types.js";
@@ -12,6 +13,7 @@ import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
+import type { ContextResult } from "../context/builder.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
@@ -42,6 +44,8 @@ export interface TickDeps {
   skills?: string[];
   /** Validation config from WORKFLOW.md. */
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
+  /** Optional path to the KG database file. Defaults to ~/.forgectl/kg.db. */
+  kgDbPath?: string;
 }
 
 /**
@@ -133,10 +137,65 @@ export async function tick(deps: TickDeps): Promise<void> {
     ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo, costRepo: deps.costRepo, retryRepo: deps.retryRepo }
     : undefined;
 
-  // Step 8: Dispatch up to available slots
-  for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig);
+  // Step 8: Build KG context for eligible issues (open + close db per tick)
+  const kgContextMap = new Map<string, ContextResult>();
+  const resolvedKgPath = deps.kgDbPath ?? resolveDefaultKgPath(config);
+  if (sorted.length > 0 && existsSync(resolvedKgPath)) {
+    let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+    try {
+      const { createKGDatabase } = await import("../kg/storage.js");
+      kgDb = createKGDatabase(resolvedKgPath);
+      const { buildContext } = await import("../context/builder.js");
+
+      for (const issue of sorted.slice(0, available)) {
+        try {
+          const taskSpec = issueToTaskSpec(issue);
+          const ctx = await buildContext(taskSpec, kgDb);
+          kgContextMap.set(issue.id, ctx);
+          logger.info("scheduler", `KG context for ${issue.identifier}: ${ctx.includedFiles.length} files, ${ctx.budget.used}/${ctx.budget.max} tokens`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("scheduler", `Failed to build KG context for ${issue.identifier}: ${msg}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("scheduler", `Failed to open KG database: ${msg}`);
+    } finally {
+      try { kgDb?.close(); } catch { /* best-effort */ }
+    }
+  } else if (sorted.length > 0) {
+    logger.warn("scheduler", `KG database not found at ${resolvedKgPath}, dispatching without context`);
   }
+
+  // Step 9: Dispatch up to available slots
+  for (const issue of sorted.slice(0, available)) {
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id));
+  }
+}
+
+function resolveDefaultKgPath(config: ForgectlConfig): string {
+  const storagePath = config.storage?.db_path ?? "~/.forgectl/forgectl.db";
+  const dir = storagePath.replace(/\/[^/]+$/, "");
+  const expanded = dir.replace(/^~/, process.env.HOME || "/tmp");
+  return `${expanded}/kg.db`;
+}
+
+function issueToTaskSpec(issue: import("../tracker/types.js").TrackerIssue): import("../task/types.js").TaskSpec {
+  const fileRefPattern = /(?:src|test|lib)\/[\w/.=-]+\.(?:ts|js|tsx|jsx)/g;
+  const text = `${issue.title}\n${issue.description}`;
+  const files = [...text.matchAll(fileRefPattern)].map(m => m[0]);
+
+  return {
+    id: issue.id,
+    title: issue.title,
+    description: issue.description,
+    context: { files },
+    constraints: [],
+    acceptance: [],
+    decomposition: { strategy: "forbidden" },
+    effort: {},
+  };
 }
 
 /**
