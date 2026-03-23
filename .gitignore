@@ -274,3 +274,5 @@ __pycache__/
 *.pyc
 .next/
 coverage/
+kg.db
+.claude/worktrees/
