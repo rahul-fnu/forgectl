@@ -149,6 +149,9 @@ export function filterCandidates(
   doneLabel?: string,
 ): TrackerIssue[] {
   return candidates.filter((issue) => {
+    // Exclude recently completed issues (guards against re-dispatch before tracker API reflects Done)
+    if (state.recentlyCompleted.has(issue.id)) return false;
+
     // Exclude already claimed
     if (state.claimed.has(issue.id)) return false;
 
@@ -823,6 +826,8 @@ async function executeWorkerAndHandle(
       if (isSynthesizerRun) {
         handleSynthesizerOutcome(issue, "success", tracker, logger);
       } else if (prCreated || !result.branch) {
+        // Mark as recently completed IMMEDIATELY to prevent re-dispatch before tracker API reflects Done
+        state.recentlyCompleted.add(issue.id);
         // Close the issue: PR was created, or no branch was produced (files-mode output)
         if (config.tracker?.auto_close) {
           // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)
