@@ -214,15 +214,19 @@ export class PRProcessor {
       // Step 4: Enrich PR description with ticket context
       await this.enrichPRDescription(pr, tmpDir);
 
-      // Step 5: Review diff (optional) — must approve before merge
+      // Step 5: Review diff (optional) — post review, only block on MUST_FIX
       if (this.config.enableReview) {
         const review = await this.reviewDiff(tmpDir, pr);
-        if (review?.approval === "request_changes") {
-          return this.recordResult(pr, "request_changes", review.summary);
-        }
-        if (!review) {
-          this.logger.warn("merge-daemon", `PR #${pr.number}: Review produced no result, skipping merge`);
-          return this.recordResult(pr, "skipped", "Review step produced no parseable result");
+        if (review) {
+          const mustFixCount = review.comments.filter(c => c.severity === "must_fix").length;
+          if (mustFixCount > 0) {
+            this.logger.info("merge-daemon", `PR #${pr.number}: ${mustFixCount} must-fix issue(s) — blocking merge`);
+            return this.recordResult(pr, "request_changes", `${mustFixCount} must-fix issue(s): ${review.summary}`);
+          }
+          // SHOULD_FIX and NIT are posted as comments but don't block merge
+          if (review.comments.length > 0) {
+            this.logger.info("merge-daemon", `PR #${pr.number}: ${review.comments.length} non-blocking comment(s) posted, proceeding to merge`);
+          }
         }
       }
 
@@ -442,8 +446,9 @@ export class PRProcessor {
         `- should_fix: Address if straightforward. Missing edge cases, weak error handling.`,
         `- nit: Style/preference.`,
         ``,
-        `Set approval to "request_changes" if there are any must_fix comments. Otherwise "approve".`,
-        `If the code is clean, set approval to "approve" with an empty comments array.`,
+        `Set approval to "request_changes" ONLY if there are must_fix issues (real bugs, security holes, data loss). Otherwise "approve".`,
+        `If the code is clean or only has minor issues, set approval to "approve".`,
+        `Do NOT flag: .gitignore additions, binary files (kg.db), formatting preferences, or boilerplate code.`,
       ].join("\n");
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
