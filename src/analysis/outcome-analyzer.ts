@@ -1,6 +1,8 @@
 import yaml from "js-yaml";
 import type { OutcomeRow } from "../storage/repositories/outcomes.js";
 import type { CalibrationRow } from "../storage/repositories/review-findings.js";
+import type { ReviewQualityStats } from "../storage/repositories/review-metrics.js";
+import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
 import type { TaskSpec } from "../task/types.js";
 
 export interface AnalysisReport {
@@ -658,4 +660,73 @@ function slugify(s: string): string {
 
 function dumpTaskSpecYaml(spec: TaskSpec): string {
   return yaml.dump(spec, { lineWidth: 100, quotingType: "\"", forceQuotes: false, noRefs: true, sortKeys: false });
+}
+
+// --- Review Quality (RAH-31) ---
+
+export interface ReviewQualityReport {
+  stats: ReviewQualityStats;
+  topFindings: Array<{ category: string; count: number }>;
+  recommendations: string[];
+}
+
+export function buildReviewQualityReport(
+  stats: ReviewQualityStats,
+  findings: ReviewFindingRow[],
+): ReviewQualityReport {
+  const categoryCounts = new Map<string, number>();
+  for (const f of findings) {
+    categoryCounts.set(f.category, (categoryCounts.get(f.category) ?? 0) + f.occurrenceCount);
+  }
+  const topFindings = Array.from(categoryCounts.entries())
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const recommendations: string[] = [];
+
+  if (stats.totalPRs === 0) {
+    recommendations.push("No review data yet. Review metrics will accumulate as the merge daemon processes PRs.");
+    return { stats, topFindings, recommendations };
+  }
+
+  if (stats.firstPassApprovalRate >= 0.8) {
+    recommendations.push(
+      `First-pass approval rate is ${(stats.firstPassApprovalRate * 100).toFixed(0)}% — review daemon is largely approving on first pass.`,
+    );
+  } else if (stats.firstPassApprovalRate < 0.5) {
+    recommendations.push(
+      `First-pass approval rate is only ${(stats.firstPassApprovalRate * 100).toFixed(0)}% — agents may need better context or conventions.`,
+    );
+  }
+
+  if (stats.averageReviewRounds > 2) {
+    recommendations.push(
+      `Average review rounds is ${stats.averageReviewRounds.toFixed(1)} — consider tuning review strictness or improving agent output.`,
+    );
+  }
+
+  if (stats.estimatedFalsePositiveRate > 0.3) {
+    recommendations.push(
+      `Estimated false positive rate is ${(stats.estimatedFalsePositiveRate * 100).toFixed(0)}% — review daemon is too strict; tune review prompt or thresholds.`,
+    );
+  } else if (stats.estimatedFalsePositiveRate > 0 && stats.estimatedFalsePositiveRate <= 0.1) {
+    recommendations.push(
+      `Estimated false positive rate is ${(stats.estimatedFalsePositiveRate * 100).toFixed(0)}% — review calibration looks healthy.`,
+    );
+  }
+
+  if (stats.escalatedCount > 0) {
+    const pct = ((stats.escalatedCount / stats.totalPRs) * 100).toFixed(0);
+    recommendations.push(
+      `${stats.escalatedCount} PR(s) (${pct}%) were escalated — check if must_fix findings are justified.`,
+    );
+  }
+
+  if (topFindings.length > 0) {
+    const top3 = topFindings.slice(0, 3).map(f => `${f.category} (${f.count})`).join(", ");
+    recommendations.push(`Most common findings: ${top3}.`);
+  }
+
+  return { stats, topFindings, recommendations };
 }

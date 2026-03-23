@@ -393,6 +393,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         const pollIntervalMs = daemonConfig?.poll_interval_ms ?? 60_000;
         mergeDaemonRunning = true;
 
+        // Create review metrics + findings repos for tracking
+        const { createReviewMetricsRepository } = await import("../storage/repositories/review-metrics.js");
+        const { createReviewFindingsRepository } = await import("../storage/repositories/review-findings.js");
+        const reviewMetricsRepo = createReviewMetricsRepository(db);
+        const reviewFindingsRepo = createReviewFindingsRepository(db);
+
         // Create a processor per repo
         const processors = allRepos.map(repoSlug => {
           const [o, r] = repoSlug.split("/");
@@ -404,7 +410,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
             enableReview: daemonConfig?.enable_review ?? true,
             enableBuildFix: daemonConfig?.enable_build_fix ?? true,
             validationCommands: daemonConfig?.validation_commands ?? [],
-          }, daemonLogger);
+          }, daemonLogger, reviewMetricsRepo, reviewFindingsRepo);
         });
 
         const mergePollLoop = async (): Promise<void> => {
