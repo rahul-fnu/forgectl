@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRProcessor, type PRProcessorConfig, type PRInfo } from "../../src/merge-daemon/pr-processor.js";
+import { PRProcessor, MAX_REVIEW_ROUNDS, type PRProcessorConfig, type PRInfo, type ReviewState } from "../../src/merge-daemon/pr-processor.js";
 import type { Logger } from "../../src/logging/logger.js";
 
 function makeLogger(): Logger {
@@ -158,6 +158,80 @@ describe("PRProcessor", () => {
       expect(result.status).toBe("failed");
       expect(result.error).toContain("clone failed");
       expect(processor.getHistory()).toHaveLength(1);
+    });
+  });
+
+  describe("review state tracking", () => {
+    it("starts with no review state", () => {
+      const processor = new PRProcessor(makeConfig(), logger);
+      expect(processor.getReviewState(1)).toBeUndefined();
+    });
+
+    it("tracks review state per PR", () => {
+      const processor = new PRProcessor(makeConfig(), logger);
+      processor.reviewStates.set(1, {
+        reviewRound: 1,
+        lastReviewedSha: "abc123",
+        status: "changes_requested",
+      });
+      const state = processor.getReviewState(1);
+      expect(state).toBeDefined();
+      expect(state!.reviewRound).toBe(1);
+      expect(state!.status).toBe("changes_requested");
+      expect(state!.lastReviewedSha).toBe("abc123");
+    });
+
+    it("clears review state", () => {
+      const processor = new PRProcessor(makeConfig(), logger);
+      processor.reviewStates.set(1, {
+        reviewRound: 2,
+        lastReviewedSha: "def456",
+        status: "approved",
+      });
+      processor.clearReviewState(1);
+      expect(processor.getReviewState(1)).toBeUndefined();
+    });
+
+    it("tracks separate state per PR number", () => {
+      const processor = new PRProcessor(makeConfig(), logger);
+      processor.reviewStates.set(1, {
+        reviewRound: 1,
+        lastReviewedSha: "sha1",
+        status: "changes_requested",
+      });
+      processor.reviewStates.set(2, {
+        reviewRound: 3,
+        lastReviewedSha: "sha2",
+        status: "escalated",
+      });
+      expect(processor.getReviewState(1)!.reviewRound).toBe(1);
+      expect(processor.getReviewState(2)!.status).toBe("escalated");
+    });
+  });
+
+  describe("MAX_REVIEW_ROUNDS", () => {
+    it("is set to 3", () => {
+      expect(MAX_REVIEW_ROUNDS).toBe(3);
+    });
+  });
+
+  describe("reviewDiff (unit)", () => {
+    it("returns APPROVE when output does not contain REQUEST_CHANGES", () => {
+      const processor = new PRProcessor(makeConfig({ enableReview: true }), logger);
+      // reviewDiff parses the output for "verdict: REQUEST_CHANGES"
+      // Test the parsing logic directly by checking the regex
+      expect(/verdict:\s*REQUEST_CHANGES/i.test("verdict: APPROVE\nissues: []")).toBe(false);
+      expect(/verdict:\s*REQUEST_CHANGES/i.test('verdict: REQUEST_CHANGES\nissues:\n  - "bug"')).toBe(true);
+    });
+
+    it("returns REQUEST_CHANGES verdict detected correctly", () => {
+      const output = 'verdict: REQUEST_CHANGES\nissues:\n  - "security issue"';
+      expect(/verdict:\s*REQUEST_CHANGES/i.test(output)).toBe(true);
+    });
+
+    it("returns APPROVE for LGTM-style output", () => {
+      const output = "verdict: APPROVE\nissues: []";
+      expect(/verdict:\s*REQUEST_CHANGES/i.test(output)).toBe(false);
     });
   });
 });

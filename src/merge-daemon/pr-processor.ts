@@ -33,6 +33,12 @@ export interface ProcessResult {
   error?: string;
 }
 
+export interface ReviewState {
+  reviewRound: number;
+  lastReviewedSha: string;
+  status: "pending_review" | "changes_requested" | "approved" | "escalated";
+}
+
 export interface PRProcessorConfig {
   owner: string;
   repo: string;
@@ -47,9 +53,12 @@ export interface PRProcessorConfig {
   mergerAuthorEmail?: string;
 }
 
+export const MAX_REVIEW_ROUNDS = 3;
+
 export class PRProcessor {
   private readonly headers: Record<string, string>;
   private readonly history: ProcessResult[] = [];
+  readonly reviewStates = new Map<number, ReviewState>();
 
   constructor(
     private readonly config: PRProcessorConfig,
@@ -142,9 +151,63 @@ export class PRProcessor {
         }
       }
 
-      // Step 4: Review diff (optional)
+      // Step 4: Review diff (optional) — approval workflow
       if (this.config.enableReview) {
-        await this.reviewDiff(tmpDir, pr);
+        const state = this.reviewStates.get(pr.number);
+
+        // Check if this PR has been escalated (max review rounds exceeded)
+        if (state?.status === "escalated") {
+          return this.recordResult(pr, "skipped", "Escalated after max review rounds");
+        }
+
+        // Check if we already requested changes and are waiting for new commits
+        if (state?.status === "changes_requested") {
+          if (pr.sha === state.lastReviewedSha) {
+            // No new commits since last review — skip, will re-check next poll
+            this.logger.info("merge-daemon", `PR #${pr.number}: Waiting for new commits after review round ${state.reviewRound}`);
+            return this.recordResult(pr, "skipped", "Awaiting changes after review");
+          }
+          // New commits pushed — do a re-review
+        }
+
+        const reviewRound = state ? state.reviewRound + 1 : 1;
+        const lastReviewedSha = state?.lastReviewedSha;
+
+        // Diff-scoped re-review: on round 2+, only review files changed since last review SHA
+        const verdict = await this.reviewDiff(tmpDir, pr, reviewRound > 1 ? lastReviewedSha : undefined);
+
+        if (verdict === "REQUEST_CHANGES") {
+          if (reviewRound >= MAX_REVIEW_ROUNDS) {
+            this.reviewStates.set(pr.number, {
+              reviewRound,
+              lastReviewedSha: pr.sha,
+              status: "escalated",
+            });
+            await this.postComment(
+              pr.number,
+              `**forgectl merge-daemon:** This PR has failed review ${MAX_REVIEW_ROUNDS} times. Escalating for manual review. Please review and address remaining issues manually.`,
+            );
+            return this.recordResult(pr, "skipped", `Escalated after ${MAX_REVIEW_ROUNDS} review rounds`);
+          }
+
+          this.reviewStates.set(pr.number, {
+            reviewRound,
+            lastReviewedSha: pr.sha,
+            status: "changes_requested",
+          });
+          await this.postComment(
+            pr.number,
+            `**forgectl merge-daemon:** Review round ${reviewRound}/${MAX_REVIEW_ROUNDS} requested changes. Please push fixes and the PR will be re-reviewed on the next cycle.`,
+          );
+          return this.recordResult(pr, "skipped", `Review round ${reviewRound} requested changes`);
+        }
+
+        // APPROVE or error (best-effort) — update state and proceed to merge
+        this.reviewStates.set(pr.number, {
+          reviewRound,
+          lastReviewedSha: pr.sha,
+          status: "approved",
+        });
       }
 
       // Step 5+6: Wait for CI then merge, with retry on failure
@@ -179,6 +242,7 @@ export class PRProcessor {
 
         if (mergeResponse.ok) {
           this.logger.info("merge-daemon", `PR #${pr.number}: Merged successfully`);
+          this.reviewStates.delete(pr.number);
           return this.recordResult(pr, "merged");
         }
 
@@ -317,25 +381,55 @@ export class PRProcessor {
 
   /**
    * Have Claude review the diff for obvious issues.
+   * Returns "APPROVE" if changes look good, "REQUEST_CHANGES" if issues found,
+   * or "error" if review fails.
+   * On round 2+, only reviews files changed since lastReviewedSha.
    */
-  async reviewDiff(tmpDir: string, pr: PRInfo): Promise<void> {
+  async reviewDiff(tmpDir: string, pr: PRInfo, lastReviewedSha?: string): Promise<"APPROVE" | "REQUEST_CHANGES" | "error"> {
     try {
       const { writeFileSync: ws } = await import("node:fs");
-      const diff = execSync(`git diff origin/main...HEAD --stat`, { cwd: tmpDir, encoding: "utf-8" });
+      const diffCmd = lastReviewedSha
+        ? `git diff ${lastReviewedSha}...HEAD`
+        : `git diff origin/main...HEAD`;
+      const diff = execSync(diffCmd, { cwd: tmpDir, encoding: "utf-8" });
+
+      if (lastReviewedSha && !diff.trim()) {
+        this.logger.info("merge-daemon", `PR #${pr.number}: No new changes since last review, approving`);
+        return "APPROVE";
+      }
+
+      const scopeNote = lastReviewedSha
+        ? `\nNote: This is a re-review. Only review the files shown in this diff (changed since last review). Previously approved code is not shown.\n`
+        : "";
+
       const prompt = [
         `Review this PR diff for obvious issues (security, logic errors, missing error handling):`,
+        scopeNote,
         diff,
-        `If the changes look safe, say "LGTM". If there are critical issues, list them.`,
+        ``,
+        `Output your verdict as YAML:`,
+        `verdict: APPROVE or REQUEST_CHANGES`,
+        `issues:`,
+        `  - "description of issue"`,
+        ``,
+        `If the changes look safe, output:`,
+        `verdict: APPROVE`,
+        `issues: []`,
       ].join("\n");
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
       ws(promptFile, prompt);
-      execSync(
+      const output = execSync(
         `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
         { cwd: tmpDir, encoding: "utf-8", timeout: 60_000 },
       );
+
+      if (/verdict:\s*REQUEST_CHANGES/i.test(output)) {
+        return "REQUEST_CHANGES";
+      }
+      return "APPROVE";
     } catch {
-      // Review is best-effort
       this.logger.warn("merge-daemon", `PR #${pr.number}: Review step failed (best-effort, continuing)`);
+      return "error";
     }
   }
 
@@ -515,6 +609,16 @@ export class PRProcessor {
     // Keep last 100 results
     if (this.history.length > 100) this.history.shift();
     return result;
+  }
+
+  /** Clear review state for a PR (e.g., when closed). */
+  clearReviewState(prNumber: number): void {
+    this.reviewStates.delete(prNumber);
+  }
+
+  /** Get review state for a PR. */
+  getReviewState(prNumber: number): ReviewState | undefined {
+    return this.reviewStates.get(prNumber);
   }
 
   /** Get processing history. */
