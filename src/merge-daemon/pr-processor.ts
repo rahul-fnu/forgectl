@@ -1,7 +1,7 @@
 /**
- * Core PR processing pipeline for the merge daemon.
+ * Core PR processing pipeline for the review/merge daemon.
  * Fetches open forge/* PRs and processes them sequentially:
- * rebase → resolve conflicts → validate → fix build → review → wait CI → merge.
+ * rebase → resolve conflicts → validate → fix build → enrich PR description → review (approve/request changes) → wait CI → merge.
  */
 
 import { execSync } from "node:child_process";
@@ -17,6 +17,7 @@ import {
 import type { Logger } from "../logging/logger.js";
 import type { ReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
+import { extractAcceptanceCriteria } from "../github/pr-description.js";
 
 const API_BASE = "https://api.github.com";
 
@@ -40,6 +41,7 @@ export interface InlineReviewComment {
   line: number;
   severity: "must_fix" | "should_fix" | "nit";
   body: string;
+  suggested_fix?: string;
 }
 
 export interface StructuredReview {
@@ -87,9 +89,10 @@ export function parseStructuredReview(raw: string): StructuredReview | undefined
       const line = typeof c.line === "number" ? c.line : undefined;
       const sev = typeof c.severity === "string" ? c.severity.toLowerCase() : undefined;
       const body = typeof c.body === "string" ? c.body : undefined;
+      const suggested_fix = typeof c.suggested_fix === "string" ? c.suggested_fix : undefined;
       if (!file || !line || !body) continue;
       const severity = (sev === "must_fix" || sev === "should_fix" || sev === "nit") ? sev : "nit";
-      comments.push({ file, line, severity, body });
+      comments.push({ file, line, severity, body, ...(suggested_fix ? { suggested_fix } : {}) });
     }
   }
 
@@ -208,15 +211,22 @@ export class PRProcessor {
         }
       }
 
-      // Step 4: Review diff (optional)
+      // Step 4: Enrich PR description with ticket context
+      await this.enrichPRDescription(pr, tmpDir);
+
+      // Step 5: Review diff (optional) — must approve before merge
       if (this.config.enableReview) {
         const review = await this.reviewDiff(tmpDir, pr);
         if (review?.approval === "request_changes") {
           return this.recordResult(pr, "request_changes", review.summary);
         }
+        if (!review) {
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Review produced no result, skipping merge`);
+          return this.recordResult(pr, "skipped", "Review step produced no parseable result");
+        }
       }
 
-      // Step 5+6: Wait for CI then merge, with retry on failure
+      // Step 6+7: Wait for CI then merge, with retry on failure
       const maxMergeAttempts = 5;
       const maxBuildFixes = 3;
       let buildFixCount = 0;
@@ -423,7 +433,7 @@ export class PRProcessor {
         `  "summary": "Overall assessment of the changes",`,
         `  "approval": "approve" or "request_changes",`,
         `  "comments": [`,
-        `    { "file": "src/foo.ts", "line": 42, "severity": "must_fix", "body": "Description of issue" }`,
+        `    { "file": "src/foo.ts", "line": 42, "severity": "must_fix", "body": "Description of issue", "suggested_fix": "How to fix it" }`,
         `  ]`,
         `}`,
         ``,
@@ -475,11 +485,13 @@ export class PRProcessor {
     const { owner, repo } = this.config;
 
     // Map inline comments to GitHub's review comment format
-    const ghComments = review.comments.map((c) => ({
-      path: c.file,
-      line: c.line,
-      body: `**[${c.severity.toUpperCase()}]** ${c.body}`,
-    }));
+    const ghComments = review.comments.map((c) => {
+      let body = `**[${c.severity.toUpperCase()}]** ${c.body}`;
+      if (c.suggested_fix) {
+        body += `\n\n**Suggested fix:** ${c.suggested_fix}`;
+      }
+      return { path: c.file, line: c.line, body };
+    });
 
     const event = review.approval === "request_changes" ? "REQUEST_CHANGES" : "APPROVE";
     const body = review.approval === "approve"
@@ -507,19 +519,162 @@ export class PRProcessor {
   }
 
   /**
-   * Fetch a PR's description body from the API.
+   * Fetch full PR data from the API (body, issue refs, etc.).
    */
-  private async fetchPRDescription(prNumber: number): Promise<string | null> {
+  private async fetchPRFull(prNumber: number): Promise<{
+    body?: string | null;
+    head?: { sha?: string };
+    merged?: boolean;
+    merged_by?: { login?: string };
+    mergeable_state?: string;
+    mergeable?: boolean;
+  } | null> {
     const { owner, repo } = this.config;
     const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`;
     try {
       const resp = await fetch(url, { headers: this.headers });
+      if (resp.ok) return (await resp.json()) as any;
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * Fetch a PR's description body from the API.
+   */
+  private async fetchPRDescription(prNumber: number): Promise<string | null> {
+    const data = await this.fetchPRFull(prNumber);
+    return data?.body ?? null;
+  }
+
+  /**
+   * Fetch linked issue data from GitHub.
+   * Tries to extract issue number from PR title (e.g. "RAH-42", "#42") or branch name.
+   */
+  private async fetchLinkedIssue(pr: PRInfo): Promise<{
+    number: number;
+    title: string;
+    body: string | null;
+  } | null> {
+    const { owner, repo } = this.config;
+
+    // Try to extract issue number from title (#NN) or branch (forge/NN-*)
+    const titleMatch = /#(\d+)/.exec(pr.title);
+    const branchMatch = /\/(\d+)[-_]/.exec(pr.branch) ?? /\/[A-Z]+-(\d+)/.exec(pr.branch);
+    const issueNum = titleMatch?.[1] ?? branchMatch?.[1];
+
+    if (!issueNum) return null;
+
+    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${issueNum}`;
+    try {
+      const resp = await fetch(url, { headers: this.headers });
       if (resp.ok) {
-        const data = (await resp.json()) as { body?: string | null };
-        return data.body ?? null;
+        const data = (await resp.json()) as { number: number; title: string; body?: string | null };
+        return { number: data.number, title: data.title, body: data.body ?? null };
       }
     } catch { /* ignore */ }
     return null;
+  }
+
+  /**
+   * Enrich the PR description with full ticket context, diff stats, and acceptance criteria.
+   * Only updates if the PR body is empty or was previously generated by forgectl.
+   */
+  async enrichPRDescription(pr: PRInfo, tmpDir: string): Promise<void> {
+    const { owner, repo } = this.config;
+
+    try {
+      const existingBody = await this.fetchPRDescription(pr.number);
+
+      // Skip if a human wrote the description (non-empty, no forgectl marker)
+      if (existingBody && existingBody.trim() !== "" && !existingBody.includes("<!-- forgectl-generated -->")) {
+        return;
+      }
+
+      const issue = await this.fetchLinkedIssue(pr);
+
+      // Get diff stat
+      let diffStat = "";
+      try {
+        diffStat = execSync("git diff --stat origin/main...HEAD", {
+          cwd: tmpDir,
+          encoding: "utf-8",
+          timeout: 30_000,
+        }).trim();
+      } catch { /* ignore */ }
+
+      // Get changed file list
+      let changedFiles: string[] = [];
+      try {
+        changedFiles = execSync("git diff --name-only origin/main...HEAD", {
+          cwd: tmpDir,
+          encoding: "utf-8",
+          timeout: 30_000,
+        }).trim().split("\n").filter(Boolean);
+      } catch { /* ignore */ }
+
+      const lines: string[] = [];
+      lines.push("<!-- forgectl-generated -->");
+      lines.push("");
+
+      if (issue) {
+        lines.push(`Closes #${issue.number}`);
+        lines.push("");
+        lines.push("## Context");
+        lines.push(`**Issue:** #${issue.number} — ${issue.title}`);
+        lines.push(`**Repo:** ${owner}/${repo}`);
+        lines.push("");
+
+        if (issue.body) {
+          lines.push("## Requirements (from ticket)");
+          lines.push("");
+          lines.push(issue.body);
+          lines.push("");
+
+          const ac = extractAcceptanceCriteria(issue.body);
+          if (ac) {
+            lines.push("## Acceptance Criteria");
+            lines.push("");
+            lines.push(ac);
+            lines.push("");
+          }
+        }
+      } else {
+        lines.push(`**Repo:** ${owner}/${repo}`);
+        lines.push("");
+      }
+
+      lines.push("## Changes");
+      lines.push("");
+      if (diffStat) {
+        lines.push("```");
+        lines.push(diffStat);
+        lines.push("```");
+        lines.push("");
+      }
+      for (const f of changedFiles.slice(0, 30)) {
+        lines.push(`- \`${f}\``);
+      }
+      if (changedFiles.length > 30) {
+        lines.push(`- _...and ${changedFiles.length - 30} more files_`);
+      }
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+      lines.push("_Generated by [forgectl](https://github.com/forgectl/forgectl)_");
+
+      const body = lines.join("\n");
+      const updateUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}`;
+      await fetch(updateUrl, {
+        method: "PATCH",
+        headers: this.headers,
+        body: JSON.stringify({ body }),
+      });
+
+      this.logger.info("merge-daemon", `PR #${pr.number}: Updated description with ticket context`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("merge-daemon", `PR #${pr.number}: Failed to enrich PR description: ${msg}`);
+    }
   }
 
   /**
@@ -672,13 +827,7 @@ export class PRProcessor {
 
   /** Fetch PR data from the API. */
   private async fetchPRData(prNumber: number): Promise<{ head?: { sha?: string } } | null> {
-    const { owner, repo } = this.config;
-    const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`;
-    try {
-      const resp = await fetch(url, { headers: this.headers });
-      if (resp.ok) return (await resp.json()) as { head?: { sha?: string } };
-    } catch { /* ignore */ }
-    return null;
+    return this.fetchPRFull(prNumber);
   }
 
   /** Post a comment on a PR. */
@@ -765,7 +914,7 @@ export class PRProcessor {
     if (!hadRequestChanges) return false;
 
     // Check if PR was merged externally (not by the merge daemon)
-    const prData = await this.fetchPRData(prNumber) as { merged?: boolean; merged_by?: { login?: string } } | null;
+    const prData = await this.fetchPRFull(prNumber);
     if (!prData?.merged) return false;
 
     // If the PR is merged but the daemon didn't merge it (last outcome is "escalated" or no "merged" outcome)
