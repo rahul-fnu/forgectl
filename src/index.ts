@@ -587,6 +587,7 @@ import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStat
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
+import { conventionsListCommand, conventionsShowCommand, conventionsIgnoreCommand, conventionsRefreshCommand } from "./cli/conventions.js";
 
 const repoCmd = program
   .command("repo")
@@ -653,6 +654,39 @@ kgCmd
   .option("--db <path>", "Custom database path")
   .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgStatusCommand);
+
+// forgectl conventions — manage discovered conventions
+const conventionsCmd = program
+  .command("conventions")
+  .description("Manage discovered codebase conventions");
+
+conventionsCmd
+  .command("list")
+  .description("Show all discovered conventions with confidence scores")
+  .option("--db <path>", "Custom KG database path")
+  .option("--workspace <dir>", "Workspace directory")
+  .action(conventionsListCommand);
+
+conventionsCmd
+  .command("show <module>")
+  .description("Show conventions for a specific module")
+  .option("--db <path>", "Custom KG database path")
+  .option("--workspace <dir>", "Workspace directory")
+  .action(conventionsShowCommand);
+
+conventionsCmd
+  .command("ignore <pattern>")
+  .description("Mark matching conventions as ignored (won't be injected into context)")
+  .option("--db <path>", "Custom KG database path")
+  .option("--workspace <dir>", "Workspace directory")
+  .action(conventionsIgnoreCommand);
+
+conventionsCmd
+  .command("refresh")
+  .description("Re-analyze the codebase for conventions from review findings")
+  .option("--db <path>", "Custom KG database path")
+  .option("--workspace <dir>", "Workspace directory")
+  .action(conventionsRefreshCommand);
 
 /**
  * Resolve --config or --repo to a config file path.

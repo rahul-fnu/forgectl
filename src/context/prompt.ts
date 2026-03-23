@@ -15,11 +15,13 @@ interface ContextArtifactSummary {
 export interface PromptOptions {
   kgContext?: ContextResult;
   promotedFindings?: ReviewFindingRow[];
+  ignoredConventionPatterns?: Set<string>;
 }
 
 export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | PromptOptions): string {
   let kgContext: ContextResult | undefined;
   let promotedFindings: ReviewFindingRow[] | undefined;
+  let ignoredConventionPatterns: Set<string> | undefined;
 
   if (kgContextOrOptions && "systemContext" in kgContextOrOptions) {
     kgContext = kgContextOrOptions;
@@ -27,6 +29,7 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     const opts = kgContextOrOptions as PromptOptions;
     kgContext = opts.kgContext;
     promotedFindings = opts.promotedFindings;
+    ignoredConventionPatterns = opts.ignoredConventionPatterns;
   }
 
   const parts: string[] = [];
@@ -80,15 +83,20 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(`--- End Structural Context ---\n`);
   }
 
-  // 2c. Promoted review conventions
+  // 2c. Promoted review conventions (filtered by ignored conventions)
   if (promotedFindings && promotedFindings.length > 0) {
-    parts.push(`\n--- Review Conventions ---`);
-    parts.push("The following conventions were identified from recurring review findings:");
-    for (const finding of promotedFindings) {
-      const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
-      parts.push(`- Convention: ${desc} (flagged ${finding.occurrenceCount} times in review, module: ${finding.module})`);
+    const activeFindings = ignoredConventionPatterns
+      ? promotedFindings.filter(f => !ignoredConventionPatterns!.has(f.pattern))
+      : promotedFindings;
+    if (activeFindings.length > 0) {
+      parts.push(`\n--- Review Conventions ---`);
+      parts.push("The following conventions were identified from recurring review findings:");
+      for (const finding of activeFindings) {
+        const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
+        parts.push(`- Convention: ${desc} (flagged ${finding.occurrenceCount} times in review, module: ${finding.module})`);
+      }
+      parts.push(`--- End Review Conventions ---\n`);
     }
-    parts.push(`--- End Review Conventions ---\n`);
   }
 
   // 3. Available tools description
