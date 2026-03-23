@@ -204,6 +204,39 @@ export async function checkGitHubApp(): Promise<CheckResult> {
   }
 }
 
+export async function checkMergerApp(): Promise<CheckResult> {
+  try {
+    const { findConfigFile } = await import("../config/loader.js");
+    const configPath = findConfigFile();
+    if (!configPath) {
+      return { status: "pass", message: "Merger App: no config file (skipped)" };
+    }
+
+    const yaml = (await import("js-yaml")).default;
+    const raw = readFileSync(configPath, "utf-8");
+    const parsed = yaml.load(raw) as Record<string, unknown> | null;
+
+    if (!parsed || !parsed.github_app) {
+      return { status: "pass", message: "Merger App: github_app not configured (skipped)" };
+    }
+
+    if (!parsed.merger_app) {
+      return {
+        status: "warn",
+        message: "github_app is configured but merger_app is missing — PR creation will fail if the creator app lacks pulls:write permission",
+        fix: "Add merger_app (with pulls:write) to your forgectl config, or grant pulls:write to your github_app",
+      };
+    }
+
+    return { status: "pass", message: "Merger App configured (PR creation will use merger app)" };
+  } catch (err) {
+    return {
+      status: "warn",
+      message: `Could not check merger_app config: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export async function checkConfig(): Promise<CheckResult> {
   try {
     const { findConfigFile, loadConfig } = await import("../config/loader.js");
@@ -239,6 +272,7 @@ export function registerDoctorCommand(program: Command): void {
         { name: "SQLite", fn: checkSqlite },
         { name: "Daemon", fn: checkDaemon },
         { name: "GitHub App", fn: checkGitHubApp },
+        { name: "Merger App", fn: checkMergerApp },
         { name: "Config", fn: checkConfig },
       ];
 

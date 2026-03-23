@@ -246,10 +246,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
                 throw new Error("merger_app.installation_id is required");
               }
               prOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
-              daemonLogger.info("daemon", "Merger app octokit initialized for PR creation");
+              daemonLogger.info("daemon", "PR creation will use merger app (has pulls:write)");
             } catch (mergerErr) {
-              daemonLogger.warn("daemon", `Merger app init failed, PR creation will use creator app: ${mergerErr}`);
+              daemonLogger.warn("daemon", `Merger app init failed, PR creation will fall back to creator app which may lack pulls:write — PRs may fail: ${mergerErr}`);
             }
+          } else {
+            daemonLogger.warn("daemon", "merger_app not configured — PR creation will use creator app (github_app) which typically lacks pulls:write permission. Add merger_app to config to fix PR creation.");
           }
           orchestrator.setGitHubContext({ octokit: installationOctokit, prOctokit, repo: { owner: ghOwner, repo: ghRepo } });
           daemonLogger.info("daemon", "GitHub context set on orchestrator for polling rollup");

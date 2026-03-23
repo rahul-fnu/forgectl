@@ -6,6 +6,7 @@ import {
   checkSqlite,
   checkDaemon,
   checkGitHubApp,
+  checkMergerApp,
   checkConfig,
 } from "../../src/cli/doctor.js";
 
@@ -138,6 +139,65 @@ describe("doctor checks", () => {
       const result = await checkGitHubApp();
       // If no config or no github_app section, should pass as "skipped"
       expect(["pass", "fail", "warn"]).toContain(result.status);
+    });
+  });
+
+  describe("checkMergerApp", () => {
+    it("warns when github_app is configured but merger_app is missing", async () => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const yaml = (await import("js-yaml")).default;
+      const tmpDir = "/tmp/forgectl-doctor-merger-test";
+      const forgectlDir = path.join(tmpDir, ".forgectl");
+      fs.mkdirSync(forgectlDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(forgectlDir, "config.yaml"),
+        yaml.dump({ github_app: { app_id: "123", private_key_path: "/tmp/key.pem", webhook_secret: "secret" } }),
+      );
+
+      vi.doMock("../../src/config/loader.js", () => ({
+        findConfigFile: () => path.join(forgectlDir, "config.yaml"),
+      }));
+
+      const mod = await import("../../src/cli/doctor.js");
+      const result = await mod.checkMergerApp();
+      expect(result.status).toBe("warn");
+      expect(result.message).toContain("merger_app is missing");
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("passes when both github_app and merger_app are configured", async () => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const yaml = (await import("js-yaml")).default;
+      const tmpDir = "/tmp/forgectl-doctor-merger-pass-test";
+      const forgectlDir = path.join(tmpDir, ".forgectl");
+      fs.mkdirSync(forgectlDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(forgectlDir, "config.yaml"),
+        yaml.dump({
+          github_app: { app_id: "123", private_key_path: "/tmp/key.pem", webhook_secret: "secret" },
+          merger_app: { app_id: "456", private_key_path: "/tmp/merger.pem", webhook_secret: "secret2" },
+        }),
+      );
+
+      vi.doMock("../../src/config/loader.js", () => ({
+        findConfigFile: () => path.join(forgectlDir, "config.yaml"),
+      }));
+
+      const mod = await import("../../src/cli/doctor.js");
+      const result = await mod.checkMergerApp();
+      expect(result.status).toBe("pass");
+      expect(result.message).toContain("Merger App configured");
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("skips when github_app is not configured", async () => {
+      const result = await checkMergerApp();
+      // Without github_app in config, should skip (pass); with github_app but no merger_app, should warn
+      expect(["pass", "warn"]).toContain(result.status);
     });
   });
 
