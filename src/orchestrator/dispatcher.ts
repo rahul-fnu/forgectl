@@ -748,16 +748,32 @@ async function executeWorkerAndHandle(
     let prCreated = false;
     let prUrl: string | undefined;
     if (result.branch && failureType === "continuation") {
-      // Determine PR base: use blocker's branch for stacked diffs, otherwise default base
-      const defaultBase = config.repo?.branch?.base ?? "main";
+      // Determine PR base: use blocker's branch for stacked diffs, otherwise default base.
+      // Only stack if the blocker's branch still exists (not yet merged+deleted).
+      // If the blocker is in recentlyCompleted, its branch was merged to main — use main.
+      const defaultBase = effectiveConfig.repo?.branch?.base ?? "main";
       let prBase = defaultBase;
       if (issue.blocked_by.length > 0) {
-        // Find the most recent blocker that has a branch — stack on top of it
         for (const blockerId of issue.blocked_by) {
+          // Skip blockers that are already completed (branch merged to main)
+          if (state.recentlyCompleted.has(blockerId)) continue;
           const blockerBranch = state.issueBranches.get(blockerId);
           if (blockerBranch) {
-            prBase = blockerBranch;
-            logger.info("dispatcher", `Stacking ${issue.identifier} PR on blocker branch: ${blockerBranch}`);
+            // Verify the branch exists on the remote before using as base
+            try {
+              const [owner, repo] = (effectiveConfig.tracker?.repo ?? "").split("/");
+              if (owner && repo && effectiveGithubContext) {
+                const octokit = (effectiveGithubContext.prOctokit ?? effectiveGithubContext.octokit) as any;
+                await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", {
+                  owner, repo, branch: blockerBranch,
+                });
+                prBase = blockerBranch;
+                logger.info("dispatcher", `Stacking ${issue.identifier} PR on blocker branch: ${blockerBranch}`);
+              }
+            } catch {
+              // Branch doesn't exist (merged+deleted) — fall back to default base
+              logger.info("dispatcher", `Blocker branch ${blockerBranch} no longer exists, using ${defaultBase}`);
+            }
             break;
           }
         }
