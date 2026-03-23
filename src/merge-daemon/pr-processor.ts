@@ -15,6 +15,8 @@ import {
   cleanupTmpDir,
 } from "./git-operations.js";
 import type { Logger } from "../logging/logger.js";
+import type { ReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
+import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 
 const API_BASE = "https://api.github.com";
 
@@ -111,10 +113,13 @@ export interface PRProcessorConfig {
 export class PRProcessor {
   private readonly headers: Record<string, string>;
   private readonly history: ProcessResult[] = [];
+  private readonly reviewRounds = new Map<number, number>();
 
   constructor(
     private readonly config: PRProcessorConfig,
     private readonly logger: Logger,
+    private readonly metricsRepo?: ReviewMetricsRepository,
+    private readonly findingsRepo?: ReviewFindingsRepository,
   ) {
     this.headers = {
       Authorization: `token ${config.token}`,
@@ -452,6 +457,9 @@ export class PRProcessor {
         `PR #${pr.number}: Review complete — ${review.approval} (${review.comments.length} comments)`,
       );
 
+      // Record review metrics
+      this.recordReviewMetrics(pr, review);
+
       return review;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -684,12 +692,96 @@ export class PRProcessor {
     }).catch(() => {});
   }
 
+  private recordReviewMetrics(pr: PRInfo, review: StructuredReview): void {
+    const round = (this.reviewRounds.get(pr.number) ?? 0) + 1;
+    this.reviewRounds.set(pr.number, round);
+
+    const mustFix = review.comments.filter(c => c.severity === "must_fix").length;
+    const shouldFix = review.comments.filter(c => c.severity === "should_fix").length;
+    const nit = review.comments.filter(c => c.severity === "nit").length;
+
+    if (this.metricsRepo) {
+      const { owner, repo } = this.config;
+      this.metricsRepo.upsert({
+        repo: `${owner}/${repo}`,
+        prNumber: pr.number,
+        reviewRound: round,
+        reviewCommentsCount: review.comments.length,
+        reviewMustFix: mustFix,
+        reviewShouldFix: shouldFix,
+        reviewNit: nit,
+        reviewApprovedRound: review.approval === "approve" ? round : undefined,
+        reviewEscalated: review.approval === "request_changes" && mustFix > 0,
+      });
+    }
+
+    // Accumulate findings into the review_findings table
+    if (this.findingsRepo) {
+      for (const comment of review.comments) {
+        const parts = comment.file.split("/");
+        const module = parts.length >= 2 ? parts.slice(0, 2).join("/") : parts[0] || "*";
+        this.findingsRepo.upsertFinding({
+          category: comment.severity,
+          pattern: comment.severity,
+          module,
+          exampleComment: comment.body,
+        });
+      }
+      this.findingsRepo.promoteEligible();
+    }
+  }
+
   private recordResult(pr: PRInfo, status: ProcessResult["status"], error?: string): ProcessResult {
     const result: ProcessResult = { prNumber: pr.number, branch: pr.branch, status, error };
     this.history.push(result);
     // Keep last 100 results
     if (this.history.length > 100) this.history.shift();
+
+    // Update final outcome in review metrics
+    if (this.metricsRepo) {
+      const { owner, repo } = this.config;
+      const fullRepo = `${owner}/${repo}`;
+      const outcome = status === "request_changes" ? "escalated" : status;
+      this.metricsRepo.updateOutcome(fullRepo, pr.number, outcome);
+    }
+
     return result;
+  }
+
+  /**
+   * Check if a PR was merged by a human after the review daemon requested changes.
+   * If so, mark those review comments as potential false positives.
+   */
+  async detectFalsePositives(prNumber: number): Promise<boolean> {
+    if (!this.metricsRepo) return false;
+
+    const { owner, repo } = this.config;
+    const fullRepo = `${owner}/${repo}`;
+    const metrics = this.metricsRepo.findByPR(fullRepo, prNumber);
+    if (metrics.length === 0) return false;
+
+    // Check if any round had request_changes (must_fix > 0)
+    const hadRequestChanges = metrics.some(m => m.reviewMustFix > 0 || m.reviewShouldFix > 0);
+    if (!hadRequestChanges) return false;
+
+    // Check if PR was merged externally (not by the merge daemon)
+    const prData = await this.fetchPRData(prNumber) as { merged?: boolean; merged_by?: { login?: string } } | null;
+    if (!prData?.merged) return false;
+
+    // If the PR is merged but the daemon didn't merge it (last outcome is "escalated" or no "merged" outcome)
+    const lastOutcome = metrics[metrics.length - 1]?.finalOutcome;
+    if (lastOutcome === "merged") return false; // Daemon merged it, not a false positive
+
+    this.metricsRepo.markHumanOverride(fullRepo, prNumber);
+
+    // Also record calibration data in findings repo
+    if (this.findingsRepo) {
+      const totalComments = metrics.reduce((s, m) => s + m.reviewCommentsCount, 0);
+      this.findingsRepo.recordCalibration(`${owner}/${repo}`, totalComments, totalComments);
+    }
+
+    this.logger.info("merge-daemon", `PR #${prNumber}: Detected human override — marked as potential false positive`);
+    return true;
   }
 
   /** Get processing history. */

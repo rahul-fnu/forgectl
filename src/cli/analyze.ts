@@ -3,7 +3,8 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
 import { createReviewFindingsRepository } from "../storage/repositories/review-findings.js";
-import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion } from "../analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, buildReviewQualityReport, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion, type ReviewQualityReport } from "../analysis/outcome-analyzer.js";
+import { createReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { TrackerAdapter } from "../tracker/types.js";
 
 interface AnalyzeCommandOptions {
@@ -11,6 +12,7 @@ interface AnalyzeCommandOptions {
   module?: string;
   compareContext?: boolean;
   reviewCalibration?: boolean;
+  reviewQuality?: boolean;
   suggest?: boolean;
 }
 
@@ -122,6 +124,42 @@ export async function publishSuggestionsToTracker(
   return { created, skipped };
 }
 
+function formatReviewQualityReport(report: ReviewQualityReport): void {
+  console.log(chalk.bold("\nReview Quality Report"));
+
+  const s = report.stats;
+  if (s.totalPRs === 0) {
+    console.log("  No review metrics data available.");
+    console.log("");
+    return;
+  }
+
+  console.log(`  Total PRs reviewed:         ${s.totalPRs}`);
+  console.log(`  First-pass approval rate:   ${(s.firstPassApprovalRate * 100).toFixed(1)}%`);
+  console.log(`  Average review rounds:      ${s.averageReviewRounds.toFixed(1)}`);
+  console.log(`  Total comments:             ${s.totalComments}`);
+  console.log(`    must_fix: ${s.totalMustFix}  should_fix: ${s.totalShouldFix}  nit: ${s.totalNit}`);
+  console.log(`  Escalated PRs:              ${s.escalatedCount}`);
+  console.log(`  Human overrides:            ${s.humanOverrideCount}`);
+  console.log(`  Est. false positive rate:   ${(s.estimatedFalsePositiveRate * 100).toFixed(1)}%`);
+
+  if (report.topFindings.length > 0) {
+    console.log(chalk.bold("\n  Most Common Findings:"));
+    for (const f of report.topFindings.slice(0, 10)) {
+      console.log(`    ${f.category.padEnd(25)} ${String(f.count).padStart(4)}`);
+    }
+  }
+
+  if (report.recommendations.length > 0) {
+    console.log(chalk.bold("\n  Recommendations:"));
+    for (const rec of report.recommendations) {
+      console.log(`    • ${rec}`);
+    }
+  }
+
+  console.log("");
+}
+
 function formatSuggestions(suggestions: ImprovementSuggestion[]): void {
   if (suggestions.length === 0) {
     console.log(chalk.yellow("\n  No improvement suggestions generated (need more outcome data)."));
@@ -160,6 +198,16 @@ export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void>
         module: opts.module,
       });
       formatContextComparison(comparison);
+      return;
+    }
+
+    if (opts.reviewQuality) {
+      const metricsRepo = createReviewMetricsRepository(db);
+      const findingsRepo = createReviewFindingsRepository(db);
+      const stats = metricsRepo.computeStats();
+      const findings = findingsRepo.findAll();
+      const report = buildReviewQualityReport(stats, findings);
+      formatReviewQualityReport(report);
       return;
     }
 

@@ -125,6 +125,7 @@ program
   .option("--module <path>", "Filter to runs touching this module (e.g. src/auth)")
   .option("--compare-context", "Compare context-enabled vs disabled runs side-by-side")
   .option("--review-calibration", "Show review agent false positive rate per module")
+  .option("--review-quality", "Show review daemon quality stats: approval rate, common findings, false positives")
   .option("--suggest", "Generate improvement task suggestions from outcome patterns")
   .action(analyzeCommand);
 

@@ -135,6 +135,27 @@ export const reviewFindings = sqliteTable(
   (table) => [unique().on(table.category, table.pattern, table.module)]
 );
 
+export const reviewMetrics = sqliteTable(
+  "review_metrics",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    reviewRound: integer("review_round").notNull().default(1),
+    reviewCommentsCount: integer("review_comments_count").notNull().default(0),
+    reviewMustFix: integer("review_must_fix").notNull().default(0),
+    reviewShouldFix: integer("review_should_fix").notNull().default(0),
+    reviewNit: integer("review_nit").notNull().default(0),
+    reviewApprovedRound: integer("review_approved_round"),
+    reviewEscalated: integer("review_escalated").notNull().default(0),
+    finalOutcome: text("final_outcome"), // "merged" | "escalated" | "failed"
+    humanOverride: integer("human_override").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [unique().on(table.repo, table.prNumber, table.reviewRound)]
+);
+
 export const reviewCalibration = sqliteTable(
   "review_calibration",
   {
