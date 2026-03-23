@@ -34,6 +34,40 @@ import {
   computeContextFeedback,
   recordContextFeedback,
 } from "../context/learning.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Extract a GitHub repo slug from an issue description.
+ * Looks for patterns like "**Repo:** https://github.com/owner/name" or "github.com/owner/name".
+ * Returns "owner/name" or null.
+ */
+export function extractRepoFromIssue(issue: TrackerIssue): string | null {
+  const text = issue.description ?? "";
+  // Match **Repo:** https://github.com/owner/name or just github.com/owner/name
+  const match = text.match(/github\.com\/([\w.-]+\/[\w.-]+)/);
+  if (match) return match[1].replace(/\.git$/, "");
+  return null;
+}
+
+/**
+ * Load a repo profile overlay if one exists for the given repo slug.
+ * Returns the profile-specific config fields (workspace hooks, tracker.repo, validation).
+ */
+export async function loadRepoOverlay(repoSlug: string): Promise<Partial<ForgectlConfig> | null> {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  // Try repo name (after /) as profile name
+  const repoName = repoSlug.split("/")[1];
+  const profilePath = join(home, ".forgectl", "repos", `${repoName}.yaml`);
+  if (!existsSync(profilePath)) return null;
+
+  try {
+    const { loadRepoProfile } = await import("../config/loader.js");
+    return loadRepoProfile(repoName) as Partial<ForgectlConfig>;
+  } catch {
+    return null;
+  }
+}
 
 /** GitHub context passed from webhook handler (octokit + repo). */
 export interface GitHubContext {
@@ -336,7 +370,35 @@ async function executeWorkerAndHandle(
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
 ): Promise<void> {
-  const orchestratorConfig = config.orchestrator;
+  // Per-issue repo routing: detect repo from issue description and load profile overlay
+  const issueRepo = extractRepoFromIssue(issue);
+  let effectiveConfig = config;
+  let effectiveWorkspaceManager = workspaceManager;
+  let effectiveValidationConfig = validationConfig;
+  let effectiveGithubContext = githubContext;
+
+  if (issueRepo && issueRepo !== config.tracker?.repo) {
+    const overlay = await loadRepoOverlay(issueRepo);
+    if (overlay) {
+      effectiveConfig = { ...config, ...overlay, orchestrator: config.orchestrator };
+      // Create a new WorkspaceManager with the profile's workspace hooks
+      if (overlay.workspace) {
+        const { WorkspaceManager: WM } = await import("../workspace/manager.js");
+        effectiveWorkspaceManager = new WM(overlay.workspace, logger);
+      }
+      if (overlay.validation) {
+        effectiveValidationConfig = overlay.validation as typeof validationConfig;
+      }
+      // Override PR target repo via githubContext
+      if (effectiveGithubContext && overlay.tracker?.repo) {
+        const [owner, repo] = overlay.tracker.repo.split("/");
+        effectiveGithubContext = { ...effectiveGithubContext, repo: { owner, repo } };
+      }
+      logger.info("dispatcher", `Using repo profile for ${issue.identifier}: ${issueRepo}`);
+    }
+  }
+
+  const orchestratorConfig = effectiveConfig.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
 
   // Activity callback for stall detection
@@ -460,13 +522,13 @@ async function executeWorkerAndHandle(
   try {
     const result = await executeWorker(
       issue,
-      config,
-      workspaceManager,
+      effectiveConfig,
+      effectiveWorkspaceManager,
       promptTemplate,
       attempt,
       logger,
       onActivity,
-      validationConfig,
+      effectiveValidationConfig,
       githubDeps,
       governanceWithRunId,
       skills,
@@ -713,13 +775,13 @@ async function executeWorkerAndHandle(
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn("dispatcher", `Failed to create PR for ${issue.identifier}: ${msg}`);
         }
-      } else if (githubContext && config.tracker?.repo) {
+      } else if (effectiveGithubContext && effectiveConfig.tracker?.repo) {
         // Fallback: create PR via GitHub App when tracker doesn't support PR creation (e.g. Linear)
         try {
-          const [owner, repo] = config.tracker.repo.split("/");
-          const usingMergerApp = !!githubContext.prOctokit;
-          const octokit = (githubContext.prOctokit ?? githubContext.octokit) as any;
-          logger.info("dispatcher", `Creating PR for ${issue.identifier} via GitHub App (${usingMergerApp ? "merger" : "creator"})`);
+          const [owner, repo] = effectiveConfig.tracker.repo.split("/");
+          const usingMergerApp = !!effectiveGithubContext.prOctokit;
+          const octokit = (effectiveGithubContext.prOctokit ?? effectiveGithubContext.octokit) as any;
+          logger.info("dispatcher", `Creating PR for ${issue.identifier} via GitHub App (${usingMergerApp ? "merger" : "creator"}) on ${owner}/${repo}`);
           const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
             owner, repo,
             title: `[forgectl] ${issue.title}`,
