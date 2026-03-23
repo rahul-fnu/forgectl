@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { analyzeOutcomes, compareContextOutcomes, computeContextHitRate, buildCalibrationReport, computeCalibrationFromOutcomes, type AnalysisReport } from "../../src/analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, computeContextHitRate, buildCalibrationReport, computeCalibrationFromOutcomes, generateImprovementSuggestions, type AnalysisReport, type ImprovementSuggestion } from "../../src/analysis/outcome-analyzer.js";
+import { publishSuggestionsToTracker } from "../../src/cli/analyze.js";
 import type { OutcomeRow } from "../../src/storage/repositories/outcomes.js";
 import type { CalibrationRow } from "../../src/storage/repositories/review-findings.js";
+import { loadTaskSpecFromString } from "../../src/task/loader.js";
 
 function makeRow(overrides: Partial<OutcomeRow> & { id: string }): OutcomeRow {
   return {
@@ -43,10 +45,9 @@ describe("analyzeOutcomes", () => {
       makeRow({ id: "1", humanReviewResult: "rubber_stamp" }),
       makeRow({ id: "2", humanReviewResult: "rubber_stamp" }),
       makeRow({ id: "3", humanReviewResult: "rejected" }),
-      makeRow({ id: "4", humanReviewResult: null }), // not reviewed
+      makeRow({ id: "4", humanReviewResult: null }),
     ];
     const report = analyzeOutcomes(rows, {});
-    // 2 rubber stamps out of 3 reviewed = 0.6667
     expect(report.rubberStampRate).toBeCloseTo(0.6667, 3);
   });
 
@@ -69,40 +70,20 @@ describe("analyzeOutcomes", () => {
 
   it("identifies risky modules", () => {
     const rows = [
-      makeRow({
-        id: "1",
-        status: "failure",
-        failureMode: "LOOP",
-        lintIterations: 5,
-        modulesTouched: JSON.stringify(["src/auth", "src/config"]),
-      }),
-      makeRow({
-        id: "2",
-        status: "success",
-        lintIterations: 1,
-        modulesTouched: JSON.stringify(["src/auth"]),
-      }),
-      makeRow({
-        id: "3",
-        status: "success",
-        lintIterations: 0,
-        modulesTouched: JSON.stringify(["src/config"]),
-      }),
+      makeRow({ id: "1", status: "failure", failureMode: "LOOP", lintIterations: 5, modulesTouched: JSON.stringify(["src/auth", "src/config"]) }),
+      makeRow({ id: "2", status: "success", lintIterations: 1, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "3", status: "success", lintIterations: 0, modulesTouched: JSON.stringify(["src/config"]) }),
     ];
     const report = analyzeOutcomes(rows, {});
 
     const authModule = report.riskyModules.find(m => m.module === "src/auth");
     expect(authModule).toBeDefined();
-    // src/auth: 1 failure out of 2 runs = 50%
     expect(authModule!.failureRate).toBe(0.5);
-    // src/auth: (5 + 1) / 2 = 3
     expect(authModule!.avgRetries).toBe(3);
 
     const configModule = report.riskyModules.find(m => m.module === "src/config");
     expect(configModule).toBeDefined();
-    // src/config: 1 failure out of 2 = 50%
     expect(configModule!.failureRate).toBe(0.5);
-    // src/config: (5 + 0) / 2 = 2.5
     expect(configModule!.avgRetries).toBe(2.5);
   });
 
@@ -110,7 +91,7 @@ describe("analyzeOutcomes", () => {
     const rows = [
       makeRow({ id: "1", totalTurns: 10 }),
       makeRow({ id: "2", totalTurns: 20 }),
-      makeRow({ id: "3", totalTurns: null }), // excluded
+      makeRow({ id: "3", totalTurns: null }),
     ];
     const report = analyzeOutcomes(rows, {});
     expect(report.turnEstimationBias).toBe(15);
@@ -161,12 +142,9 @@ describe("analyzeOutcomes", () => {
       summary: { must_fix: 1, should_fix: 1, nit: 1, overall: "needs work" },
     });
 
-    const rows = [
-      makeRow({ id: "1", reviewCommentsJson: reviewJson }),
-    ];
+    const rows = [makeRow({ id: "1", reviewCommentsJson: reviewJson })];
 
     const report = analyzeOutcomes(rows, {});
-    // Should generate recommendation about top categories
     const catRec = report.recommendations.find(r => r.includes("review comment categories"));
     expect(catRec).toBeDefined();
     expect(catRec).toContain("error-handling");
@@ -234,11 +212,8 @@ describe("analyzeOutcomes", () => {
   });
 
   it("handles malformed reviewCommentsJson gracefully", () => {
-    const rows = [
-      makeRow({ id: "1", reviewCommentsJson: "not-json" }),
-    ];
+    const rows = [makeRow({ id: "1", reviewCommentsJson: "not-json" })];
 
-    // Should not throw
     const report = analyzeOutcomes(rows, {});
     expect(report.totalRuns).toBe(1);
   });
@@ -282,14 +257,11 @@ describe("compareContextOutcomes", () => {
     ];
 
     const hitRate = computeContextHitRate(rows);
-    // 2 out of 3 context files were read
     expect(hitRate).toBeCloseTo(0.6667, 3);
   });
 
   it("returns 0 hit rate when no context files", () => {
-    const rows = [
-      makeRow({ id: "1", contextEnabled: 0 }),
-    ];
+    const rows = [makeRow({ id: "1", contextEnabled: 0 })];
     expect(computeContextHitRate(rows)).toBe(0);
   });
 });
@@ -304,9 +276,7 @@ describe("computeCalibrationFromOutcomes", () => {
       summary: { must_fix: 2, should_fix: 0, nit: 0, overall: "needs work" },
     });
 
-    const rows = [
-      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
-    ];
+    const rows = [makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson })];
 
     const result = computeCalibrationFromOutcomes(rows);
     const storageStats = result.get("src/storage");
@@ -323,9 +293,7 @@ describe("computeCalibrationFromOutcomes", () => {
       summary: { must_fix: 1, should_fix: 0, nit: 0, overall: "needs work" },
     });
 
-    const rows = [
-      makeRow({ id: "1", humanReviewResult: "major_rework", reviewCommentsJson: reviewJson }),
-    ];
+    const rows = [makeRow({ id: "1", humanReviewResult: "major_rework", reviewCommentsJson: reviewJson })];
 
     const result = computeCalibrationFromOutcomes(rows);
     const agentStats = result.get("src/agent");
@@ -335,10 +303,7 @@ describe("computeCalibrationFromOutcomes", () => {
   });
 
   it("skips rows without review comments", () => {
-    const rows = [
-      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: null }),
-    ];
-
+    const rows = [makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: null })];
     const result = computeCalibrationFromOutcomes(rows);
     expect(result.size).toBe(0);
   });
@@ -351,10 +316,7 @@ describe("computeCalibrationFromOutcomes", () => {
       summary: { must_fix: 0, should_fix: 0, nit: 1, overall: "looks good" },
     });
 
-    const rows = [
-      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
-    ];
-
+    const rows = [makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson })];
     const result = computeCalibrationFromOutcomes(rows);
     expect(result.size).toBe(0);
   });
@@ -407,9 +369,7 @@ describe("buildCalibrationReport", () => {
       summary: { must_fix: 1, should_fix: 0, nit: 0, overall: "needs work" },
     });
 
-    const outcomeRows = [
-      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
-    ];
+    const outcomeRows = [makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson })];
 
     const report = buildCalibrationReport(calibrationRows, outcomeRows);
     const storageModule = report.modules.find(m => m.module === "src/storage");
@@ -425,5 +385,182 @@ describe("buildCalibrationReport", () => {
     expect(report.overall.totalComments).toBe(0);
     expect(report.overall.rate).toBe(0);
     expect(report.warnings).toHaveLength(0);
+  });
+});
+
+describe("generateImprovementSuggestions", () => {
+  it("returns empty array for clean report", () => {
+    const report = analyzeOutcomes([], {});
+    const suggestions = generateImprovementSuggestions(report);
+    expect(suggestions).toEqual([]);
+  });
+
+  it("generates testing suggestion for high-retry modules", () => {
+    const rows = [
+      makeRow({ id: "1", status: "failure", failureMode: "LOOP", lintIterations: 5, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "2", status: "failure", failureMode: "LOOP", lintIterations: 4, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "3", status: "success", lintIterations: 1, modulesTouched: JSON.stringify(["src/auth"]) }),
+    ];
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+
+    const testingSuggestion = suggestions.find(s => s.category === "testing");
+    expect(testingSuggestion).toBeDefined();
+    expect(testingSuggestion!.title).toContain("src/auth");
+    expect(testingSuggestion!.confidence).toBeGreaterThan(0);
+  });
+
+  it("generates convention suggestion for recurring review categories", () => {
+    const reviewJson = JSON.stringify({
+      comments: [
+        { category: "error-handling", comment: "fix" },
+        { category: "error-handling", comment: "fix2" },
+        { category: "error-handling", comment: "fix3" },
+      ],
+    });
+    const rows = [
+      makeRow({ id: "1", reviewCommentsJson: reviewJson }),
+      makeRow({ id: "2", reviewCommentsJson: reviewJson }),
+    ];
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+
+    const conventionSuggestion = suggestions.find(s => s.category === "error-handling");
+    expect(conventionSuggestion).toBeDefined();
+    expect(conventionSuggestion!.title).toContain("error-handling");
+  });
+
+  it("generates calibration suggestion for high turn bias", () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      makeRow({ id: String(i), totalTurns: 25 }),
+    );
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+
+    const calibration = suggestions.find(s => s.category === "calibration");
+    expect(calibration).toBeDefined();
+    expect(calibration!.id).toBe("calibrate-turn-estimation");
+  });
+
+  it("generates context suggestion for boosted modules", () => {
+    const rows = [
+      makeRow({ id: "1", status: "failure", failureMode: "LOOP", lintIterations: 4, modulesTouched: JSON.stringify(["src/complex"]) }),
+      makeRow({ id: "2", status: "failure", failureMode: "LOOP", lintIterations: 5, modulesTouched: JSON.stringify(["src/complex"]) }),
+      makeRow({ id: "3", status: "failure", failureMode: "LOOP", lintIterations: 3, modulesTouched: JSON.stringify(["src/complex"]) }),
+    ];
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+
+    const contextSuggestion = suggestions.find(s => s.category === "context");
+    expect(contextSuggestion).toBeDefined();
+    expect(contextSuggestion!.title).toContain("src/complex");
+  });
+
+  it("produces valid TaskSpec YAML that parses", () => {
+    const rows = [
+      makeRow({ id: "1", status: "failure", failureMode: "LOOP", lintIterations: 5, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "2", status: "failure", failureMode: "LOOP", lintIterations: 4, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "3", status: "success", lintIterations: 1, modulesTouched: JSON.stringify(["src/auth"]) }),
+    ];
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    for (const s of suggestions) {
+      const parsed = loadTaskSpecFromString(s.taskSpecYaml);
+      expect(parsed.id).toBe(s.id);
+      expect(parsed.title).toBe(s.title);
+    }
+  });
+
+  it("sorts suggestions by confidence descending", () => {
+    const rows = [
+      makeRow({ id: "1", status: "failure", failureMode: "LOOP", lintIterations: 5, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "2", status: "failure", failureMode: "LOOP", lintIterations: 4, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "3", status: "success", lintIterations: 1, modulesTouched: JSON.stringify(["src/auth"]) }),
+      makeRow({ id: "4", totalTurns: 25 }),
+      makeRow({ id: "5", totalTurns: 25 }),
+    ];
+    const report = analyzeOutcomes(rows, {});
+    const suggestions = generateImprovementSuggestions(report);
+
+    for (let i = 1; i < suggestions.length; i++) {
+      expect(suggestions[i - 1].confidence).toBeGreaterThanOrEqual(suggestions[i].confidence);
+    }
+  });
+});
+
+describe("publishSuggestionsToTracker", () => {
+  it("creates issues for suggestions with appropriate labels", async () => {
+    const created: Array<{ title: string; description: string; labels: string[] }> = [];
+    const mockTracker = {
+      kind: "linear" as const,
+      fetchCandidateIssues: async () => [],
+      fetchIssueStatesByIds: async () => new Map<string, string>(),
+      fetchIssuesByStates: async () => [],
+      postComment: async () => {},
+      updateState: async () => {},
+      updateLabels: async () => {},
+      createIssue: async (title: string, description: string, labels?: string[]) => {
+        created.push({ title, description, labels: labels ?? [] });
+        return `FORGE-${created.length}`;
+      },
+    };
+
+    const suggestions: ImprovementSuggestion[] = [
+      {
+        id: "high-conf",
+        title: "High confidence task",
+        description: "Should auto-execute",
+        confidence: 0.85,
+        category: "testing",
+        taskSpec: { id: "high-conf", title: "High confidence task", context: { files: ["src/**"] }, constraints: [], acceptance: [{ description: "done" }], decomposition: { strategy: "auto" }, effort: {} },
+        taskSpecYaml: "id: high-conf\ntitle: High confidence task\n",
+      },
+      {
+        id: "low-conf",
+        title: "Low confidence task",
+        description: "Needs review",
+        confidence: 0.3,
+        category: "calibration",
+        taskSpec: { id: "low-conf", title: "Low confidence task", context: { files: ["src/**"] }, constraints: [], acceptance: [{ description: "done" }], decomposition: { strategy: "auto" }, effort: {} },
+        taskSpecYaml: "id: low-conf\ntitle: Low confidence task\n",
+      },
+    ];
+
+    const result = await publishSuggestionsToTracker(suggestions, mockTracker);
+    expect(result.created).toEqual(["FORGE-1", "FORGE-2"]);
+    expect(result.skipped).toEqual([]);
+
+    expect(created[0].labels).toEqual(["forgectl-suggestion"]);
+    expect(created[1].labels).toEqual(["forgectl-suggestion", "needs-review"]);
+  });
+
+  it("skips suggestions when tracker has no createIssue", async () => {
+    const mockTracker = {
+      kind: "linear" as const,
+      fetchCandidateIssues: async () => [],
+      fetchIssueStatesByIds: async () => new Map<string, string>(),
+      fetchIssuesByStates: async () => [],
+      postComment: async () => {},
+      updateState: async () => {},
+      updateLabels: async () => {},
+    };
+
+    const suggestions: ImprovementSuggestion[] = [
+      {
+        id: "test",
+        title: "Test",
+        description: "Test",
+        confidence: 0.5,
+        category: "testing",
+        taskSpec: { id: "test", title: "Test", context: { files: ["src/**"] }, constraints: [], acceptance: [{ description: "done" }], decomposition: { strategy: "auto" }, effort: {} },
+        taskSpecYaml: "id: test\n",
+      },
+    ];
+
+    const result = await publishSuggestionsToTracker(suggestions, mockTracker);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual(["test"]);
   });
 });

@@ -125,6 +125,7 @@ program
   .option("--module <path>", "Filter to runs touching this module (e.g. src/auth)")
   .option("--compare-context", "Compare context-enabled vs disabled runs side-by-side")
   .option("--review-calibration", "Show review agent false positive rate per module")
+  .option("--suggest", "Generate improvement task suggestions from outcome patterns")
   .action(analyzeCommand);
 
 // forgectl orchestrate — start daemon with orchestration enabled

@@ -49,6 +49,9 @@ export interface TrackerAdapter {
   /** Add and/or remove labels on an issue. */
   updateLabels(issueId: string, add: string[], remove: string[]): Promise<void>;
 
+  /** Create a new issue in the tracker. Returns the created issue's identifier. */
+  createIssue?(title: string, description: string, labels?: string[]): Promise<string>;
+
   /** Create a pull request for a branch. Returns the PR URL, or undefined if not supported. */
   createPullRequest?(branch: string, title: string, body: string): Promise<string | undefined>;
 

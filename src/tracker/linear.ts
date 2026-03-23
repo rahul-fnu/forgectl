@@ -450,6 +450,29 @@ export function createLinearAdapter(
       await client.updateIssue(issueId, { stateId });
     },
 
+    async createIssue(title: string, description: string, labels?: string[]): Promise<string> {
+      await initMappings();
+      const teamId = teamIds[0];
+
+      const labelIds: string[] = [];
+      if (labels) {
+        for (const name of labels) {
+          const id = labelMapping.nameToId.get(name.toLowerCase());
+          if (id) labelIds.push(id);
+        }
+      }
+
+      const result = await client.createIssue({
+        teamId,
+        title,
+        description,
+        ...(labelIds.length > 0 ? { labelIds } : {}),
+        ...(config.project_id ? { projectId: config.project_id } : {}),
+      });
+      const issue = await result.issue;
+      return issue?.identifier ?? result.lastSyncId.toString();
+    },
+
     async updateLabels(
       issueId: string,
       add: string[],
