@@ -16,13 +16,14 @@ export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number, config
   const config = loadConfig(configPath);
   const logger = new Logger(false);
 
-  if (!config.tracker || config.tracker.kind !== "github" || !config.tracker.repo) {
-    logger.error("merge-daemon", "Merge daemon requires a GitHub tracker with repo configured");
+  if (!config.tracker?.repo) {
+    logger.error("merge-daemon", "Merge daemon requires tracker.repo configured (e.g. owner/repo)");
     process.exit(1);
   }
 
   const [owner, repo] = config.tracker.repo.split("/");
-  const token = resolveToken(config.tracker.token);
+  // Use GitHub token if tracker is GitHub, otherwise resolve from merger app below
+  let token = config.tracker.kind === "github" ? resolveToken(config.tracker.token) : "";
   const daemonConfig = config.merge_daemon;
 
   const processorConfig: PRProcessorConfig = {

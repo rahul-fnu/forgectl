@@ -30,6 +30,7 @@ import { PipelineRunService } from "./pipeline-service.js";
 import { Orchestrator } from "../orchestrator/index.js";
 import { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { createTrackerAdapter } from "../tracker/registry.js";
+import { resolveToken } from "../tracker/token.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { loadWorkflowFile } from "../workflow/workflow-file.js";
 import { WorkflowFileWatcher } from "../workflow/watcher.js";
@@ -333,6 +334,87 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     reply.type("text/html").send(readFileSync(uiPath, "utf-8"));
   });
 
+  // Start merge daemon poll loop alongside orchestrator (if merge_daemon or merger_app configured)
+  let mergeDaemonRunning = false;
+  const stopMergeDaemon = { fn: (): void => { mergeDaemonRunning = false; } };
+  if (orchestratorEnabled && config.tracker?.repo && (config.merge_daemon || config.merger_app)) {
+    try {
+      const { PRProcessor } = await import("../merge-daemon/pr-processor.js");
+      const [mdOwner, mdRepo] = config.tracker.repo.split("/");
+      let mdToken = "";
+
+      // Get merger app installation token for GitHub API auth
+      if (config.merger_app?.installation_id) {
+        try {
+          const { GitHubAppService } = await import("../github/app.js");
+          const resolvedKeyPath = config.merger_app.private_key_path.replace(/^~/, process.env.HOME || "/tmp");
+          const mergerService = new GitHubAppService({
+            appId: config.merger_app.app_id,
+            privateKeyPath: resolvedKeyPath,
+            webhookSecret: config.merger_app.webhook_secret,
+            installationId: config.merger_app.installation_id,
+          });
+          const mdOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
+          const mdAuth = await (mdOctokit as any).auth({ type: "installation" }) as { token: string };
+          if (mdAuth?.token) mdToken = mdAuth.token;
+        } catch (mergerErr) {
+          daemonLogger.warn("daemon", `Merge daemon: merger app token failed: ${mergerErr}`);
+        }
+      }
+      // Fall back to tracker token if it's a GitHub token
+      if (!mdToken && config.tracker.kind === "github") {
+        mdToken = resolveToken(config.tracker.token);
+      }
+
+      if (mdToken) {
+        const daemonConfig = config.merge_daemon;
+        const processor = new PRProcessor({
+          owner: mdOwner, repo: mdRepo, token: mdToken,
+          rawToken: config.merger_app ? "$merger_app" : config.tracker.token,
+          branchPattern: daemonConfig?.branch_pattern ?? "forge/*",
+          ciTimeoutMs: daemonConfig?.ci_timeout_ms ?? 2_700_000,
+          enableReview: daemonConfig?.enable_review ?? true,
+          enableBuildFix: daemonConfig?.enable_build_fix ?? true,
+          validationCommands: daemonConfig?.validation_commands ?? [],
+        }, daemonLogger);
+
+        const pollIntervalMs = daemonConfig?.poll_interval_ms ?? 60_000;
+        mergeDaemonRunning = true;
+
+        const mergePollLoop = async (): Promise<void> => {
+          while (mergeDaemonRunning) {
+            try {
+              const prs = await processor.fetchOpenForgePRs();
+              if (prs.length > 0) {
+                daemonLogger.info("merge-daemon", `Found ${prs.length} open forge PR(s)`);
+                for (const pr of prs) {
+                  if (!mergeDaemonRunning) break;
+                  const result = await processor.processPR(pr);
+                  if (result.status === "merged") {
+                    daemonLogger.info("merge-daemon", `PR #${pr.number} merged`);
+                  } else if (result.status === "failed") {
+                    daemonLogger.warn("merge-daemon", `PR #${pr.number}: ${result.error}`);
+                  }
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              daemonLogger.error("merge-daemon", `Poll error: ${msg}`);
+            }
+            await new Promise((r) => setTimeout(r, pollIntervalMs));
+          }
+        };
+
+        void mergePollLoop();
+        daemonLogger.info("daemon", `Merge daemon integrated (poll=${pollIntervalMs}ms, repo=${mdOwner}/${mdRepo})`);
+      } else {
+        daemonLogger.warn("daemon", "Merge daemon: no GitHub token available, skipping PR auto-merge");
+      }
+    } catch (err) {
+      daemonLogger.warn("daemon", `Failed to start integrated merge daemon: ${err}`);
+    }
+  }
+
   await app.listen({ port, host: "127.0.0.1" });
   savePid(process.pid);
 
@@ -340,6 +422,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   const shutdown = async () => {
     clearInterval(schedulerInterval);
+    stopMergeDaemon.fn();
     watcher?.stop();
     if (orchestrator) {
       await orchestrator.stop();
