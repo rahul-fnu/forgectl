@@ -388,7 +388,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
       if (mdToken) {
         const daemonConfig = config.merge_daemon;
-        const rawToken = config.merger_app ? "$merger_app" : config.tracker.token;
+        // rawToken is used for git clone auth — use the actual token, not a sentinel
+        const rawToken = mdToken;
         const pollIntervalMs = daemonConfig?.poll_interval_ms ?? 60_000;
         mergeDaemonRunning = true;
 
