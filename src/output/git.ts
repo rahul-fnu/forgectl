@@ -162,7 +162,8 @@ export async function collectGitOutput(
     "git", "diff", "--stat", `${initialSha}..HEAD`,
   ], { workingDir: "/workspace" });
 
-  const statLine = statResult.stdout.trim().split("\n").pop() || "";
+  const diffStat = statResult.stdout.trim();
+  const statLine = diffStat.split("\n").pop() || "";
   const filesChanged = parseInt(statLine.match(/(\d+) file/)?.[1] || "0", 10);
   const insertions = parseInt(statLine.match(/(\d+) insertion/)?.[1] || "0", 10);
   const deletions = parseInt(statLine.match(/(\d+) deletion/)?.[1] || "0", 10);
@@ -232,5 +233,6 @@ export async function collectGitOutput(
     filesChanged,
     insertions,
     deletions,
+    diffStat: diffStat || undefined,
   };
 }

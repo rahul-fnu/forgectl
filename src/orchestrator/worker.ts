@@ -43,6 +43,7 @@ export interface WorkerResult {
   branch?: string;
   pendingApproval?: boolean;
   reviewOutput?: ReviewOutput;
+  diffStat?: string;
 }
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
@@ -340,6 +341,7 @@ export async function executeWorker(
   let validationResult: ValidationResult | undefined;
   let lintIterations: number | undefined;
   let branch: string | undefined;
+  let diffStat: string | undefined;
   let checkRunId: number | undefined;
   let pendingApproval = false;
   let reviewOutput: ReviewOutput | undefined;
@@ -508,6 +510,7 @@ export async function executeWorker(
         const pushToken = config.tracker?.token;
         const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
         branch = gitResult.branch;
+        diffStat = gitResult.diffStat;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
@@ -670,5 +673,5 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  return { agentResult, comment, validationResult, lintIterations, branch, pendingApproval: pendingApproval || undefined, reviewOutput };
+  return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput };
 }
