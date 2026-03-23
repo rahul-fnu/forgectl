@@ -5,6 +5,7 @@ export interface GitResult {
   filesChanged: number;
   insertions: number;
   deletions: number;
+  diffStat?: string;
 }
 
 export interface FileResult {

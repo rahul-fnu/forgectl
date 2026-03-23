@@ -34,6 +34,7 @@ import {
   computeContextFeedback,
   recordContextFeedback,
 } from "../context/learning.js";
+import { buildRichPRBody } from "../github/pr-description.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -779,12 +780,25 @@ async function executeWorkerAndHandle(
         }
       }
 
+      const richBody = buildRichPRBody({
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        issueTitle: issue.title,
+        issueDescription: issue.description || undefined,
+        repoSlug: effectiveConfig.tracker?.repo,
+        diffStat: result.diffStat,
+        validationResults: result.validationResult?.stepResults?.map((sr: { name: string; passed: boolean }) => ({
+          step: sr.name,
+          passed: sr.passed,
+        })),
+      });
+
       if (tracker.createPullRequest) {
         try {
           prUrl = await tracker.createPullRequest(
             result.branch,
             `[forgectl] ${issue.title}`,
-            `Closes #${issue.id}\n\nAutomated changes by forgectl for ${issue.identifier}.`,
+            richBody,
           ) ?? undefined;
           if (prUrl) {
             logger.info("dispatcher", `PR created for ${issue.identifier}: ${prUrl}`);
@@ -806,7 +820,7 @@ async function executeWorkerAndHandle(
             title: `[forgectl] ${issue.title}`,
             head: result.branch,
             base: prBase,
-            body: `Automated changes by forgectl for ${issue.identifier}.\n\nLinear: ${issue.identifier}`,
+            body: richBody,
           });
           prUrl = pr.html_url;
           logger.info("dispatcher", `PR created via GitHub App for ${issue.identifier}: ${prUrl}`);
