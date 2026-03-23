@@ -4,7 +4,7 @@ import type { KGDatabase } from "../kg/storage.js";
 import { getModule, getMeta, getCoupledFiles, getTestsFor } from "../kg/storage.js";
 import { estimateTokenCount } from "../kg/merkle.js";
 import type { ModuleInfo } from "../kg/types.js";
-import { computeLearningBoosts, type LearningResult, type AgenticSearchHint } from "./learning.js";
+import { computeLearningBoosts, applyDiscoveryMissBoosts, type LearningResult, type AgenticSearchHint } from "./learning.js";
 
 export interface ContextResult {
   systemContext: string;
@@ -211,6 +211,25 @@ export async function buildContext(
           taskTypeStats: learningResult.taskTypeStats,
           boostedFiles: boostedCount,
         };
+      }
+
+      // Apply discovery miss boosts (files agents frequently accessed but weren't pre-provided)
+      const discoveryBoosted = applyDiscoveryMissBoosts(
+        kgDb,
+        effectiveTaskType,
+        scored as Map<string, { path: string; score: number }>,
+        (p: string) => getModule(kgDb, p),
+      );
+      if (discoveryBoosted > 0) {
+        if (!learningInsights) {
+          learningInsights = {
+            searchHints: [],
+            taskTypeStats: { totalRuns: 0, successRate: 0, avgTurns: 0 },
+            boostedFiles: discoveryBoosted,
+          };
+        } else {
+          learningInsights.boostedFiles += discoveryBoosted;
+        }
       }
     } catch {
       // Learning is best-effort

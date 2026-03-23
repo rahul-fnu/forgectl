@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS kg_outcome_files (
   last_seen TEXT NOT NULL,
   PRIMARY KEY (file_path, task_type)
 );
+
+CREATE TABLE IF NOT EXISTS kg_discovery_misses (
+  file_path TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  access_count INTEGER NOT NULL DEFAULT 1,
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  PRIMARY KEY (file_path, task_type)
+);
 `;
 
 /**
@@ -123,6 +132,21 @@ export function createKGDatabase(dbPath?: string): KGDatabase {
       failure_count INTEGER NOT NULL DEFAULT 0,
       total_turns INTEGER NOT NULL DEFAULT 0,
       avg_retries REAL NOT NULL DEFAULT 0,
+      last_seen TEXT NOT NULL,
+      PRIMARY KEY (file_path, task_type)
+    )`);
+  }
+
+  // Migrate: add kg_discovery_misses table if missing
+  const discoveryTable = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='kg_discovery_misses'"
+  ).all();
+  if (discoveryTable.length === 0) {
+    db.exec(`CREATE TABLE IF NOT EXISTS kg_discovery_misses (
+      file_path TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      access_count INTEGER NOT NULL DEFAULT 1,
+      first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       PRIMARY KEY (file_path, task_type)
     )`);
@@ -480,6 +504,66 @@ export function getOutcomeFiles(
     failureCount: r.failure_count,
     totalTurns: r.total_turns,
     avgRetries: r.avg_retries,
+    lastSeen: r.last_seen,
+  }));
+}
+
+// ── Discovery miss tracking ──
+
+export interface DiscoveryMissRecord {
+  filePath: string;
+  taskType: string;
+  accessCount: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export function recordDiscoveryMisses(
+  db: KGDatabase,
+  files: string[],
+  taskType: string,
+): void {
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    INSERT INTO kg_discovery_misses (file_path, task_type, access_count, first_seen, last_seen)
+    VALUES (?, ?, 1, ?, ?)
+    ON CONFLICT(file_path, task_type) DO UPDATE SET
+      access_count = access_count + 1,
+      last_seen = excluded.last_seen
+  `);
+
+  const tx = db.transaction(() => {
+    for (const filePath of files) {
+      stmt.run(filePath, taskType, now, now);
+    }
+  });
+  tx();
+}
+
+export function getDiscoveryMisses(
+  db: KGDatabase,
+  taskType?: string,
+  minAccessCount?: number,
+): DiscoveryMissRecord[] {
+  const minCount = minAccessCount ?? 1;
+  const sql = taskType
+    ? "SELECT * FROM kg_discovery_misses WHERE task_type = ? AND access_count >= ? ORDER BY access_count DESC"
+    : "SELECT * FROM kg_discovery_misses WHERE access_count >= ? ORDER BY access_count DESC";
+  const rows = (taskType
+    ? db.prepare(sql).all(taskType, minCount)
+    : db.prepare(sql).all(minCount)) as Array<{
+    file_path: string;
+    task_type: string;
+    access_count: number;
+    first_seen: string;
+    last_seen: string;
+  }>;
+
+  return rows.map(r => ({
+    filePath: r.file_path,
+    taskType: r.task_type,
+    accessCount: r.access_count,
+    firstSeen: r.first_seen,
     lastSeen: r.last_seen,
   }));
 }

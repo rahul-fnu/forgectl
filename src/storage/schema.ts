@@ -116,6 +116,7 @@ export const runOutcomes = sqliteTable("run_outcomes", {
   rawEventsJson: text("raw_events_json"),
   contextEnabled: integer("context_enabled"),
   contextFilesJson: text("context_files_json"),
+  contextHitRate: real("context_hit_rate"),
 });
 
 export const reviewFindings = sqliteTable(

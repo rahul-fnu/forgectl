@@ -1,5 +1,5 @@
 import type { KGDatabase } from "../kg/storage.js";
-import { getAllOutcomeFiles, type OutcomeFileRecord } from "../kg/storage.js";
+import { getAllOutcomeFiles, getDiscoveryMisses, recordDiscoveryMisses, type OutcomeFileRecord } from "../kg/storage.js";
 
 /**
  * A relevance boost derived from outcome history.
@@ -171,6 +171,118 @@ function generateSearchHints(
   }
 
   return hints;
+}
+
+const DISCOVERY_MISS_BOOST = 0.15;
+const DISCOVERY_MISS_MIN_COUNT = 2;
+
+export function applyDiscoveryMissBoosts(
+  kgDb: KGDatabase,
+  taskType: string,
+  scored: Map<string, { path: string; score: number }>,
+  getModuleFn: (path: string) => unknown | undefined,
+): number {
+  let boostedCount = 0;
+  try {
+    const misses = getDiscoveryMisses(kgDb, taskType, DISCOVERY_MISS_MIN_COUNT);
+    for (const miss of misses) {
+      const existing = scored.get(miss.filePath);
+      if (existing) {
+        const boost = Math.min(0.2, miss.accessCount * 0.05);
+        existing.score = Math.min(1.0, existing.score + boost);
+        boostedCount++;
+      } else {
+        const mod = getModuleFn(miss.filePath);
+        if (mod) {
+          const boost = Math.min(DISCOVERY_MISS_BOOST, miss.accessCount * 0.05);
+          scored.set(miss.filePath, {
+            path: miss.filePath,
+            score: Math.min(0.6, 0.3 + boost),
+          });
+          boostedCount++;
+        }
+      }
+    }
+  } catch {
+    // Discovery miss boosting is best-effort
+  }
+  return boostedCount;
+}
+
+export function parseAgentAccessedFiles(rawEventsJson: string | null): Set<string> {
+  const accessed = new Set<string>();
+  if (!rawEventsJson) return accessed;
+
+  try {
+    const events = JSON.parse(rawEventsJson);
+    if (!Array.isArray(events)) return accessed;
+
+    const filePathPattern = /(?:src|test|lib)\/[\w/.=-]+\.(?:ts|js|tsx|jsx)/g;
+
+    for (const event of events) {
+      const data = typeof event.data === "string" ? event.data : JSON.stringify(event.data ?? "");
+      for (const match of data.matchAll(filePathPattern)) {
+        accessed.add(match[0]);
+      }
+    }
+  } catch {
+    // Parse errors are non-fatal
+  }
+
+  return accessed;
+}
+
+export interface ContextFeedbackResult {
+  contextHitRate: number;
+  discoveryMisses: string[];
+  unusedContextFiles: string[];
+}
+
+export function computeContextFeedback(
+  preProvidedFiles: string[],
+  agentAccessedFiles: Set<string>,
+): ContextFeedbackResult {
+  if (preProvidedFiles.length === 0) {
+    return { contextHitRate: 0, discoveryMisses: [], unusedContextFiles: [] };
+  }
+
+  const preProvidedSet = new Set(preProvidedFiles);
+
+  let hits = 0;
+  for (const f of preProvidedFiles) {
+    if (agentAccessedFiles.has(f)) hits++;
+  }
+
+  const discoveryMisses: string[] = [];
+  for (const f of agentAccessedFiles) {
+    if (!preProvidedSet.has(f)) {
+      discoveryMisses.push(f);
+    }
+  }
+
+  const unusedContextFiles: string[] = [];
+  for (const f of preProvidedFiles) {
+    if (!agentAccessedFiles.has(f)) {
+      unusedContextFiles.push(f);
+    }
+  }
+
+  const contextHitRate = hits / preProvidedFiles.length;
+
+  return {
+    contextHitRate: Math.round(contextHitRate * 10000) / 10000,
+    discoveryMisses,
+    unusedContextFiles,
+  };
+}
+
+export function recordContextFeedback(
+  kgDb: KGDatabase,
+  taskType: string,
+  discoveryMisses: string[],
+): void {
+  if (discoveryMisses.length === 0) return;
+  recordDiscoveryMisses(kgDb, discoveryMisses, taskType);
 }
 
 function extractModule(filePath: string): string {

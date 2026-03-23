@@ -29,6 +29,11 @@ import {
   buildSubIssueProgressComment,
   allChildrenTerminal,
 } from "../github/sub-issue-rollup.js";
+import {
+  parseAgentAccessedFiles,
+  computeContextFeedback,
+  recordContextFeedback,
+} from "../context/learning.js";
 
 /** GitHub context passed from webhook handler (octokit + repo). */
 export interface GitHubContext {
@@ -573,6 +578,51 @@ async function executeWorkerAndHandle(
             rawEventsJson = JSON.stringify(events);
           }
         }
+
+        // Compute context feedback: discovery misses + hit rate
+        let contextHitRate: number | undefined;
+        if (kgContext) {
+          try {
+            const agentAccessedFiles = parseAgentAccessedFiles(rawEventsJson ?? null);
+            const preProvided = kgContext.includedFiles.map(f => f.path);
+            const feedback = computeContextFeedback(preProvided, agentAccessedFiles);
+            contextHitRate = feedback.contextHitRate;
+
+            // Record discovery misses in the KG database
+            if (feedback.discoveryMisses.length > 0) {
+              const { existsSync } = await import("node:fs");
+              const maxAgents = config.orchestrator?.max_concurrent_agents ?? 1;
+              const workspaceId = maxAgents > 1
+                ? issue.identifier
+                : (config.tracker?.repo?.replace("/", "_") ?? issue.identifier);
+              let kgPath: string | undefined;
+              try {
+                const wsKgPath = workspaceManager.getWorkspacePath(workspaceId) + "/kg.db";
+                if (existsSync(wsKgPath)) kgPath = wsKgPath;
+              } catch { /* fallback */ }
+              if (!kgPath) {
+                const { resolveKGPath } = await import("../kg/storage.js");
+                kgPath = resolveKGPath(undefined, undefined);
+              }
+              if (existsSync(kgPath)) {
+                const { createKGDatabase } = await import("../kg/storage.js");
+                let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+                try {
+                  kgDb = createKGDatabase(kgPath);
+                  const taskType = issue.labels.find(l => ["bugfix", "feature", "refactor", "test"].includes(l)) ?? "general";
+                  recordContextFeedback(kgDb, taskType, feedback.discoveryMisses);
+                  logger.info("dispatcher", `Recorded ${feedback.discoveryMisses.length} discovery misses for ${issue.identifier} (hit_rate=${feedback.contextHitRate})`);
+                } finally {
+                  try { kgDb?.close(); } catch { /* best-effort */ }
+                }
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn("dispatcher", `Context feedback computation failed for ${issue.identifier}: ${msg}`);
+          }
+        }
+
         const runId = issue.identifier;
         outcomeDeps.outcomeRepo.insert({
           id: runId,
@@ -589,6 +639,7 @@ async function executeWorkerAndHandle(
           rawEventsJson,
           contextEnabled: kgContext ? 1 : 0,
           contextFilesJson: kgContext ? JSON.stringify(kgContext.includedFiles.map(f => f.path)) : undefined,
+          contextHitRate,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

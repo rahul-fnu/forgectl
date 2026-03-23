@@ -22,6 +22,7 @@ export interface OutcomeInsertParams {
   rawEventsJson?: string; // JSON string
   contextEnabled?: number; // 1 = enabled, 0 = disabled
   contextFilesJson?: string; // JSON array of pre-provided context file paths
+  contextHitRate?: number; // ratio of pre-provided files agent actually used
 }
 
 export interface OutcomeRow {
@@ -44,6 +45,7 @@ export interface OutcomeRow {
   rawEventsJson: string | null;
   contextEnabled: number | null;
   contextFilesJson: string | null;
+  contextHitRate: number | null;
 }
 
 export interface OutcomeRepository {
@@ -75,6 +77,7 @@ function deserializeRow(raw: typeof runOutcomes.$inferSelect): OutcomeRow {
     rawEventsJson: raw.rawEventsJson,
     contextEnabled: raw.contextEnabled,
     contextFilesJson: raw.contextFilesJson,
+    contextHitRate: raw.contextHitRate,
   };
 }
 
@@ -101,6 +104,7 @@ export function createOutcomeRepository(db: AppDatabase): OutcomeRepository {
         rawEventsJson: params.rawEventsJson ?? null,
         contextEnabled: params.contextEnabled ?? null,
         contextFilesJson: params.contextFilesJson ?? null,
+        contextHitRate: params.contextHitRate ?? null,
       };
       db.insert(runOutcomes).values(values).run();
     },
@@ -147,6 +151,7 @@ export function createOutcomeRepository(db: AppDatabase): OutcomeRepository {
       if (params.rawEventsJson !== undefined) values.rawEventsJson = params.rawEventsJson;
       if (params.contextEnabled !== undefined) values.contextEnabled = params.contextEnabled;
       if (params.contextFilesJson !== undefined) values.contextFilesJson = params.contextFilesJson;
+      if (params.contextHitRate !== undefined) values.contextHitRate = params.contextHitRate;
 
       if (Object.keys(values).length > 0) {
         db.update(runOutcomes).set(values).where(eq(runOutcomes.id, id)).run();
