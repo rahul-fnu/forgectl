@@ -601,6 +601,98 @@ describe("E2E Orchestration", () => {
     });
   });
 
+  // ── Complex DAG: parallel tracks with diamond convergence ──────────────
+  //
+  //   Track A (forge-test-api):      Track B (forge-test-cli):
+  //     A1: Auth middleware               B1: History/undo system
+  //          |                                 |
+  //     A2: Rate limiter               B2: Pipe stdin support
+  //          \                               /
+  //           +------ C1: Shared SDK ------+
+  //                        |
+  //                   C2: Integration test
+  //
+
+  describe("Complex DAG — parallel tracks converging into shared integration", () => {
+    it("parallel tracks dispatch independently and convergence waits for both", async () => {
+      config = makeConfig({ maxAgents: 4 });
+
+      // All 6 issues in the DAG
+      const a1 = makeIssue({ id: "a1", identifier: "#A1", title: "Auth middleware", blocked_by: [] });
+      const a2 = makeIssue({ id: "a2", identifier: "#A2", title: "Rate limiter", blocked_by: ["a1"] });
+      const b1 = makeIssue({ id: "b1", identifier: "#B1", title: "History/undo system", blocked_by: [] });
+      const b2 = makeIssue({ id: "b2", identifier: "#B2", title: "Pipe stdin support", blocked_by: ["b1"] });
+      const c1 = makeIssue({ id: "c1", identifier: "#C1", title: "Shared SDK", blocked_by: ["a2", "b2"] });
+      const c2 = makeIssue({ id: "c2", identifier: "#C2", title: "Integration test", blocked_by: ["c1"] });
+
+      const allIssues = [a1, a2, b1, b2, c1, c2];
+
+      // Only roots are eligible at the start (no terminal issues)
+      const eligible1 = filterCandidates(allIssues, state, new Set());
+      expect(eligible1.map(i => i.id).sort()).toEqual(["a1", "b1"]);
+
+      // Dispatch both roots in parallel
+      shared.executeWorkerMock.mockResolvedValue(makeSuccessResult({ branch: "forge/a1/123" }));
+      dispatchIssue(a1, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      shared.executeWorkerMock.mockResolvedValue(makeSuccessResult({ branch: "forge/b1/456" }));
+      dispatchIssue(b1, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+
+      // Wait for both to complete
+      await vi.waitFor(() => {
+        expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(2);
+      }, { timeout: 2000 });
+
+      // After A1 and B1 complete, their stacked dependents (A2, B2) become eligible
+      const terminalAfterRoots = new Set(["a1", "b1"]);
+      const eligible2 = filterCandidates(allIssues.filter(i => !terminalAfterRoots.has(i.id)), state, terminalAfterRoots);
+      expect(eligible2.map(i => i.id).sort()).toEqual(["a2", "b2"]);
+
+      // C1 requires BOTH a2 and b2 terminal — only one track done is not enough
+      const terminalOnlyA = new Set(["a1", "a2"]);
+      const eligible3 = filterCandidates([c1, c2], state, terminalOnlyA);
+      expect(eligible3).toHaveLength(0);
+
+      // Both tracks complete → C1 becomes eligible
+      const terminalBoth = new Set(["a1", "a2", "b1", "b2"]);
+      const eligible4 = filterCandidates([c1, c2], state, terminalBoth);
+      expect(eligible4.map(i => i.id)).toEqual(["c1"]);
+
+      // C1 complete → C2 becomes eligible
+      const terminalAll = new Set(["a1", "a2", "b1", "b2", "c1"]);
+      const eligible5 = filterCandidates([c2], state, terminalAll);
+      expect(eligible5.map(i => i.id)).toEqual(["c2"]);
+    });
+
+    it("stacked diffs: issueBranches records branches for stacked PR bases", async () => {
+      config = makeConfig({ maxAgents: 4 });
+
+      const a1 = makeIssue({ id: "a1", identifier: "#A1", title: "Auth middleware", blocked_by: [] });
+      const a2 = makeIssue({ id: "a2", identifier: "#A2", title: "Rate limiter", blocked_by: ["a1"] });
+
+      // Dispatch A1 with a branch result
+      shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult({ branch: "forge/auth-middleware/001" }));
+      dispatchIssue(a1, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+
+      await vi.waitFor(() => {
+        expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(1);
+      }, { timeout: 2000 });
+
+      // A1's branch should be recorded in issueBranches
+      expect(state.issueBranches.get("a1")).toBe("forge/auth-middleware/001");
+
+      // Dispatch A2 (stacked on A1)
+      shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult({ branch: "forge/rate-limiter/002" }));
+      dispatchIssue(a2, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+
+      await vi.waitFor(() => {
+        expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(2);
+      }, { timeout: 2000 });
+
+      // A2's branch should also be recorded
+      expect(state.issueBranches.get("a2")).toBe("forge/rate-limiter/002");
+    });
+  });
+
   describe("Priority sorting", () => {
     it("sorts by priority ascending, then by created_at", () => {
       const issues = [

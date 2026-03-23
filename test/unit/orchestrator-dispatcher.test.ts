@@ -157,6 +157,78 @@ describe("filterCandidates", () => {
     const result = filterCandidates(issues, state, new Set());
     expect(result).toHaveLength(0);
   });
+
+  // ── Complex DAG: parallel tracks with diamond convergence ──────────────
+  //
+  //   Track A:          Track B:
+  //     A1                 B1
+  //      |                  |
+  //     A2                 B2
+  //      \                /
+  //       +--- C1 ---+
+  //            |
+  //           C2
+  //
+
+  it("complex DAG: only roots are eligible when no blockers are terminal", () => {
+    const issues = [
+      makeIssue({ id: "a1", blocked_by: [] }),
+      makeIssue({ id: "a2", blocked_by: ["a1"] }),
+      makeIssue({ id: "b1", blocked_by: [] }),
+      makeIssue({ id: "b2", blocked_by: ["b1"] }),
+      makeIssue({ id: "c1", blocked_by: ["a2", "b2"] }),
+      makeIssue({ id: "c2", blocked_by: ["c1"] }),
+    ];
+    const result = filterCandidates(issues, state, new Set());
+    expect(result.map(i => i.id).sort()).toEqual(["a1", "b1"]);
+  });
+
+  it("complex DAG: completing track A roots unlocks A2 but not C1", () => {
+    const issues = [
+      makeIssue({ id: "a2", blocked_by: ["a1"] }),
+      makeIssue({ id: "b1", blocked_by: [] }),
+      makeIssue({ id: "b2", blocked_by: ["b1"] }),
+      makeIssue({ id: "c1", blocked_by: ["a2", "b2"] }),
+      makeIssue({ id: "c2", blocked_by: ["c1"] }),
+    ];
+    // a1 is terminal (completed)
+    const terminalIds = new Set(["a1"]);
+    const result = filterCandidates(issues, state, terminalIds);
+    // a2 is unblocked (a1 terminal), b1 has no blockers, but b2/c1/c2 still blocked
+    expect(result.map(i => i.id).sort()).toEqual(["a2", "b1"]);
+  });
+
+  it("complex DAG: both tracks complete unlocks convergence node C1", () => {
+    const issues = [
+      makeIssue({ id: "c1", blocked_by: ["a2", "b2"] }),
+      makeIssue({ id: "c2", blocked_by: ["c1"] }),
+    ];
+    // Both track tails are terminal
+    const terminalIds = new Set(["a1", "a2", "b1", "b2"]);
+    const result = filterCandidates(issues, state, terminalIds);
+    // c1 is unblocked, c2 still blocked by c1
+    expect(result.map(i => i.id)).toEqual(["c1"]);
+  });
+
+  it("complex DAG: only one track complete does NOT unlock C1", () => {
+    const issues = [
+      makeIssue({ id: "c1", blocked_by: ["a2", "b2"] }),
+      makeIssue({ id: "c2", blocked_by: ["c1"] }),
+    ];
+    // Only track A is terminal, track B still active
+    const terminalIds = new Set(["a1", "a2"]);
+    const result = filterCandidates(issues, state, terminalIds);
+    expect(result).toHaveLength(0);
+  });
+
+  it("complex DAG: C1 terminal unlocks final integration C2", () => {
+    const issues = [
+      makeIssue({ id: "c2", blocked_by: ["c1"] }),
+    ];
+    const terminalIds = new Set(["a1", "a2", "b1", "b2", "c1"]);
+    const result = filterCandidates(issues, state, terminalIds);
+    expect(result.map(i => i.id)).toEqual(["c2"]);
+  });
 });
 
 describe("extractPriorityNumber", () => {

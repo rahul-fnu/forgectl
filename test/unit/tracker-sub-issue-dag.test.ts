@@ -95,6 +95,18 @@ describe("detectIssueCycles", () => {
     expect(result).toMatch(/cycle/i);
   });
 
+  it("returns null for parallel tracks converging into shared integration (no cycle)", () => {
+    const nodes: IssueDAGNode[] = [
+      { id: "A1", blocked_by: [] },
+      { id: "A2", blocked_by: ["A1"] },
+      { id: "B1", blocked_by: [] },
+      { id: "B2", blocked_by: ["B1"] },
+      { id: "C1", blocked_by: ["A2", "B2"] },
+      { id: "C2", blocked_by: ["C1"] },
+    ];
+    expect(detectIssueCycles(nodes)).toBeNull();
+  });
+
   it("handles mixed external refs and valid internal graph", () => {
     const nodes: IssueDAGNode[] = [
       { id: "10", blocked_by: ["external-1", "external-2"] },
@@ -180,6 +192,26 @@ describe("computeCriticalPath", () => {
     expect(scores.get("A")).toBe(0);
     expect(scores.get("B")).toBe(0);
     expect(scores.get("C")).toBe(0);
+  });
+
+  it("scores parallel tracks converging into shared integration correctly", () => {
+    // Track A: A1 → A2, Track B: B1 → B2, converge into C1 → C2
+    const nodes: IssueDAGNode[] = [
+      { id: "A1", blocked_by: [] },
+      { id: "A2", blocked_by: ["A1"] },
+      { id: "B1", blocked_by: [] },
+      { id: "B2", blocked_by: ["B1"] },
+      { id: "C1", blocked_by: ["A2", "B2"] },
+      { id: "C2", blocked_by: ["C1"] },
+    ];
+    const scores = computeCriticalPath(nodes);
+    // A1 and B1 each unblock their chain plus C1 and C2
+    expect(scores.get("A1")).toBe(3); // unblocks A2, C1, C2
+    expect(scores.get("B1")).toBe(3); // unblocks B2, C1, C2
+    expect(scores.get("A2")).toBe(2); // unblocks C1, C2
+    expect(scores.get("B2")).toBe(2); // unblocks C1, C2
+    expect(scores.get("C1")).toBe(1); // unblocks C2
+    expect(scores.get("C2")).toBe(0); // leaf
   });
 
   it("handles wide fan-out (one root, many dependents)", () => {
