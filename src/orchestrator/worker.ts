@@ -296,6 +296,35 @@ export async function executeWorker(
     const wsKgPath = pathJoin(workspacePath, "kg.db");
     await buildFullGraph(workspacePath, wsKgPath);
     logger.info("worker", `Built per-workspace KG at ${wsKgPath}`);
+
+    // Rebuild KG context from per-workspace KG so the agent sees branch-specific code
+    if (existsSync(wsKgPath)) {
+      try {
+        const { createKGDatabase } = await import("../kg/storage.js");
+        const { buildContext } = await import("../context/builder.js");
+        let wsKgDb: import("../kg/storage.js").KGDatabase | undefined;
+        try {
+          wsKgDb = createKGDatabase(wsKgPath);
+          const taskSpec: import("../task/types.js").TaskSpec = {
+            id: issue.id,
+            title: issue.title,
+            description: issue.description,
+            context: { files: [] },
+            constraints: [],
+            acceptance: [],
+            decomposition: { strategy: "forbidden" },
+            effort: {},
+          };
+          kgContext = await buildContext(taskSpec, wsKgDb);
+          logger.info("worker", `Rebuilt KG context from workspace KG: ${kgContext.includedFiles.length} files`);
+        } finally {
+          try { wsKgDb?.close(); } catch { /* best-effort */ }
+        }
+      } catch (ctxErr) {
+        const ctxMsg = ctxErr instanceof Error ? ctxErr.message : String(ctxErr);
+        logger.warn("worker", `Failed to rebuild KG context from workspace KG (using original): ${ctxMsg}`);
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn("worker", `Failed to build per-workspace KG (continuing without): ${msg}`);

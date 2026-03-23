@@ -567,6 +567,32 @@ async function executeWorkerAndHandle(
       });
     }
 
+    // Record learning feedback: files from KG context → outcome_files table
+    if (kgContext && kgContext.includedFiles.length > 0) {
+      try {
+        const { createKGDatabase, recordOutcomeFiles } = await import("../kg/storage.js");
+        const storagePath = config.storage?.db_path ?? "~/.forgectl/forgectl.db";
+        const dir = storagePath.replace(/\/[^/]+$/, "").replace(/^~/, process.env.HOME || "/tmp");
+        const kgDbPath = `${dir}/kg.db`;
+        let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+        try {
+          kgDb = createKGDatabase(kgDbPath);
+          const filePaths = kgContext.includedFiles.map(f => f.path);
+          const taskType = inferTaskTypeFromIssue(issue);
+          const success = failureType === "continuation";
+          const turns = result.agentResult.turnCount ?? 0;
+          const retries = attempt - 1;
+          recordOutcomeFiles(kgDb, filePaths, taskType, success, turns, retries);
+          logger.debug("dispatcher", `Recorded learning feedback: ${filePaths.length} files, taskType=${taskType}, success=${success}`);
+        } finally {
+          try { kgDb?.close(); } catch { /* best-effort */ }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.debug("dispatcher", `Failed to record learning feedback: ${msg}`);
+      }
+    }
+
     // Record outcome for the Outcome Analyzer
     if (outcomeDeps) {
       try {
@@ -845,4 +871,13 @@ async function executeWorkerAndHandle(
 
     releaseIssue(state, issue.id);
   }
+}
+
+function inferTaskTypeFromIssue(issue: TrackerIssue): string {
+  const text = `${issue.title} ${issue.description}`.toLowerCase();
+  if (text.includes("fix") || text.includes("bug")) return "bugfix";
+  if (text.includes("add") || text.includes("implement") || text.includes("feature")) return "feature";
+  if (text.includes("refactor") || text.includes("clean")) return "refactor";
+  if (text.includes("test")) return "test";
+  return "general";
 }
