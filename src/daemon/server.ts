@@ -1,6 +1,7 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import yaml from "js-yaml";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { RunQueue } from "./queue.js";
@@ -340,6 +341,25 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   if (orchestratorEnabled && config.tracker?.repo && (config.merge_daemon || config.merger_app)) {
     try {
       const { PRProcessor } = await import("../merge-daemon/pr-processor.js");
+
+      // Collect all repos to poll: default + all repo profiles
+      const repoSet = new Set<string>();
+      repoSet.add(config.tracker.repo);
+      const reposDir = join(process.env.HOME || "", ".forgectl", "repos");
+      if (existsSync(reposDir)) {
+        for (const file of readdirSync(reposDir)) {
+          if (file.endsWith(".yaml") || file.endsWith(".yml")) {
+            try {
+              const profileRaw = readFileSync(join(reposDir, file), "utf-8");
+              const profile = yaml.load(profileRaw) as { tracker?: { repo?: string } } | null;
+              if (profile?.tracker?.repo) repoSet.add(profile.tracker.repo);
+            } catch { /* skip invalid profiles */ }
+          }
+        }
+      }
+      const allRepos = [...repoSet];
+      daemonLogger.info("daemon", `Merge daemon will poll ${allRepos.length} repo(s): ${allRepos.join(", ")}`);
+
       const [mdOwner, mdRepo] = config.tracker.repo.split("/");
       let mdToken = "";
 
@@ -368,45 +388,53 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
       if (mdToken) {
         const daemonConfig = config.merge_daemon;
-        const processor = new PRProcessor({
-          owner: mdOwner, repo: mdRepo, token: mdToken,
-          rawToken: config.merger_app ? "$merger_app" : config.tracker.token,
-          branchPattern: daemonConfig?.branch_pattern ?? "forge/*",
-          ciTimeoutMs: daemonConfig?.ci_timeout_ms ?? 2_700_000,
-          enableReview: daemonConfig?.enable_review ?? true,
-          enableBuildFix: daemonConfig?.enable_build_fix ?? true,
-          validationCommands: daemonConfig?.validation_commands ?? [],
-        }, daemonLogger);
-
+        const rawToken = config.merger_app ? "$merger_app" : config.tracker.token;
         const pollIntervalMs = daemonConfig?.poll_interval_ms ?? 60_000;
         mergeDaemonRunning = true;
 
+        // Create a processor per repo
+        const processors = allRepos.map(repoSlug => {
+          const [o, r] = repoSlug.split("/");
+          return new PRProcessor({
+            owner: o, repo: r, token: mdToken,
+            rawToken,
+            branchPattern: daemonConfig?.branch_pattern ?? "forge/*",
+            ciTimeoutMs: daemonConfig?.ci_timeout_ms ?? 2_700_000,
+            enableReview: daemonConfig?.enable_review ?? true,
+            enableBuildFix: daemonConfig?.enable_build_fix ?? true,
+            validationCommands: daemonConfig?.validation_commands ?? [],
+          }, daemonLogger);
+        });
+
         const mergePollLoop = async (): Promise<void> => {
           while (mergeDaemonRunning) {
-            try {
-              const prs = await processor.fetchOpenForgePRs();
-              if (prs.length > 0) {
-                daemonLogger.info("merge-daemon", `Found ${prs.length} open forge PR(s)`);
-                for (const pr of prs) {
-                  if (!mergeDaemonRunning) break;
-                  const result = await processor.processPR(pr);
-                  if (result.status === "merged") {
-                    daemonLogger.info("merge-daemon", `PR #${pr.number} merged`);
-                  } else if (result.status === "failed") {
-                    daemonLogger.warn("merge-daemon", `PR #${pr.number}: ${result.error}`);
+            for (const processor of processors) {
+              if (!mergeDaemonRunning) break;
+              try {
+                const prs = await processor.fetchOpenForgePRs();
+                if (prs.length > 0) {
+                  daemonLogger.info("merge-daemon", `Found ${prs.length} open forge PR(s)`);
+                  for (const pr of prs) {
+                    if (!mergeDaemonRunning) break;
+                    const result = await processor.processPR(pr);
+                    if (result.status === "merged") {
+                      daemonLogger.info("merge-daemon", `PR #${pr.number} merged`);
+                    } else if (result.status === "failed") {
+                      daemonLogger.warn("merge-daemon", `PR #${pr.number}: ${result.error}`);
+                    }
                   }
                 }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                daemonLogger.error("merge-daemon", `Poll error: ${msg}`);
               }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              daemonLogger.error("merge-daemon", `Poll error: ${msg}`);
             }
             await new Promise((r) => setTimeout(r, pollIntervalMs));
           }
         };
 
         void mergePollLoop();
-        daemonLogger.info("daemon", `Merge daemon integrated (poll=${pollIntervalMs}ms, repo=${mdOwner}/${mdRepo})`);
+        daemonLogger.info("daemon", `Merge daemon integrated (poll=${pollIntervalMs}ms, ${allRepos.length} repos)`);
       } else {
         daemonLogger.warn("daemon", "Merge daemon: no GitHub token available, skipping PR auto-merge");
       }
