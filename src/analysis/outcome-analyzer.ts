@@ -1,4 +1,5 @@
 import type { OutcomeRow } from "../storage/repositories/outcomes.js";
+import type { CalibrationRow } from "../storage/repositories/review-findings.js";
 
 export interface AnalysisReport {
   period: { from: string; to: string };
@@ -408,4 +409,135 @@ export function compareContextOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions)
     withoutContext: computeGroupStats(withoutContext),
     contextHitRate: computeContextHitRate(withContext),
   };
+}
+
+export interface CalibrationModuleReport {
+  module: string;
+  totalComments: number;
+  falsePositives: number;
+  rate: number;
+}
+
+export interface CalibrationReport {
+  modules: CalibrationModuleReport[];
+  overall: CalibrationModuleReport;
+  warnings: string[];
+}
+
+export function computeCalibrationFromOutcomes(rows: OutcomeRow[]): Map<string, { total: number; falsePositives: number }> {
+  const moduleStats = new Map<string, { total: number; falsePositives: number }>();
+
+  for (const row of rows) {
+    if (!row.reviewCommentsJson) continue;
+
+    let parsed: { comments?: Array<{ file?: string; severity?: string }> };
+    try {
+      parsed = JSON.parse(row.reviewCommentsJson);
+    } catch {
+      continue;
+    }
+
+    const comments = parsed.comments;
+    if (!Array.isArray(comments)) continue;
+
+    const mustFixComments = comments.filter(
+      (c) => c && typeof c.severity === "string" && c.severity.toUpperCase() === "MUST_FIX",
+    );
+
+    if (mustFixComments.length === 0) continue;
+
+    const isFalsePositive = row.humanReviewResult === "rubber_stamp";
+
+    const moduleSet = new Set<string>();
+    for (const c of mustFixComments) {
+      if (typeof c.file === "string") {
+        const parts = c.file.split("/");
+        const mod = parts.length >= 2 ? parts.slice(0, 2).join("/") : parts[0] || "*";
+        moduleSet.add(mod);
+      }
+    }
+
+    for (const mod of moduleSet) {
+      const modComments = mustFixComments.filter((c) => {
+        if (typeof c.file !== "string") return false;
+        const parts = c.file.split("/");
+        const m = parts.length >= 2 ? parts.slice(0, 2).join("/") : parts[0] || "*";
+        return m === mod;
+      });
+
+      const stats = moduleStats.get(mod) ?? { total: 0, falsePositives: 0 };
+      stats.total += modComments.length;
+      if (isFalsePositive) {
+        stats.falsePositives += modComments.length;
+      }
+      moduleStats.set(mod, stats);
+    }
+  }
+
+  return moduleStats;
+}
+
+export function buildCalibrationReport(
+  calibrationRows: CalibrationRow[],
+  outcomeRows: OutcomeRow[],
+): CalibrationReport {
+  const fromOutcomes = computeCalibrationFromOutcomes(outcomeRows);
+
+  const moduleMap = new Map<string, { total: number; falsePositives: number }>();
+
+  for (const cal of calibrationRows) {
+    moduleMap.set(cal.module, {
+      total: cal.totalComments,
+      falsePositives: cal.overriddenComments,
+    });
+  }
+
+  for (const [mod, stats] of fromOutcomes) {
+    const existing = moduleMap.get(mod) ?? { total: 0, falsePositives: 0 };
+    existing.total += stats.total;
+    existing.falsePositives += stats.falsePositives;
+    moduleMap.set(mod, existing);
+  }
+
+  const modules: CalibrationModuleReport[] = [];
+  let overallTotal = 0;
+  let overallFP = 0;
+
+  for (const [mod, stats] of moduleMap) {
+    const rate = stats.total > 0 ? stats.falsePositives / stats.total : 0;
+    modules.push({
+      module: mod,
+      totalComments: stats.total,
+      falsePositives: stats.falsePositives,
+      rate,
+    });
+    overallTotal += stats.total;
+    overallFP += stats.falsePositives;
+  }
+
+  modules.sort((a, b) => b.rate - a.rate || b.totalComments - a.totalComments);
+
+  const overallRate = overallTotal > 0 ? overallFP / overallTotal : 0;
+  const overall: CalibrationModuleReport = {
+    module: "(overall)",
+    totalComments: overallTotal,
+    falsePositives: overallFP,
+    rate: overallRate,
+  };
+
+  const warnings: string[] = [];
+  for (const m of modules) {
+    if (m.rate > 0.3 && m.totalComments > 0) {
+      warnings.push(
+        `Module ${m.module} has ${(m.rate * 100).toFixed(1)}% false positive rate (${m.falsePositives}/${m.totalComments}) — review agent needs tuning for this module.`,
+      );
+    }
+  }
+  if (overallRate > 0.3 && overallTotal > 0) {
+    warnings.push(
+      `Overall false positive rate is ${(overallRate * 100).toFixed(1)}% — review agent is miscalibrated and should be tuned.`,
+    );
+  }
+
+  return { modules, overall, warnings };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { analyzeOutcomes, compareContextOutcomes, computeContextHitRate, type AnalysisReport } from "../../src/analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, computeContextHitRate, buildCalibrationReport, computeCalibrationFromOutcomes, type AnalysisReport } from "../../src/analysis/outcome-analyzer.js";
 import type { OutcomeRow } from "../../src/storage/repositories/outcomes.js";
+import type { CalibrationRow } from "../../src/storage/repositories/review-findings.js";
 
 function makeRow(overrides: Partial<OutcomeRow> & { id: string }): OutcomeRow {
   return {
@@ -290,5 +291,139 @@ describe("compareContextOutcomes", () => {
       makeRow({ id: "1", contextEnabled: 0 }),
     ];
     expect(computeContextHitRate(rows)).toBe(0);
+  });
+});
+
+describe("computeCalibrationFromOutcomes", () => {
+  it("identifies false positives when human rubber-stamps MUST_FIX comments", () => {
+    const reviewJson = JSON.stringify({
+      comments: [
+        { file: "src/storage/database.ts", line: 10, severity: "MUST_FIX", category: "error_handling", comment: "fix" },
+        { file: "src/storage/schema.ts", line: 5, severity: "MUST_FIX", category: "naming", comment: "rename" },
+      ],
+      summary: { must_fix: 2, should_fix: 0, nit: 0, overall: "needs work" },
+    });
+
+    const rows = [
+      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
+    ];
+
+    const result = computeCalibrationFromOutcomes(rows);
+    const storageStats = result.get("src/storage");
+    expect(storageStats).toBeDefined();
+    expect(storageStats!.total).toBe(2);
+    expect(storageStats!.falsePositives).toBe(2);
+  });
+
+  it("does not count as false positive when human does major_rework", () => {
+    const reviewJson = JSON.stringify({
+      comments: [
+        { file: "src/agent/invoke.ts", line: 10, severity: "MUST_FIX", category: "error_handling", comment: "fix" },
+      ],
+      summary: { must_fix: 1, should_fix: 0, nit: 0, overall: "needs work" },
+    });
+
+    const rows = [
+      makeRow({ id: "1", humanReviewResult: "major_rework", reviewCommentsJson: reviewJson }),
+    ];
+
+    const result = computeCalibrationFromOutcomes(rows);
+    const agentStats = result.get("src/agent");
+    expect(agentStats).toBeDefined();
+    expect(agentStats!.total).toBe(1);
+    expect(agentStats!.falsePositives).toBe(0);
+  });
+
+  it("skips rows without review comments", () => {
+    const rows = [
+      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: null }),
+    ];
+
+    const result = computeCalibrationFromOutcomes(rows);
+    expect(result.size).toBe(0);
+  });
+
+  it("skips rows without MUST_FIX comments", () => {
+    const reviewJson = JSON.stringify({
+      comments: [
+        { file: "src/agent/invoke.ts", line: 10, severity: "NIT", category: "style", comment: "style nit" },
+      ],
+      summary: { must_fix: 0, should_fix: 0, nit: 1, overall: "looks good" },
+    });
+
+    const rows = [
+      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
+    ];
+
+    const result = computeCalibrationFromOutcomes(rows);
+    expect(result.size).toBe(0);
+  });
+});
+
+describe("buildCalibrationReport", () => {
+  it("combines calibration rows with outcome data", () => {
+    const calibrationRows: CalibrationRow[] = [
+      { id: 1, module: "src/storage", totalComments: 10, overriddenComments: 4, falsePositiveRate: 0.4, lastUpdated: "2026-03-22T00:00:00Z" },
+    ];
+
+    const report = buildCalibrationReport(calibrationRows, []);
+    expect(report.modules).toHaveLength(1);
+    expect(report.modules[0].module).toBe("src/storage");
+    expect(report.modules[0].totalComments).toBe(10);
+    expect(report.modules[0].falsePositives).toBe(4);
+    expect(report.modules[0].rate).toBeCloseTo(0.4);
+    expect(report.overall.rate).toBeCloseTo(0.4);
+  });
+
+  it("warns when module false positive rate exceeds 30%", () => {
+    const calibrationRows: CalibrationRow[] = [
+      { id: 1, module: "src/storage", totalComments: 10, overriddenComments: 5, falsePositiveRate: 0.5, lastUpdated: "2026-03-22T00:00:00Z" },
+    ];
+
+    const report = buildCalibrationReport(calibrationRows, []);
+    expect(report.warnings.length).toBeGreaterThanOrEqual(1);
+    expect(report.warnings[0]).toContain("src/storage");
+    expect(report.warnings[0]).toContain("tuning");
+  });
+
+  it("does not warn when rate is below 30%", () => {
+    const calibrationRows: CalibrationRow[] = [
+      { id: 1, module: "src/agent", totalComments: 10, overriddenComments: 1, falsePositiveRate: 0.1, lastUpdated: "2026-03-22T00:00:00Z" },
+    ];
+
+    const report = buildCalibrationReport(calibrationRows, []);
+    expect(report.warnings).toHaveLength(0);
+  });
+
+  it("merges outcome-derived calibration with stored calibration", () => {
+    const calibrationRows: CalibrationRow[] = [
+      { id: 1, module: "src/storage", totalComments: 5, overriddenComments: 2, falsePositiveRate: 0.4, lastUpdated: "2026-03-22T00:00:00Z" },
+    ];
+
+    const reviewJson = JSON.stringify({
+      comments: [
+        { file: "src/storage/database.ts", line: 10, severity: "MUST_FIX", category: "error_handling", comment: "fix" },
+      ],
+      summary: { must_fix: 1, should_fix: 0, nit: 0, overall: "needs work" },
+    });
+
+    const outcomeRows = [
+      makeRow({ id: "1", humanReviewResult: "rubber_stamp", reviewCommentsJson: reviewJson }),
+    ];
+
+    const report = buildCalibrationReport(calibrationRows, outcomeRows);
+    const storageModule = report.modules.find(m => m.module === "src/storage");
+    expect(storageModule).toBeDefined();
+    expect(storageModule!.totalComments).toBe(6);
+    expect(storageModule!.falsePositives).toBe(3);
+    expect(storageModule!.rate).toBeCloseTo(0.5);
+  });
+
+  it("returns empty report when no data", () => {
+    const report = buildCalibrationReport([], []);
+    expect(report.modules).toHaveLength(0);
+    expect(report.overall.totalComments).toBe(0);
+    expect(report.overall.rate).toBe(0);
+    expect(report.warnings).toHaveLength(0);
   });
 });
