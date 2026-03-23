@@ -319,6 +319,7 @@ export function dispatchIssue(
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -353,6 +354,7 @@ export function dispatchIssue(
     validationConfig,
     outcomeDeps,
     kgContext,
+    promotedFindings,
   );
 }
 
@@ -373,6 +375,7 @@ async function executeWorkerAndHandle(
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
 ): Promise<void> {
   // Per-issue repo routing: detect repo from issue description and load profile overlay
   const issueRepo = extractRepoFromIssue(issue);
@@ -537,6 +540,7 @@ async function executeWorkerAndHandle(
       governanceWithRunId,
       skills,
       kgContext,
+      promotedFindings,
     );
 
     // Remove from running

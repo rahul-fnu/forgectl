@@ -45,6 +45,8 @@ export interface OrchestratorOptions {
   skills?: string[];
   /** Validation config from WORKFLOW.md front matter. */
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
+  /** Promoted review findings to inject as conventions into agent prompts. */
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
 }
 
 /**
@@ -69,6 +71,7 @@ export class Orchestrator {
   private readonly subIssueCache?: SubIssueCache;
   private readonly skills: string[];
   private readonly validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
+  private promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private running = false;
@@ -92,6 +95,7 @@ export class Orchestrator {
     this.subIssueCache = opts.subIssueCache;
     this.skills = opts.skills ?? [];
     this.validationConfig = opts.validationConfig;
+    this.promotedFindings = opts.promotedFindings;
   }
 
   /**
@@ -130,6 +134,7 @@ export class Orchestrator {
       githubContext: this.githubContext,
       skills: this.skills,
       validationConfig: this.validationConfig,
+      promotedFindings: this.promotedFindings,
     };
     this.stopScheduler = startScheduler(this.deps);
 

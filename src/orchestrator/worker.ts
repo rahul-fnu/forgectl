@@ -240,6 +240,7 @@ export async function executeWorker(
   governance?: GovernanceOpts,
   skills?: string[],
   kgContext?: ContextResult,
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -379,8 +380,11 @@ export async function executeWorker(
       // Non-critical — fallback to root commit detection
     }
 
-    // 7. Invoke agent with full prompt (includes validation step descriptions)
-    const fullPrompt = buildPrompt(plan, kgContext);
+    // 7. Invoke agent with full prompt (includes validation step descriptions + conventions)
+    const fullPrompt = buildPrompt(plan, {
+      kgContext,
+      promotedFindings,
+    });
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(fullPrompt);
 

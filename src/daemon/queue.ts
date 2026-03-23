@@ -62,6 +62,11 @@ export class RunQueue {
     return this.repo.list().map(rowToQueuedRun);
   }
 
+  /** Kick off processing of any queued runs (e.g. after crash recovery). */
+  drain(): void {
+    void this.processNext();
+  }
+
   private async processNext(): Promise<void> {
     if (this.running) return;
     const queued = this.repo.findByStatus("queued");

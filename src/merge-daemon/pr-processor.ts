@@ -114,18 +114,30 @@ export interface PRProcessorConfig {
 }
 
 export class PRProcessor {
-  private readonly headers: Record<string, string>;
+  private headers: Record<string, string>;
   private readonly history: ProcessResult[] = [];
   private readonly reviewRounds = new Map<number, number>();
 
   constructor(
-    private readonly config: PRProcessorConfig,
+    private config: PRProcessorConfig,
     private readonly logger: Logger,
     private readonly metricsRepo?: ReviewMetricsRepository,
     private readonly findingsRepo?: ReviewFindingsRepository,
   ) {
     this.headers = {
       Authorization: `token ${config.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/vnd.github+json",
+    };
+  }
+
+  /**
+   * Update the token used for GitHub API calls (e.g. after refresh).
+   */
+  updateToken(token: string, rawToken?: string): void {
+    this.config = { ...this.config, token, rawToken: rawToken ?? token };
+    this.headers = {
+      Authorization: `token ${token}`,
       "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
     };
