@@ -484,19 +484,30 @@ export class PRProcessor {
   async submitPRReview(prNumber: number, review: StructuredReview): Promise<void> {
     const { owner, repo } = this.config;
 
-    // Map inline comments to GitHub's review comment format
-    const ghComments = review.comments.map((c) => {
-      let body = `**[${c.severity.toUpperCase()}]** ${c.body}`;
+    // Build the review body with all comments included as a formatted list
+    const commentLines = review.comments.map((c) => {
+      let line = `- **[${c.severity.toUpperCase()}]** \`${c.file}:${c.line}\` — ${c.body}`;
       if (c.suggested_fix) {
-        body += `\n\n**Suggested fix:** ${c.suggested_fix}`;
+        line += `\n  **Suggested fix:** ${c.suggested_fix}`;
       }
-      return { path: c.file, line: c.line, body };
+      return line;
     });
 
-    const event = review.approval === "request_changes" ? "REQUEST_CHANGES" : "APPROVE";
-    const body = review.approval === "approve"
-      ? `LGTM — ${review.summary}`
-      : review.summary;
+    const verdict = review.approval === "approve" ? "LGTM" : "Changes requested";
+    const fullBody = [
+      `## Review by forgectl`,
+      ``,
+      `**Verdict:** ${verdict}`,
+      ``,
+      review.summary,
+      ``,
+      ...(commentLines.length > 0 ? [`### Comments`, ``, ...commentLines] : []),
+    ].join("\n");
+
+    // Try to submit as a formal review first.
+    // Use COMMENT event instead of REQUEST_CHANGES to avoid "can't request changes on own PR" error.
+    // The review body clearly states whether it's an approval or has requested changes.
+    const event = review.approval === "approve" ? "APPROVE" : "COMMENT";
 
     const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
     const response = await fetch(url, {
@@ -504,8 +515,10 @@ export class PRProcessor {
       headers: this.headers,
       body: JSON.stringify({
         event,
-        body,
-        comments: ghComments,
+        body: fullBody,
+        // Skip inline comments — line positions in the diff are unreliable.
+        // All comments are included in the review body instead.
+        comments: [],
       }),
     });
 
@@ -515,6 +528,18 @@ export class PRProcessor {
         "merge-daemon",
         `PR #${prNumber}: Failed to submit review (${response.status}): ${text}`,
       );
+      // Fallback: post as a regular PR comment
+      const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+      const commentResp = await fetch(commentUrl, {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify({ body: fullBody }),
+      });
+      if (commentResp.ok) {
+        this.logger.info("merge-daemon", `PR #${prNumber}: Review posted as comment (fallback)`);
+      }
+    } else {
+      this.logger.info("merge-daemon", `PR #${prNumber}: Review submitted — ${verdict}`);
     }
   }
 
