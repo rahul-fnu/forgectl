@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRProcessor, MAX_REVIEW_ROUNDS, type PRProcessorConfig, type PRInfo, type ReviewState } from "../../src/merge-daemon/pr-processor.js";
+import { PRProcessor, type PRProcessorConfig, type PRInfo, parseStructuredReview } from "../../src/merge-daemon/pr-processor.js";
 import type { Logger } from "../../src/logging/logger.js";
 
 function makeLogger(): Logger {
@@ -161,77 +161,144 @@ describe("PRProcessor", () => {
     });
   });
 
-  describe("review state tracking", () => {
-    it("starts with no review state", () => {
+  describe("submitPRReview", () => {
+    it("posts APPROVE review with LGTM body", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+
       const processor = new PRProcessor(makeConfig(), logger);
-      expect(processor.getReviewState(1)).toBeUndefined();
+      await processor.submitPRReview(42, {
+        summary: "Looks good",
+        approval: "approve",
+        comments: [],
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining("/pulls/42/reviews"),
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"APPROVE"'),
+        }),
+      );
+      const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(body.event).toBe("APPROVE");
+      expect(body.body).toContain("LGTM");
     });
 
-    it("tracks review state per PR", () => {
-      const processor = new PRProcessor(makeConfig(), logger);
-      processor.reviewStates.set(1, {
-        reviewRound: 1,
-        lastReviewedSha: "abc123",
-        status: "changes_requested",
-      });
-      const state = processor.getReviewState(1);
-      expect(state).toBeDefined();
-      expect(state!.reviewRound).toBe(1);
-      expect(state!.status).toBe("changes_requested");
-      expect(state!.lastReviewedSha).toBe("abc123");
-    });
+    it("posts REQUEST_CHANGES review with inline comments", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
 
-    it("clears review state", () => {
       const processor = new PRProcessor(makeConfig(), logger);
-      processor.reviewStates.set(1, {
-        reviewRound: 2,
-        lastReviewedSha: "def456",
-        status: "approved",
+      await processor.submitPRReview(42, {
+        summary: "Found issues",
+        approval: "request_changes",
+        comments: [
+          { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Missing error handling" },
+        ],
       });
-      processor.clearReviewState(1);
-      expect(processor.getReviewState(1)).toBeUndefined();
-    });
 
-    it("tracks separate state per PR number", () => {
-      const processor = new PRProcessor(makeConfig(), logger);
-      processor.reviewStates.set(1, {
-        reviewRound: 1,
-        lastReviewedSha: "sha1",
-        status: "changes_requested",
-      });
-      processor.reviewStates.set(2, {
-        reviewRound: 3,
-        lastReviewedSha: "sha2",
-        status: "escalated",
-      });
-      expect(processor.getReviewState(1)!.reviewRound).toBe(1);
-      expect(processor.getReviewState(2)!.status).toBe("escalated");
+      const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(body.event).toBe("REQUEST_CHANGES");
+      expect(body.comments).toHaveLength(1);
+      expect(body.comments[0].path).toBe("src/foo.ts");
+      expect(body.comments[0].line).toBe(10);
+      expect(body.comments[0].body).toContain("[MUST_FIX]");
     });
   });
+});
 
-  describe("MAX_REVIEW_ROUNDS", () => {
-    it("is set to 3", () => {
-      expect(MAX_REVIEW_ROUNDS).toBe(3);
+describe("parseStructuredReview", () => {
+  it("parses valid JSON review", () => {
+    const json = JSON.stringify({
+      summary: "All good",
+      approval: "approve",
+      comments: [],
     });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("All good");
+    expect(result!.comments).toHaveLength(0);
   });
 
-  describe("reviewDiff (unit)", () => {
-    it("returns APPROVE when output does not contain REQUEST_CHANGES", () => {
-      const processor = new PRProcessor(makeConfig({ enableReview: true }), logger);
-      // reviewDiff parses the output for "verdict: REQUEST_CHANGES"
-      // Test the parsing logic directly by checking the regex
-      expect(/verdict:\s*REQUEST_CHANGES/i.test("verdict: APPROVE\nissues: []")).toBe(false);
-      expect(/verdict:\s*REQUEST_CHANGES/i.test('verdict: REQUEST_CHANGES\nissues:\n  - "bug"')).toBe(true);
+  it("parses JSON with comments", () => {
+    const json = JSON.stringify({
+      summary: "Issues found",
+      approval: "request_changes",
+      comments: [
+        { file: "src/foo.ts", line: 42, severity: "must_fix", body: "Missing null check" },
+        { file: "src/bar.ts", line: 10, severity: "nit", body: "Unnecessary import" },
+      ],
     });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(2);
+    expect(result!.comments[0].severity).toBe("must_fix");
+    expect(result!.comments[1].severity).toBe("nit");
+  });
 
-    it("returns REQUEST_CHANGES verdict detected correctly", () => {
-      const output = 'verdict: REQUEST_CHANGES\nissues:\n  - "security issue"';
-      expect(/verdict:\s*REQUEST_CHANGES/i.test(output)).toBe(true);
-    });
+  it("extracts JSON from markdown fences", () => {
+    const raw = `Here is my review:\n\n\`\`\`json\n{"summary":"LGTM","approval":"approve","comments":[]}\n\`\`\``;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
 
-    it("returns APPROVE for LGTM-style output", () => {
-      const output = "verdict: APPROVE\nissues: []";
-      expect(/verdict:\s*REQUEST_CHANGES/i.test(output)).toBe(false);
+  it("extracts JSON object from surrounding text", () => {
+    const raw = `Some preamble text\n{"summary":"ok","approval":"approve","comments":[]}\nSome trailing text`;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseStructuredReview("")).toBeUndefined();
+  });
+
+  it("returns undefined for invalid JSON", () => {
+    expect(parseStructuredReview("not json at all")).toBeUndefined();
+  });
+
+  it("skips malformed comments", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "approve",
+      comments: [
+        { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Good comment" },
+        { file: "missing-line" }, // missing line and body
+        { severity: "nit" }, // missing file and body
+      ],
     });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.comments).toHaveLength(1);
+  });
+
+  it("normalizes unknown severity to nit", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "approve",
+      comments: [
+        { file: "src/foo.ts", line: 5, severity: "critical", body: "Something wrong" },
+      ],
+    });
+    const result = parseStructuredReview(json);
+    expect(result!.comments[0].severity).toBe("nit");
+  });
+
+  it("defaults approval to approve for unknown values", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "banana",
+      comments: [],
+    });
+    const result = parseStructuredReview(json);
+    expect(result!.approval).toBe("approve");
   });
 });
