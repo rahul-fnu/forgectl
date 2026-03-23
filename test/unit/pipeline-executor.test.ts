@@ -526,6 +526,167 @@ describe("PipelineExecutor", () => {
     expect(loopAnnotated).toBe(true);
   });
 
+  // ── Complex DAG: parallel tracks with diamond convergence ────────────────
+  //
+  //   Track A:          Track B:
+  //     A1                 B1
+  //      |                  |
+  //     A2                 B2
+  //      \                /
+  //       +--- C1 ---+
+  //            |
+  //           C2
+  //
+
+  it("complex DAG: parallel tracks execute concurrently and converge", async () => {
+    const callOrder: string[] = [];
+    const inFlight = new Set<string>();
+    let maxConcurrent = 0;
+    vi.mocked(executeRun).mockImplementation(async (plan) => {
+      inFlight.add(plan.task);
+      maxConcurrent = Math.max(maxConcurrent, inFlight.size);
+      // Small delay to allow parallel tasks to overlap
+      await new Promise(r => setTimeout(r, 10));
+      callOrder.push(plan.task);
+      inFlight.delete(plan.task);
+      return {
+        success: true,
+        output: { mode: "git", branch: `forge/${plan.task}/123`, sha: "abc", filesChanged: 1, insertions: 10, deletions: 2 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [] },
+        durationMs: 1000,
+      };
+    });
+
+    const pipeline = makePipeline([
+      { id: "a1", task: "Auth middleware" },
+      { id: "a2", task: "Rate limiter", depends_on: ["a1"] },
+      { id: "b1", task: "History/undo system" },
+      { id: "b2", task: "Pipe stdin support", depends_on: ["b1"] },
+      { id: "c1", task: "Shared SDK", depends_on: ["a2", "b2"] },
+      { id: "c2", task: "Integration test", depends_on: ["c1"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("completed");
+    expect(executeRun).toHaveBeenCalledTimes(6);
+
+    // All nodes completed
+    for (const nodeId of ["a1", "a2", "b1", "b2", "c1", "c2"]) {
+      expect(result.nodes.get(nodeId)!.status).toBe("completed");
+    }
+
+    // Stacked diffs: A1 before A2, B1 before B2
+    expect(callOrder.indexOf("Auth middleware")).toBeLessThan(callOrder.indexOf("Rate limiter"));
+    expect(callOrder.indexOf("History/undo system")).toBeLessThan(callOrder.indexOf("Pipe stdin support"));
+
+    // Diamond convergence: C1 after both A2 and B2
+    expect(callOrder.indexOf("Rate limiter")).toBeLessThan(callOrder.indexOf("Shared SDK"));
+    expect(callOrder.indexOf("Pipe stdin support")).toBeLessThan(callOrder.indexOf("Shared SDK"));
+
+    // Final: C2 last
+    expect(callOrder.indexOf("Shared SDK")).toBeLessThan(callOrder.indexOf("Integration test"));
+    expect(callOrder[callOrder.length - 1]).toBe("Integration test");
+
+    // Parallel execution: roots (a1, b1) should overlap
+    expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+  });
+
+  it("complex DAG: track A failure skips C1/C2 but track B still completes", async () => {
+    vi.mocked(executeRun).mockImplementation(async (plan) => {
+      // A1 fails
+      if (plan.task === "Auth middleware") {
+        return {
+          success: false,
+          output: undefined,
+          validation: { passed: false, totalAttempts: 1, stepResults: [] },
+          durationMs: 500,
+          error: "Auth middleware failed",
+        };
+      }
+      return {
+        success: true,
+        output: { mode: "git", branch: `forge/test/123`, sha: "abc", filesChanged: 1, insertions: 10, deletions: 2 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [] },
+        durationMs: 1000,
+      };
+    });
+
+    const pipeline = makePipeline([
+      { id: "a1", task: "Auth middleware" },
+      { id: "a2", task: "Rate limiter", depends_on: ["a1"] },
+      { id: "b1", task: "History/undo system" },
+      { id: "b2", task: "Pipe stdin support", depends_on: ["b1"] },
+      { id: "c1", task: "Shared SDK", depends_on: ["a2", "b2"] },
+      { id: "c2", task: "Integration test", depends_on: ["c1"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("failed");
+
+    // Track A: a1 failed, a2 cascade-skipped
+    expect(result.nodes.get("a1")!.status).toBe("failed");
+    expect(result.nodes.get("a2")!.status).toBe("skipped");
+
+    // Track B: both completed independently
+    expect(result.nodes.get("b1")!.status).toBe("completed");
+    expect(result.nodes.get("b2")!.status).toBe("completed");
+
+    // Convergence: c1 skipped because a2 was skipped, c2 cascade-skipped
+    expect(result.nodes.get("c1")!.status).toBe("skipped");
+    expect(result.nodes.get("c2")!.status).toBe("skipped");
+  });
+
+  it("complex DAG: convergence node C1 fails, only C2 is skipped", async () => {
+    vi.mocked(executeRun).mockImplementation(async (plan) => {
+      if (plan.task === "Shared SDK") {
+        return {
+          success: false,
+          output: undefined,
+          validation: { passed: false, totalAttempts: 1, stepResults: [] },
+          durationMs: 500,
+          error: "SDK build failed",
+        };
+      }
+      return {
+        success: true,
+        output: { mode: "git", branch: `forge/test/123`, sha: "abc", filesChanged: 1, insertions: 10, deletions: 2 },
+        validation: { passed: true, totalAttempts: 1, stepResults: [] },
+        durationMs: 1000,
+      };
+    });
+
+    const pipeline = makePipeline([
+      { id: "a1", task: "Auth middleware" },
+      { id: "a2", task: "Rate limiter", depends_on: ["a1"] },
+      { id: "b1", task: "History/undo system" },
+      { id: "b2", task: "Pipe stdin support", depends_on: ["b1"] },
+      { id: "c1", task: "Shared SDK", depends_on: ["a2", "b2"] },
+      { id: "c2", task: "Integration test", depends_on: ["c1"] },
+    ]);
+
+    const executor = new PipelineExecutor(pipeline);
+    const result = await executor.execute();
+
+    expect(result.status).toBe("failed");
+
+    // Both tracks completed successfully
+    for (const nodeId of ["a1", "a2", "b1", "b2"]) {
+      expect(result.nodes.get(nodeId)!.status).toBe("completed");
+    }
+
+    // Convergence failed, final skipped
+    expect(result.nodes.get("c1")!.status).toBe("failed");
+    expect(result.nodes.get("c2")!.status).toBe("skipped");
+    expect(result.nodes.get("c2")!.skipReason).toContain("c1");
+
+    // All 5 upstream nodes executed, c2 was skipped
+    expect(executeRun).toHaveBeenCalledTimes(5);
+  });
+
   it("checkpoint-hydrated skips do not trigger cascade skip", async () => {
     // a is hydrated from checkpoint (status=skipped + hydratedFromCheckpoint + result.success)
     // b depends on a and has no condition — b should execute (NOT be cascade-skipped)

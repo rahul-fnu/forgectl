@@ -187,6 +187,98 @@ describe("graph helpers", () => {
   });
 });
 
+// ── Complex DAG: parallel tracks converging into shared integration ──────────
+//
+//   Track A:          Track B:
+//     A1                 B1
+//      |                  |
+//     A2                 B2
+//      \                /
+//       +--- C1 ---+
+//            |
+//           C2
+//
+describe("complex DAG — parallel tracks with diamond convergence", () => {
+  const complexPipeline = makePipeline([
+    { id: "a1", task: "Auth middleware" },
+    { id: "a2", task: "Rate limiter", depends_on: ["a1"] },
+    { id: "b1", task: "History/undo system" },
+    { id: "b2", task: "Pipe stdin support", depends_on: ["b1"] },
+    { id: "c1", task: "Shared SDK", depends_on: ["a2", "b2"] },
+    { id: "c2", task: "Integration test", depends_on: ["c1"] },
+  ]);
+
+  it("validates as a legal DAG", () => {
+    const result = validateDAG(complexPipeline);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("topological sort respects all dependency edges", () => {
+    const order = topologicalSort(complexPipeline);
+    expect(order).toHaveLength(6);
+    // Within track A
+    expect(order.indexOf("a1")).toBeLessThan(order.indexOf("a2"));
+    // Within track B
+    expect(order.indexOf("b1")).toBeLessThan(order.indexOf("b2"));
+    // Diamond convergence: c1 after both track tails
+    expect(order.indexOf("a2")).toBeLessThan(order.indexOf("c1"));
+    expect(order.indexOf("b2")).toBeLessThan(order.indexOf("c1"));
+    // Final integration
+    expect(order.indexOf("c1")).toBeLessThan(order.indexOf("c2"));
+  });
+
+  it("parallel groups: independent tracks in same level, convergence in own level", () => {
+    const groups = getParallelGroups(complexPipeline);
+    // Level 0: a1, b1 (roots)
+    // Level 1: a2, b2 (stacked on respective roots)
+    // Level 2: c1 (fan-in)
+    // Level 3: c2 (final)
+    expect(groups).toEqual([
+      expect.arrayContaining(["a1", "b1"]),
+      expect.arrayContaining(["a2", "b2"]),
+      ["c1"],
+      ["c2"],
+    ]);
+    expect(groups[0]).toHaveLength(2);
+    expect(groups[1]).toHaveLength(2);
+  });
+
+  it("collectAncestors of c1 includes both full tracks", () => {
+    const ancestors = collectAncestors(complexPipeline, "c1");
+    expect([...ancestors].sort()).toEqual(["a1", "a2", "b1", "b2"]);
+  });
+
+  it("collectAncestors of c2 includes every other node", () => {
+    const ancestors = collectAncestors(complexPipeline, "c2");
+    expect([...ancestors].sort()).toEqual(["a1", "a2", "b1", "b2", "c1"]);
+  });
+
+  it("collectDescendants of a1 follows through convergence to c2", () => {
+    const desc = collectDescendants(complexPipeline, "a1");
+    expect([...desc].sort()).toEqual(["a2", "c1", "c2"]);
+  });
+
+  it("collectDescendants of b1 follows through convergence to c2", () => {
+    const desc = collectDescendants(complexPipeline, "b1");
+    expect([...desc].sort()).toEqual(["b2", "c1", "c2"]);
+  });
+
+  it("tracks are not ancestors of each other", () => {
+    expect(isAncestor(complexPipeline, "a1", "b1")).toBe(false);
+    expect(isAncestor(complexPipeline, "a1", "b2")).toBe(false);
+    expect(isAncestor(complexPipeline, "b1", "a1")).toBe(false);
+    expect(isAncestor(complexPipeline, "b1", "a2")).toBe(false);
+  });
+
+  it("both track roots are ancestors of the convergence node", () => {
+    expect(isAncestor(complexPipeline, "a1", "c1")).toBe(true);
+    expect(isAncestor(complexPipeline, "b1", "c1")).toBe(true);
+    expect(isAncestor(complexPipeline, "a1", "c2")).toBe(true);
+    expect(isAncestor(complexPipeline, "b1", "c2")).toBe(true);
+  });
+});
+
 describe("parsePipelineYaml", () => {
   it("parses valid YAML", () => {
     const yaml = `
