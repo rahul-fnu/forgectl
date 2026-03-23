@@ -29,8 +29,69 @@ export interface PRInfo {
 export interface ProcessResult {
   prNumber: number;
   branch: string;
-  status: "merged" | "skipped" | "failed";
+  status: "merged" | "skipped" | "failed" | "request_changes";
   error?: string;
+}
+
+export interface InlineReviewComment {
+  file: string;
+  line: number;
+  severity: "must_fix" | "should_fix" | "nit";
+  body: string;
+}
+
+export interface StructuredReview {
+  summary: string;
+  approval: "approve" | "request_changes";
+  comments: InlineReviewComment[];
+}
+
+export function parseStructuredReview(raw: string): StructuredReview | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  // Try to extract JSON block from markdown fences
+  let jsonText = trimmed;
+  const fenceMatch = /```(?:json)?\s*\n([\s\S]*?)```/.exec(trimmed);
+  if (fenceMatch) {
+    jsonText = fenceMatch[1].trim();
+  } else {
+    // Try to find a raw JSON object
+    const objMatch = /\{[\s\S]*\}/.exec(trimmed);
+    if (objMatch) {
+      jsonText = objMatch[0];
+    }
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return undefined;
+  }
+
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const obj = parsed as Record<string, unknown>;
+
+  const summary = typeof obj.summary === "string" ? obj.summary : "No summary";
+  const approval = obj.approval === "request_changes" ? "request_changes" as const : "approve" as const;
+
+  const comments: InlineReviewComment[] = [];
+  if (Array.isArray(obj.comments)) {
+    for (const item of obj.comments) {
+      if (!item || typeof item !== "object") continue;
+      const c = item as Record<string, unknown>;
+      const file = typeof c.file === "string" ? c.file : undefined;
+      const line = typeof c.line === "number" ? c.line : undefined;
+      const sev = typeof c.severity === "string" ? c.severity.toLowerCase() : undefined;
+      const body = typeof c.body === "string" ? c.body : undefined;
+      if (!file || !line || !body) continue;
+      const severity = (sev === "must_fix" || sev === "should_fix" || sev === "nit") ? sev : "nit";
+      comments.push({ file, line, severity, body });
+    }
+  }
+
+  return { summary, approval, comments };
 }
 
 export interface PRProcessorConfig {
@@ -144,7 +205,10 @@ export class PRProcessor {
 
       // Step 4: Review diff (optional)
       if (this.config.enableReview) {
-        await this.reviewDiff(tmpDir, pr);
+        const review = await this.reviewDiff(tmpDir, pr);
+        if (review?.approval === "request_changes") {
+          return this.recordResult(pr, "request_changes", review.summary);
+        }
       }
 
       // Step 5+6: Wait for CI then merge, with retry on failure
@@ -316,27 +380,138 @@ export class PRProcessor {
   }
 
   /**
-   * Have Claude review the diff for obvious issues.
+   * Review the diff with structured inline comments.
+   * Returns the parsed review, or undefined if review fails.
    */
-  async reviewDiff(tmpDir: string, pr: PRInfo): Promise<void> {
+  async reviewDiff(tmpDir: string, pr: PRInfo): Promise<StructuredReview | undefined> {
     try {
       const { writeFileSync: ws } = await import("node:fs");
-      const diff = execSync(`git diff origin/main...HEAD --stat`, { cwd: tmpDir, encoding: "utf-8" });
+
+      // Get full diff against main
+      const diff = execSync(`git diff origin/main...HEAD`, {
+        cwd: tmpDir,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      // Fetch PR description for context
+      const prDescription = await this.fetchPRDescription(pr.number);
+
       const prompt = [
-        `Review this PR diff for obvious issues (security, logic errors, missing error handling):`,
+        `You are reviewing PR #${pr.number}: "${pr.title}".`,
+        ``,
+        ...(prDescription ? [`PR description:`, prDescription, ``] : []),
+        `Here is the full diff:`,
+        ``,
         diff,
-        `If the changes look safe, say "LGTM". If there are critical issues, list them.`,
+        ``,
+        `Review this diff and check for:`,
+        `- Does the code match the PR description requirements?`,
+        `- Error handling patterns (missing try/catch, swallowed errors)`,
+        `- Test coverage (new code without tests)`,
+        `- Security issues (injection, path traversal)`,
+        `- Code patterns (consistent with codebase style)`,
+        `- Unused imports/variables`,
+        ``,
+        `Output ONLY a JSON object (no markdown fences, no extra text) in this exact format:`,
+        `{`,
+        `  "summary": "Overall assessment of the changes",`,
+        `  "approval": "approve" or "request_changes",`,
+        `  "comments": [`,
+        `    { "file": "src/foo.ts", "line": 42, "severity": "must_fix", "body": "Description of issue" }`,
+        `  ]`,
+        `}`,
+        ``,
+        `Severity levels:`,
+        `- must_fix: Blocks merge. Correctness bugs, security issues, data loss risks.`,
+        `- should_fix: Address if straightforward. Missing edge cases, weak error handling.`,
+        `- nit: Style/preference.`,
+        ``,
+        `Set approval to "request_changes" if there are any must_fix comments. Otherwise "approve".`,
+        `If the code is clean, set approval to "approve" with an empty comments array.`,
       ].join("\n");
+
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
       ws(promptFile, prompt);
-      execSync(
-        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
-        { cwd: tmpDir, encoding: "utf-8", timeout: 60_000 },
+      const output = execSync(
+        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 3`,
+        { cwd: tmpDir, encoding: "utf-8", timeout: 120_000 },
       );
-    } catch {
-      // Review is best-effort
-      this.logger.warn("merge-daemon", `PR #${pr.number}: Review step failed (best-effort, continuing)`);
+
+      const review = parseStructuredReview(output);
+      if (!review) {
+        this.logger.warn("merge-daemon", `PR #${pr.number}: Could not parse review output as JSON`);
+        return undefined;
+      }
+
+      // Post review to GitHub
+      await this.submitPRReview(pr.number, review);
+
+      this.logger.info(
+        "merge-daemon",
+        `PR #${pr.number}: Review complete — ${review.approval} (${review.comments.length} comments)`,
+      );
+
+      return review;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("merge-daemon", `PR #${pr.number}: Review step failed: ${msg}`);
+      return undefined;
     }
+  }
+
+  /**
+   * Post a structured review with inline comments on the PR via GitHub API.
+   */
+  async submitPRReview(prNumber: number, review: StructuredReview): Promise<void> {
+    const { owner, repo } = this.config;
+
+    // Map inline comments to GitHub's review comment format
+    const ghComments = review.comments.map((c) => ({
+      path: c.file,
+      line: c.line,
+      body: `**[${c.severity.toUpperCase()}]** ${c.body}`,
+    }));
+
+    const event = review.approval === "request_changes" ? "REQUEST_CHANGES" : "APPROVE";
+    const body = review.approval === "approve"
+      ? `LGTM — ${review.summary}`
+      : review.summary;
+
+    const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({
+        event,
+        body,
+        comments: ghComments,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      this.logger.warn(
+        "merge-daemon",
+        `PR #${prNumber}: Failed to submit review (${response.status}): ${text}`,
+      );
+    }
+  }
+
+  /**
+   * Fetch a PR's description body from the API.
+   */
+  private async fetchPRDescription(prNumber: number): Promise<string | null> {
+    const { owner, repo } = this.config;
+    const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`;
+    try {
+      const resp = await fetch(url, { headers: this.headers });
+      if (resp.ok) {
+        const data = (await resp.json()) as { body?: string | null };
+        return data.body ?? null;
+      }
+    } catch { /* ignore */ }
+    return null;
   }
 
   /**
