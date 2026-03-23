@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRProcessor, type PRProcessorConfig, type PRInfo } from "../../src/merge-daemon/pr-processor.js";
+import { PRProcessor, type PRProcessorConfig, type PRInfo, parseStructuredReview } from "../../src/merge-daemon/pr-processor.js";
 import type { Logger } from "../../src/logging/logger.js";
 
 function makeLogger(): Logger {
@@ -159,5 +159,146 @@ describe("PRProcessor", () => {
       expect(result.error).toContain("clone failed");
       expect(processor.getHistory()).toHaveLength(1);
     });
+  });
+
+  describe("submitPRReview", () => {
+    it("posts APPROVE review with LGTM body", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+
+      const processor = new PRProcessor(makeConfig(), logger);
+      await processor.submitPRReview(42, {
+        summary: "Looks good",
+        approval: "approve",
+        comments: [],
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining("/pulls/42/reviews"),
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"APPROVE"'),
+        }),
+      );
+      const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(body.event).toBe("APPROVE");
+      expect(body.body).toContain("LGTM");
+    });
+
+    it("posts REQUEST_CHANGES review with inline comments", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+
+      const processor = new PRProcessor(makeConfig(), logger);
+      await processor.submitPRReview(42, {
+        summary: "Found issues",
+        approval: "request_changes",
+        comments: [
+          { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Missing error handling" },
+        ],
+      });
+
+      const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(body.event).toBe("REQUEST_CHANGES");
+      expect(body.comments).toHaveLength(1);
+      expect(body.comments[0].path).toBe("src/foo.ts");
+      expect(body.comments[0].line).toBe(10);
+      expect(body.comments[0].body).toContain("[MUST_FIX]");
+    });
+  });
+});
+
+describe("parseStructuredReview", () => {
+  it("parses valid JSON review", () => {
+    const json = JSON.stringify({
+      summary: "All good",
+      approval: "approve",
+      comments: [],
+    });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("All good");
+    expect(result!.comments).toHaveLength(0);
+  });
+
+  it("parses JSON with comments", () => {
+    const json = JSON.stringify({
+      summary: "Issues found",
+      approval: "request_changes",
+      comments: [
+        { file: "src/foo.ts", line: 42, severity: "must_fix", body: "Missing null check" },
+        { file: "src/bar.ts", line: 10, severity: "nit", body: "Unnecessary import" },
+      ],
+    });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(2);
+    expect(result!.comments[0].severity).toBe("must_fix");
+    expect(result!.comments[1].severity).toBe("nit");
+  });
+
+  it("extracts JSON from markdown fences", () => {
+    const raw = `Here is my review:\n\n\`\`\`json\n{"summary":"LGTM","approval":"approve","comments":[]}\n\`\`\``;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("extracts JSON object from surrounding text", () => {
+    const raw = `Some preamble text\n{"summary":"ok","approval":"approve","comments":[]}\nSome trailing text`;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseStructuredReview("")).toBeUndefined();
+  });
+
+  it("returns undefined for invalid JSON", () => {
+    expect(parseStructuredReview("not json at all")).toBeUndefined();
+  });
+
+  it("skips malformed comments", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "approve",
+      comments: [
+        { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Good comment" },
+        { file: "missing-line" }, // missing line and body
+        { severity: "nit" }, // missing file and body
+      ],
+    });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.comments).toHaveLength(1);
+  });
+
+  it("normalizes unknown severity to nit", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "approve",
+      comments: [
+        { file: "src/foo.ts", line: 5, severity: "critical", body: "Something wrong" },
+      ],
+    });
+    const result = parseStructuredReview(json);
+    expect(result!.comments[0].severity).toBe("nit");
+  });
+
+  it("defaults approval to approve for unknown values", () => {
+    const json = JSON.stringify({
+      summary: "Review",
+      approval: "banana",
+      comments: [],
+    });
+    const result = parseStructuredReview(json);
+    expect(result!.approval).toBe("approve");
   });
 });

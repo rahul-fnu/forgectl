@@ -106,6 +106,8 @@ export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number, config
           const result = await processor.processPR(pr);
           if (result.status === "merged") {
             logger.info("merge-daemon", `PR #${pr.number} merged`);
+          } else if (result.status === "request_changes") {
+            logger.info("merge-daemon", `PR #${pr.number} review requested changes: ${result.error}`);
           } else if (result.status === "failed") {
             logger.warn("merge-daemon", `PR #${pr.number} failed: ${result.error}`);
           }
