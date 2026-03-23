@@ -4,6 +4,7 @@
 
 import type { FastifyInstance } from "fastify";
 import type { PRProcessor } from "./pr-processor.js";
+import type { ReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 
 export interface MergeDaemonStatus {
   status: "running" | "idle";
@@ -17,6 +18,7 @@ export function registerMergeDaemonRoutes(
   app: FastifyInstance,
   getStatus: () => MergeDaemonStatus,
   processor: PRProcessor,
+  metricsRepo?: ReviewMetricsRepository,
 ): void {
   app.get("/health", async () => ({
     status: "ok",
@@ -36,4 +38,12 @@ export function registerMergeDaemonRoutes(
   });
 
   app.get("/api/v1/history", async () => processor.getHistory());
+
+  app.get<{ Querystring: { repo?: string } }>("/api/v1/review-quality", async (request) => {
+    if (!metricsRepo) {
+      return { error: "Review metrics not available" };
+    }
+    const repo = request.query.repo;
+    return metricsRepo.computeStats(repo);
+  });
 }

@@ -301,4 +301,114 @@ describe("parseStructuredReview", () => {
     const result = parseStructuredReview(json);
     expect(result!.approval).toBe("approve");
   });
+
+  it("parses suggested_fix from comments", () => {
+    const json = JSON.stringify({
+      summary: "Issues found",
+      approval: "request_changes",
+      comments: [
+        { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Missing null check", suggested_fix: "Add if (x != null) guard" },
+        { file: "src/bar.ts", line: 5, severity: "nit", body: "Style issue" },
+      ],
+    });
+    const result = parseStructuredReview(json);
+    expect(result).toBeDefined();
+    expect(result!.comments[0].suggested_fix).toBe("Add if (x != null) guard");
+    expect(result!.comments[1].suggested_fix).toBeUndefined();
+  });
+});
+
+describe("PRProcessor.enrichPRDescription", () => {
+  it("updates PR description with ticket context when body is empty", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      // fetchPRFull (fetchPRDescription calls fetchPRFull)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ body: "" }),
+      } as Response)
+      // fetchLinkedIssue
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ number: 42, title: "Fix the widget", body: "The widget is broken\n\n## Acceptance Criteria\n- Widget works" }),
+      } as Response)
+      // PATCH to update PR
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const processor = new PRProcessor(makeConfig(), makeLogger());
+    const pr = makePR({ title: "Fix #42 widget bug", number: 7 });
+
+    await processor.enrichPRDescription(pr, "/tmp/fake");
+
+    // Should have called PATCH to update PR body
+    const patchCall = fetchSpy.mock.calls.find(c => (c[1] as RequestInit)?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const patchBody = JSON.parse((patchCall![1] as RequestInit).body as string);
+    expect(patchBody.body).toContain("<!-- forgectl-generated -->");
+    expect(patchBody.body).toContain("#42");
+    expect(patchBody.body).toContain("Fix the widget");
+    expect(patchBody.body).toContain("Requirements (from ticket)");
+    expect(patchBody.body).toContain("Acceptance Criteria");
+  });
+
+  it("skips update when PR has human-written description", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ body: "Human wrote this description" }),
+      } as Response);
+
+    const processor = new PRProcessor(makeConfig(), makeLogger());
+    const pr = makePR({ title: "Fix #42 widget bug", number: 7 });
+
+    await processor.enrichPRDescription(pr, "/tmp/fake");
+
+    // No PATCH call expected
+    const patchCall = fetchSpy.mock.calls.find(c => (c[1] as RequestInit)?.method === "PATCH");
+    expect(patchCall).toBeUndefined();
+  });
+
+  it("overwrites forgectl-generated description", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ body: "<!-- forgectl-generated -->\nOld content" }),
+      } as Response)
+      // fetchLinkedIssue — no issue found
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      // PATCH
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const processor = new PRProcessor(makeConfig(), makeLogger());
+    const pr = makePR({ title: "Some change", number: 7 });
+
+    await processor.enrichPRDescription(pr, "/tmp/fake");
+
+    const patchCall = fetchSpy.mock.calls.find(c => (c[1] as RequestInit)?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const patchBody = JSON.parse((patchCall![1] as RequestInit).body as string);
+    expect(patchBody.body).toContain("<!-- forgectl-generated -->");
+  });
+});
+
+describe("PRProcessor.submitPRReview with suggested_fix", () => {
+  it("includes suggested fix in comment body", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
+    } as Response);
+
+    const processor = new PRProcessor(makeConfig(), makeLogger());
+    await processor.submitPRReview(42, {
+      summary: "Issues found",
+      approval: "request_changes",
+      comments: [
+        { file: "src/foo.ts", line: 10, severity: "must_fix", body: "Missing error handling", suggested_fix: "Wrap in try/catch" },
+      ],
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.comments[0].body).toContain("[MUST_FIX]");
+    expect(body.comments[0].body).toContain("Suggested fix:");
+    expect(body.comments[0].body).toContain("Wrap in try/catch");
+  });
 });
