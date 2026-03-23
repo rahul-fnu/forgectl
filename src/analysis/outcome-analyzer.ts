@@ -1,5 +1,7 @@
+import yaml from "js-yaml";
 import type { OutcomeRow } from "../storage/repositories/outcomes.js";
 import type { CalibrationRow } from "../storage/repositories/review-findings.js";
+import type { TaskSpec } from "../task/types.js";
 
 export interface AnalysisReport {
   period: { from: string; to: string };
@@ -10,6 +12,16 @@ export interface AnalysisReport {
   turnEstimationBias: number;
   recommendations: string[];
   contextSuggestions?: ContextSuggestion[];
+}
+
+export interface ImprovementSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  confidence: number;
+  category: "testing" | "error-handling" | "context" | "calibration";
+  taskSpec: TaskSpec;
+  taskSpecYaml: string;
 }
 
 export interface ContextSuggestion {
@@ -84,7 +96,6 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
 
   const totalRuns = filtered.length;
 
-  // Period
   const timestamps = filtered
     .map(r => r.completedAt ?? r.startedAt)
     .filter((t): t is string => t !== null)
@@ -92,14 +103,12 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
   const from = timestamps[0] ?? "";
   const to = timestamps[timestamps.length - 1] ?? "";
 
-  // Rubber stamp rate
   const reviewedRuns = filtered.filter(r => r.humanReviewResult !== null);
   const rubberStamps = reviewedRuns.filter(r => r.humanReviewResult === "rubber_stamp");
   const rubberStampRate = reviewedRuns.length > 0
     ? rubberStamps.length / reviewedRuns.length
     : 0;
 
-  // Failure mode distribution
   const failureCounts = new Map<string, number>();
   const failedRuns = filtered.filter(r => r.failureMode !== null);
   for (const r of failedRuns) {
@@ -114,7 +123,6 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     }))
     .sort((a, b) => b.count - a.count);
 
-  // Module retry rates (risky modules)
   const moduleStats = new Map<string, { total: number; failures: number; totalRetries: number }>();
   for (const r of filtered) {
     if (!r.modulesTouched) continue;
@@ -143,15 +151,12 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     .filter(m => m.failureRate > 0 || m.avgRetries > 0)
     .sort((a, b) => b.failureRate - a.failureRate || b.avgRetries - a.avgRetries);
 
-  // Turn estimation bias: average turns across runs (positive = more turns than expected baseline)
-  // Without an estimatedTurns field, we compute the mean turns as a proxy metric
   const runsWithTurns = filtered.filter(r => r.totalTurns !== null);
   const avgTurns = runsWithTurns.length > 0
     ? runsWithTurns.reduce((sum, r) => sum + r.totalTurns!, 0) / runsWithTurns.length
     : 0;
   const turnEstimationBias = Math.round(avgTurns * 100) / 100;
 
-  // Review comment patterns
   const categoryCounts = new Map<string, number>();
   for (const r of filtered) {
     if (!r.reviewCommentsJson) continue;
@@ -168,7 +173,6 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     }
   }
 
-  // Generate recommendations
   const recommendations: string[] = [];
 
   if (rubberStampRate >= 0.8 && reviewedRuns.length >= 3) {
@@ -220,7 +224,6 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
     );
   }
 
-  // Context suggestions: advise the context engine on file relevance
   const contextSuggestions = generateContextSuggestions(moduleStats, riskyModules);
 
   return {
@@ -235,10 +238,6 @@ export function analyzeOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions): Analy
   };
 }
 
-/**
- * Generate context suggestions for the learning loop.
- * These feed back into the Context Engine to improve file selection.
- */
 function generateContextSuggestions(
   moduleStats: Map<string, { total: number; failures: number; totalRetries: number }>,
   riskyModules: Array<{ module: string; failureRate: number; avgRetries: number }>,
@@ -268,7 +267,6 @@ function generateContextSuggestions(
     }
   }
 
-  // Modules with high success and low retries can be demoted to save budget
   for (const [module, stats] of moduleStats) {
     if (stats.total < 3) continue;
     const failureRate = stats.failures / stats.total;
@@ -411,6 +409,8 @@ export function compareContextOutcomes(rows: OutcomeRow[], opts: AnalyzeOptions)
   };
 }
 
+// --- Calibration (RAH-29) ---
+
 export interface CalibrationModuleReport {
   module: string;
   totalComments: number;
@@ -540,4 +540,122 @@ export function buildCalibrationReport(
   }
 
   return { modules, overall, warnings };
+}
+
+// --- Improvement Suggestions (RAH-30) ---
+
+export function generateImprovementSuggestions(report: AnalysisReport): ImprovementSuggestion[] {
+  const suggestions: ImprovementSuggestion[] = [];
+
+  // Pattern 1: Modules with high retry/failure rate -> add tests
+  for (const risky of report.riskyModules) {
+    if (risky.failureRate >= 0.4 && risky.avgRetries >= 2) {
+      const id = `add-tests-${slugify(risky.module)}`;
+      const confidence = Math.min(1, risky.failureRate * 0.8 + risky.avgRetries * 0.1);
+      const taskSpec: TaskSpec = {
+        id,
+        title: `Add unit tests for ${risky.module}`,
+        description: `Module ${risky.module} has a ${Math.round(risky.failureRate * 100)}% failure rate with avg ${risky.avgRetries.toFixed(1)} retries. Add targeted unit tests to catch regressions earlier.`,
+        context: { files: [`${risky.module}/**/*.ts`], modules: [risky.module] },
+        constraints: ["Do not modify existing public APIs", "Tests must pass in CI"],
+        acceptance: [
+          { run: "npm test", description: "All tests pass" },
+          { description: `New tests cover key paths in ${risky.module}` },
+        ],
+        decomposition: { strategy: "auto" },
+        effort: { max_turns: 50, max_review_rounds: 3, timeout: "30m" },
+        metadata: { priority: "high", source: "outcome-analyzer", confidence: String(Math.round(confidence * 100)) },
+      };
+      suggestions.push({ id, title: taskSpec.title, description: taskSpec.description!, confidence, category: "testing", taskSpec, taskSpecYaml: dumpTaskSpecYaml(taskSpec) });
+    }
+  }
+
+  // Pattern 2: Review comments with recurring categories -> add conventions
+  const reviewCategories = extractReviewCategories(report);
+  for (const [category, count] of reviewCategories) {
+    if (count < 3) continue;
+    const id = `add-convention-${slugify(category)}`;
+    const confidence = Math.min(1, count / 10);
+    const taskSpec: TaskSpec = {
+      id,
+      title: `Add ${category} convention to CLAUDE.md`,
+      description: `Review agent keeps flagging ${category} issues (${count} occurrences). Add a coding convention to CLAUDE.md to prevent this pattern.`,
+      context: { files: ["CLAUDE.md"] },
+      constraints: ["Only append new conventions, do not remove existing ones"],
+      acceptance: [
+        { run: "npm run typecheck", description: "Typecheck passes" },
+        { description: `CLAUDE.md contains ${category} convention` },
+      ],
+      decomposition: { strategy: "forbidden" },
+      effort: { max_turns: 10, max_review_rounds: 1, timeout: "10m" },
+      metadata: { priority: "medium", source: "outcome-analyzer", confidence: String(Math.round(confidence * 100)) },
+    };
+    suggestions.push({ id, title: taskSpec.title, description: taskSpec.description!, confidence, category: "error-handling", taskSpec, taskSpecYaml: dumpTaskSpecYaml(taskSpec) });
+  }
+
+  // Pattern 3: Context suggestions with "boost" action -> add doc reference
+  if (report.contextSuggestions) {
+    for (const cs of report.contextSuggestions) {
+      if (cs.action !== "boost") continue;
+      const id = `add-context-${slugify(cs.module)}`;
+      const confidence = cs.confidence;
+      const taskSpec: TaskSpec = {
+        id,
+        title: `Add context references for ${cs.module}`,
+        description: `Tasks touching ${cs.module} need more context upfront: ${cs.reason}. Add relevant documentation references to the module's context configuration.`,
+        context: { files: [`${cs.module}/**/*.ts`], modules: [cs.module] },
+        constraints: ["Only modify context configuration, not source code"],
+        acceptance: [
+          { run: "npm run typecheck", description: "Typecheck passes" },
+          { description: `Context configuration updated for ${cs.module}` },
+        ],
+        decomposition: { strategy: "forbidden" },
+        effort: { max_turns: 15, max_review_rounds: 1, timeout: "15m" },
+        metadata: { priority: "medium", source: "outcome-analyzer", confidence: String(Math.round(confidence * 100)) },
+      };
+      suggestions.push({ id, title: taskSpec.title, description: taskSpec.description!, confidence, category: "context", taskSpec, taskSpecYaml: dumpTaskSpecYaml(taskSpec) });
+    }
+  }
+
+  // Pattern 4: High turn estimation bias -> calibration task
+  if (report.turnEstimationBias > 15) {
+    const id = "calibrate-turn-estimation";
+    const confidence = Math.min(1, (report.turnEstimationBias - 15) / 20);
+    const taskSpec: TaskSpec = {
+      id,
+      title: "Calibrate turn estimation for complex modules",
+      description: `Average turns per run is ${report.turnEstimationBias}, well above the expected baseline. Calibrate the token/turn estimation to better predict effort for complex tasks.`,
+      context: { files: ["src/kg/merkle.ts", "src/context/builder.ts"] },
+      constraints: ["Do not change estimation for simple modules", "Maintain backward compatibility"],
+      acceptance: [
+        { run: "npm test", description: "All tests pass" },
+        { run: "npm run typecheck", description: "Typecheck passes" },
+      ],
+      decomposition: { strategy: "auto" },
+      effort: { max_turns: 50, max_review_rounds: 3, timeout: "30m" },
+      metadata: { priority: "low", source: "outcome-analyzer", confidence: String(Math.round(confidence * 100)) },
+    };
+    suggestions.push({ id, title: taskSpec.title, description: taskSpec.description!, confidence, category: "calibration", taskSpec, taskSpecYaml: dumpTaskSpecYaml(taskSpec) });
+  }
+
+  return suggestions.sort((a, b) => b.confidence - a.confidence);
+}
+
+function extractReviewCategories(report: AnalysisReport): Map<string, number> {
+  const cats = new Map<string, number>();
+  const recMatch = report.recommendations.find(r => r.includes("review comment categories"));
+  if (!recMatch) return cats;
+  const matches = recMatch.matchAll(/(\S+)\s+\((\d+)\)/g);
+  for (const m of matches) {
+    cats.set(m[1], parseInt(m[2], 10));
+  }
+  return cats;
+}
+
+function slugify(s: string): string {
+  return s.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+}
+
+function dumpTaskSpecYaml(spec: TaskSpec): string {
+  return yaml.dump(spec, { lineWidth: 100, quotingType: "\"", forceQuotes: false, noRefs: true, sortKeys: false });
 }

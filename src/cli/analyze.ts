@@ -3,13 +3,15 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
 import { createReviewFindingsRepository } from "../storage/repositories/review-findings.js";
-import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, type AnalysisReport, type ContextComparisonReport, type CalibrationReport } from "../analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion } from "../analysis/outcome-analyzer.js";
+import type { TrackerAdapter } from "../tracker/types.js";
 
 interface AnalyzeCommandOptions {
   since?: string;
   module?: string;
   compareContext?: boolean;
   reviewCalibration?: boolean;
+  suggest?: boolean;
 }
 
 function formatReport(report: AnalysisReport): void {
@@ -96,6 +98,55 @@ function formatCalibrationReport(report: CalibrationReport): void {
   console.log("");
 }
 
+export async function publishSuggestionsToTracker(
+  suggestions: ImprovementSuggestion[],
+  tracker: TrackerAdapter,
+  autoConfidenceThreshold = 0.7,
+): Promise<{ created: string[]; skipped: string[] }> {
+  const created: string[] = [];
+  const skipped: string[] = [];
+
+  for (const s of suggestions) {
+    if (!tracker.createIssue) {
+      skipped.push(s.id);
+      continue;
+    }
+    const labels = s.confidence >= autoConfidenceThreshold
+      ? ["forgectl-suggestion"]
+      : ["forgectl-suggestion", "needs-review"];
+    const body = `${s.description}\n\n**Category:** ${s.category}\n**Confidence:** ${Math.round(s.confidence * 100)}%\n**Source:** outcome-analyzer\n\n\`\`\`yaml\n${s.taskSpecYaml}\`\`\``;
+    const identifier = await tracker.createIssue(s.title, body, labels);
+    created.push(identifier);
+  }
+
+  return { created, skipped };
+}
+
+function formatSuggestions(suggestions: ImprovementSuggestion[]): void {
+  if (suggestions.length === 0) {
+    console.log(chalk.yellow("\n  No improvement suggestions generated (need more outcome data)."));
+    console.log("");
+    return;
+  }
+
+  console.log(chalk.bold("\n  Improvement Suggestions:"));
+  for (const s of suggestions) {
+    const conf = `${Math.round(s.confidence * 100)}%`;
+    const badge = s.confidence >= 0.7 ? chalk.green(`[${conf}]`) : chalk.yellow(`[${conf}]`);
+    console.log(`\n    ${badge} ${chalk.bold(s.title)}`);
+    console.log(`    Category: ${s.category}`);
+    console.log(`    ${s.description}`);
+    console.log(chalk.dim(`    ---`));
+    for (const line of s.taskSpecYaml.split("\n").slice(0, 8)) {
+      console.log(chalk.dim(`    ${line}`));
+    }
+    if (s.taskSpecYaml.split("\n").length > 8) {
+      console.log(chalk.dim(`    ...`));
+    }
+  }
+  console.log("");
+}
+
 export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void> {
   const db = createDatabase();
   try {
@@ -126,6 +177,11 @@ export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void>
     });
 
     formatReport(report);
+
+    if (opts.suggest) {
+      const suggestions = generateImprovementSuggestions(report);
+      formatSuggestions(suggestions);
+    }
   } finally {
     closeDatabase(db);
   }
