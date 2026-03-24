@@ -214,6 +214,8 @@ export interface PRProcessorConfig {
   validationCommands: string[];
   mergerAuthorName?: string;
   mergerAuthorEmail?: string;
+  /** Optional tracker adapter for creating issues (e.g. post-merge test gen). */
+  tracker?: import("../tracker/types.js").TrackerAdapter;
 }
 
 export interface ReviewFailureState {
@@ -1227,14 +1229,28 @@ export class PRProcessor {
 
       if (gaps.length === 0) return;
 
+      const gapList = gaps.map((f) => `- \`${f}\` — no test coverage mapping found`).join("\n");
+
       const body = [
         "**forgectl post-merge analysis:** Coverage gaps detected in merged files:\n",
-        ...gaps.map((f) => `- \`${f}\` — no test coverage mapping found`),
+        gapList,
         "\nConsider adding tests for these files.",
       ].join("\n");
 
       await this.postComment(pr.number, body);
       this.logger.info("merge-daemon", `PR #${pr.number}: Posted coverage gap analysis (${gaps.length} file(s))`);
+
+      // Create a tracker issue for the coverage gaps if tracker supports issue creation
+      if (this.config.tracker?.createIssue) {
+        try {
+          const issueTitle = `Add tests for ${gaps.length} uncovered file(s) from PR #${pr.number}`;
+          const issueBody = `Files changed in PR #${pr.number} (\`${pr.branch}\`) without test coverage:\n\n${gapList}\n\nThese files were identified by post-merge analysis using Knowledge Graph test mappings.`;
+          const issueId = await this.config.tracker.createIssue(issueTitle, issueBody, ["test-gap"]);
+          this.logger.info("merge-daemon", `PR #${pr.number}: Created test gap issue ${issueId}`);
+        } catch (err) {
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Failed to create test gap issue: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } catch (err) {
       this.logger.warn("merge-daemon", `PR #${pr.number}: Post-merge analysis failed: ${err instanceof Error ? err.message : String(err)}`);
     }

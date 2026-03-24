@@ -18,6 +18,7 @@ import { startScheduler, tick, type TickDeps } from "./scheduler.js";
 import { cleanupRun } from "../container/cleanup.js";
 import { MetricsCollector } from "./metrics.js";
 import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispatcher.js";
+import { startScheduledQA, type ScheduledQADeps } from "./scheduled-qa.js";
 
 /** GitHub context passed from webhook handler through to dispatcher. */
 export interface GitHubContext {
@@ -74,6 +75,7 @@ export class Orchestrator {
   private promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
+  private stopQA: (() => void) | null = null;
   private running = false;
   private metrics!: MetricsCollector;
   private deps!: TickDeps;
@@ -138,6 +140,19 @@ export class Orchestrator {
     };
     this.stopScheduler = startScheduler(this.deps);
 
+    // Start Scheduled QA if enabled
+    if (this.config.scheduled_qa?.enabled) {
+      const qaDeps: ScheduledQADeps = {
+        config: this.config,
+        tracker: this.tracker,
+        state: this.state,
+        logger: this.logger,
+        dispatchIssue: (issue) => this.dispatchIssue(issue),
+      };
+      this.stopQA = startScheduledQA(qaDeps);
+      this.logger.info("orchestrator", `Scheduled QA started (interval=${this.config.scheduled_qa.interval_ms}ms)`);
+    }
+
     this.running = true;
     const max = this.config.orchestrator.max_concurrent_agents;
     const poll = this.config.orchestrator.poll_interval_ms;
@@ -196,6 +211,10 @@ export class Orchestrator {
     // Stop the scheduler tick loop
     this.stopScheduler?.();
     this.stopScheduler = null;
+
+    // Stop Scheduled QA
+    this.stopQA?.();
+    this.stopQA = null;
 
     // Clear all pending retry timers
     clearAllRetries(this.state);

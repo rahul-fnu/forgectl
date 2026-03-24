@@ -2,16 +2,47 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { OrchestratorState } from "./state.js";
 import type { ForgectlConfig } from "../config/schema.js";
 
+export type TriageComplexity = "low" | "medium" | "high";
+
 export interface TriageResult {
   shouldDispatch: boolean;
   reason: string;
-  complexity?: string;
+  complexity?: TriageComplexity;
   duplicateOf?: string;
 }
 
 /**
+ * Estimate issue complexity from title + description heuristics.
+ * Uses text length, file reference count, and keyword signals.
+ */
+export function estimateComplexity(issue: TrackerIssue): TriageComplexity {
+  const text = `${issue.title}\n${issue.description}`;
+  const len = text.length;
+
+  const fileRefPattern = /(?:src|test|lib|packages?)\/[\w/.=-]+\.(?:ts|js|tsx|jsx|py|rs|go)/g;
+  const fileRefs = (text.match(fileRefPattern) ?? []).length;
+
+  const highSignals = /\b(breaking change|migration|redesign|refactor.*across|cross[- ]?cutting|architectural)\b/i;
+  if (highSignals.test(text) || fileRefs >= 8 || len > 4000) {
+    return "high";
+  }
+
+  const lowSignals = /\b(typo|rename|bump|update dep|fix import|lint|format|nit)\b/i;
+  if (lowSignals.test(text) && fileRefs <= 2 && len < 800) {
+    return "low";
+  }
+
+  if (fileRefs <= 3 && len < 1500) {
+    return "low";
+  }
+
+  return "medium";
+}
+
+/**
  * Fast pre-dispatch filtering to avoid wasting agent time.
- * Checks for duplicate titles against running issues and recently completed issues.
+ * Checks for duplicate titles against running issues, recently completed issues,
+ * and estimates complexity.
  */
 export async function triageIssue(
   issue: TrackerIssue,
@@ -36,18 +67,6 @@ export async function triageIssue(
     }
   }
 
-  // Recently completed check: skip if a same-titled issue completed recently
-  for (const completedId of state.recentlyCompleted) {
-    if (completedId === issue.id) continue;
-    // Check running map for cached issue info (may have been cleared)
-    // The recentlyCompleted set only stores IDs, so we check the running map
-    // which may still have the WorkerInfo before cleanup
-  }
-
-  // Check recently completed issues by scanning running workers that finished
-  // with matching titles. Since recentlyCompleted only stores IDs, we look
-  // for the issue in the claimed set as well (claimed but completed).
-  // This is already handled by filterCandidates, but we add an explicit guard.
   if (state.recentlyCompleted.has(issue.id)) {
     return {
       shouldDispatch: false,
@@ -55,5 +74,7 @@ export async function triageIssue(
     };
   }
 
-  return { shouldDispatch: true, reason: "passed triage" };
+  const complexity = estimateComplexity(issue);
+
+  return { shouldDispatch: true, reason: "passed triage", complexity };
 }
