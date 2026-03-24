@@ -175,6 +175,9 @@ export async function createProgressComment(
   context: IssueContext,
   progress: RunProgress,
 ): Promise<number> {
+  if (!octokit?.rest?.issues) {
+    throw new Error("octokit.rest.issues is not available — the provided octokit instance may be missing the REST plugin");
+  }
   const body = buildProgressComment(progress);
   const response = await octokit.rest.issues.createComment({
     owner: context.owner,
@@ -194,6 +197,9 @@ export async function updateProgressComment(
   commentId: number,
   progress: RunProgress,
 ): Promise<void> {
+  if (!octokit?.rest?.issues) {
+    throw new Error("octokit.rest.issues is not available — the provided octokit instance may be missing the REST plugin");
+  }
   const body = buildProgressComment(progress);
   await octokit.rest.issues.updateComment({
     owner: context.owner,

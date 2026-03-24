@@ -2,6 +2,8 @@ node_modules/
 dist/
 .forgectl/runs/
 .forgectl/config.yaml
+.forgectl-address-review.txt
+.forgectl-review-prompt.txt
 
 forge-output/
 node_modules/
@@ -276,6 +278,24 @@ __pycache__/
 coverage/
 kg.db
 .claude/worktrees/
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.*
+target/
+*.rlib
+*.o
+*.so
+*.dylib
+*.exe
+*.dll
+*.class
+__pycache__/
+*.pyc
+.next/
+coverage/
 node_modules/
 dist/
 build/

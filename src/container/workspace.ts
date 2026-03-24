@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, cpSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -21,8 +21,8 @@ export function prepareRepoWorkspace(
   // Use rsync if available (faster, respects excludes natively)
   // Fallback to recursive copy with filtering
   try {
-    const excludeFlags = exclude.map(e => `--exclude='${e}'`).join(" ");
-    execSync(`rsync -a ${excludeFlags} '${resolve(repoPath)}/' '${tmpDir}/'`, { stdio: "ignore" });
+    const excludeFlags = exclude.flatMap(e => ["--exclude", e]);
+    execFileSync("rsync", ["-a", ...excludeFlags, `${resolve(repoPath)}/`, `${tmpDir}/`], { stdio: "ignore" });
   } catch {
     // Fallback: manual copy (slower but works everywhere)
     cpSync(resolve(repoPath), tmpDir, {
