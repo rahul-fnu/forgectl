@@ -681,12 +681,24 @@ The flywheel metric: **percentage of tasks where your review is a rubber stamp.*
 - [x] Convention extraction from codebase (mine patterns from code, inject into agent context)
 - [ ] Decomposition engine v2 (informed by 4 months of outcome data)
 
-### Month 7+ — If Productizing
+### Month 7 — Reactive Maintenance (inspired by Ramp)
+
+- [ ] CI failure webhook dispatch (auto-fix broken builds when check runs fail)
+- [ ] Generic dispatch endpoint (`POST /api/v1/dispatch` for external triggers)
+- [ ] Reproduce-first prompting (prove bug exists before fixing)
+- [ ] Post-merge test generation (identify coverage gaps, auto-create issues)
+- [ ] Triage gate (fast pre-dispatch filtering with LLM)
+- [ ] Scheduled QA sweeps (cron-triggered codebase health checks)
+
+See `docs/REACTIVE-MAINTENANCE-PLAN.md` for architecture details.
+
+### Month 8+ — If Productizing
 
 - [ ] Web UI (run dashboard, approval queues, effort graphs)
-- [ ] Multi-repo support
+- [x] Multi-repo support (per-issue repo routing shipped)
 - [ ] Team features (shared task queues, approval workflows)
 - [ ] Cross-repo knowledge (shared patterns across projects)
+- [ ] Separate GitHub Apps for creator/reviewer/merger roles
 
 -----
 

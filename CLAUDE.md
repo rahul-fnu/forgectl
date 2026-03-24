@@ -67,6 +67,24 @@ npm run typecheck     # tsc --noEmit
 - E2E tests: `test/e2e/` — full run with real containers
 - Skip Docker tests: `FORGECTL_SKIP_DOCKER=true npm test`
 
+## Multi-Repo Support
+- Per-issue repo routing: issue description contains `**Repo:** https://github.com/owner/name`
+- Repo profiles at `~/.forgectl/repos/<name>.yaml` override workspace hooks, validation, and PR target
+- The orchestrator auto-detects the repo from the issue and loads the matching profile
+- Merge daemon polls all repos from profiles directory
+
+## Review/Merge Daemon (integrated into orchestrator)
+- Review daemon posts structured review comments on PRs (MUST_FIX/SHOULD_FIX/NIT)
+- Self-addressing loop: when review requests changes, Claude auto-fixes on the branch (max 3 rounds)
+- SHA tracking prevents re-reviewing unchanged code
+- Only MUST_FIX blocks merge; SHOULD_FIX and NIT are posted as feedback
+- Merge daemon auto-merges after review approval
+- GitHub App token auto-refresh prevents expiry on long runs
+
+## Next: Reactive Maintenance
+- See `docs/REACTIVE-MAINTENANCE-PLAN.md` for upcoming features
+- CI failure dispatch, post-merge test generation, triage gate, reproduce-first prompting
+
 ## Conventions
 - Use `async/await` everywhere (no callbacks)
 - All Docker operations go through `dockerode`, never shell out to `docker` CLI
