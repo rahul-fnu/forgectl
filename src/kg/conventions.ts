@@ -415,10 +415,11 @@ export function getConventionsForModules(
   modulePrefixes: string[],
   minConfidence: number,
 ): Convention[] {
-  const all = loadConventions(db);
+  const all = loadStoredConventions(db);
   return all.filter(c =>
     c.confidence >= minConfidence &&
-    modulePrefixes.some(prefix => c.module.startsWith(prefix) || prefix.startsWith(c.module))
+    !c.ignored &&
+    (c.module === "*" || modulePrefixes.some(prefix => c.module.startsWith(prefix) || prefix.startsWith(c.module)))
   );
 }
 
