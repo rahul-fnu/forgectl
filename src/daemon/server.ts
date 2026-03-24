@@ -49,7 +49,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   app.addHook("onRequest", async (request, reply) => {
     const url = request.url;
-    if (url.startsWith("/api/v1/") || url.startsWith("/runs") || url.startsWith("/pipelines") || url.startsWith("/boards") || url.startsWith("/outcomes")) {
+    if (url.startsWith("/api/v1/") || url.startsWith("/runs") || url.startsWith("/pipelines") || url.startsWith("/boards") || url.startsWith("/outcomes") || url.startsWith("/auth")) {
       const authHeader = request.headers.authorization;
       const queryToken = (request.query as Record<string, string>)?.token;
       if (authHeader === `Bearer ${daemonToken}` || queryToken === daemonToken) {
