@@ -3,6 +3,7 @@ import { resolve, basename } from "node:path";
 import type { RunPlan } from "../workflow/types.js";
 import type { ContextResult } from "./builder.js";
 import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
+import { formatConventionsForContext } from "../kg/conventions.js";
 
 const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
@@ -80,7 +81,17 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(`--- End Structural Context ---\n`);
   }
 
-  // 2c. Promoted review conventions
+  // 2c. Mined conventions from KG
+  if (kgContext?.conventions && kgContext.conventions.length > 0) {
+    const conventionSection = formatConventionsForContext(kgContext.conventions);
+    if (conventionSection) {
+      parts.push(`\n--- Mined Conventions ---`);
+      parts.push(conventionSection);
+      parts.push(`--- End Mined Conventions ---\n`);
+    }
+  }
+
+  // 2d. Promoted review conventions
   if (promotedFindings && promotedFindings.length > 0) {
     parts.push(`\n--- Review Conventions ---`);
     parts.push("The following conventions were identified from recurring review findings:");

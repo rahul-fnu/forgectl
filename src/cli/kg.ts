@@ -5,6 +5,7 @@ import { buildFullGraph, buildIncrementalGraph } from "../kg/builder.js";
 import { createKGDatabase, getStats, getMeta, resolveKGPath } from "../kg/storage.js";
 import type { KnowledgeGraphStats } from "../kg/types.js";
 import { queryModule } from "../kg/query.js";
+import { analyzeConventions, saveConventions } from "../kg/conventions.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -223,6 +224,47 @@ export async function kgStatusCommand(options: { db?: string; workspace?: string
     }
 
     console.log();
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * forgectl kg conventions — Discover coding conventions from the knowledge graph.
+ */
+export async function kgConventionsCommand(options: { db?: string; workspace?: string }): Promise<void> {
+  const repoPath = options.workspace ?? process.cwd();
+  const dbPath = resolveKGPath(options.workspace, options.db);
+  const db = createKGDatabase(dbPath);
+
+  try {
+    const stats = getStats(db);
+    if (stats.totalModules === 0) {
+      console.log(chalk.yellow("No modules in knowledge graph. Run 'forgectl kg build' first."));
+      return;
+    }
+
+    console.log(chalk.blue("Analyzing coding conventions..."));
+    const conventions = analyzeConventions(db, repoPath);
+
+    if (conventions.length === 0) {
+      console.log(chalk.yellow("No conventions discovered. Ensure the knowledge graph is populated."));
+      return;
+    }
+
+    saveConventions(db, conventions);
+
+    console.log(chalk.green(`\nDiscovered ${conventions.length} conventions:\n`));
+
+    for (const conv of conventions) {
+      const pct = (conv.confidence * 100).toFixed(0);
+      console.log(`  ${chalk.bold.white(conv.pattern)}`);
+      console.log(`    ${chalk.dim("Module:")} ${conv.module}  ${chalk.dim("Confidence:")} ${chalk.cyan(`${pct}%`)}`);
+      for (const ex of conv.examples) {
+        console.log(`    ${chalk.dim("•")} ${ex}`);
+      }
+      console.log();
+    }
   } finally {
     db.close();
   }
