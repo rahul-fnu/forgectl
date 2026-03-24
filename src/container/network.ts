@@ -45,7 +45,7 @@ export async function removeNetwork(name: string): Promise<void> {
  * Verify firewall is working by testing a blocked domain.
  * Returns true if the domain is blocked (expected), false if it's reachable (unexpected).
  */
-export async function verifyFirewall(container: Docker.Container): Promise<boolean> {
+async function verifyFirewall(container: Docker.Container): Promise<boolean> {
   const result = await execInContainer(container, [
     "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "3", "https://example.com",
   ]);

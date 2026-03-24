@@ -34,8 +34,8 @@ export interface OrchestratorState {
   retryAttempts: Map<string, number>;
   /** Maps issue ID → branch name produced by that issue's agent run. Used for stacked PRs. */
   issueBranches: Map<string, string>;
-  /** Issues recently completed and closed — guards against re-dispatch before tracker API reflects Done state. */
-  recentlyCompleted: Set<string>;
+  /** Issues recently completed and closed — guards against re-dispatch before tracker API reflects Done state. Value is timestamp (ms). */
+  recentlyCompleted: Map<string, number>;
 }
 
 /**
@@ -48,7 +48,7 @@ export function createState(): OrchestratorState {
     retryTimers: new Map(),
     retryAttempts: new Map(),
     issueBranches: new Map(),
-    recentlyCompleted: new Set(),
+    recentlyCompleted: new Map(),
   };
 }
 
@@ -237,4 +237,20 @@ export function createTwoTierSlotManager(
   const childSlots = config.child_slots ?? 0;
   const topLevelMax = Math.max(1, config.max_concurrent_agents - childSlots);
   return new TwoTierSlotManager(topLevelMax, childSlots);
+}
+
+const DEFAULT_PRUNE_AGE_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Prune stale entries from recentlyCompleted and issueBranches.
+ * Removes entries older than maxAgeMs (default 1 hour).
+ */
+export function pruneStaleState(state: OrchestratorState, maxAgeMs: number = DEFAULT_PRUNE_AGE_MS): void {
+  const cutoff = Date.now() - maxAgeMs;
+  for (const [id, addedAt] of state.recentlyCompleted) {
+    if (addedAt < cutoff) {
+      state.recentlyCompleted.delete(id);
+      state.issueBranches.delete(id);
+    }
+  }
 }

@@ -28,7 +28,7 @@ export function estimateTokenCount(text: string): number {
  * Includes function/class signatures, exported constants, and import list.
  * Ignores whitespace and comments — only semantic content matters.
  */
-export function generateCompressedContent(mod: ModuleInfo): string {
+function generateCompressedContent(mod: ModuleInfo): string {
   const lines: string[] = [];
 
   // Imports
@@ -61,7 +61,7 @@ export function generateCompressedContent(mod: ModuleInfo): string {
  * This hash changes only when exports, imports, or their structure change —
  * not when whitespace or comments change.
  */
-export function computeContentHash(mod: ModuleInfo): string {
+function computeContentHash(mod: ModuleInfo): string {
   const semantic = generateCompressedContent(mod);
   return sha256(semantic);
 }

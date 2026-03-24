@@ -16,6 +16,7 @@ import type { GitHubContext } from "./dispatcher.js";
 import type { ContextResult } from "../context/builder.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
+import { pruneStaleState } from "./state.js";
 import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
 import { parseCron, cronMatches } from "./cron.js";
 
@@ -58,6 +59,9 @@ export interface TickDeps {
  */
 export async function tick(deps: TickDeps): Promise<void> {
   const { state, tracker, workspaceManager, slotManager, config, promptTemplate, logger, metrics } = deps;
+
+  // Step 0: Prune stale entries from recentlyCompleted and issueBranches
+  pruneStaleState(state);
 
   // Step 1: Reconcile running workers
   try {
@@ -204,7 +208,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id));
   }
 }
 
@@ -304,46 +308,100 @@ async function autoRebuildSharedKG(
   if (!existsSync(kgPath)) {
     logger.info("scheduler", `KG not found at ${kgPath}, running full build`);
     await buildFullGraph(repoPath, kgPath);
-    return;
-  }
-
-  // Check staleness: compare last_full_build timestamp
-  let lastBuild: string | null = null;
-  let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-  try {
-    kgDb = createKGDatabase(kgPath);
-    lastBuild = getMeta(kgDb, "last_full_build") ?? getMeta(kgDb, "last_incremental");
-  } finally {
-    try { kgDb?.close(); } catch { /* best-effort */ }
-  }
-
-  // Try incremental build using git diff since last build
-  if (lastBuild) {
     try {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const execFileP = promisify(execFile);
-      const { stdout } = await execFileP("git", [
-        "-C", repoPath, "diff", "--name-only", "--diff-filter=ACMR",
-        `--since=${lastBuild}`, "HEAD",
+      const { stdout } = await execFileP("git", ["-C", repoPath, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
+      await saveLastBuildCommit(kgPath, stdout.trim(), createKGDatabase, logger);
+    } catch {
+      // best-effort
+    }
+    return;
+  }
+
+  // Check staleness: retrieve last build commit SHA
+  let lastBuildCommit: string | null = null;
+  let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+  try {
+    kgDb = createKGDatabase(kgPath);
+    lastBuildCommit = getMeta(kgDb, "last_build_commit");
+  } finally {
+    try { kgDb?.close(); } catch { /* best-effort */ }
+  }
+
+  // Try incremental build using git log since last build commit
+  if (lastBuildCommit) {
+    try {
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileP = promisify(execFile);
+
+      // Get current HEAD commit
+      const { stdout: headSha } = await execFileP("git", [
+        "-C", repoPath, "rev-parse", "HEAD",
       ], { maxBuffer: 1024 * 1024 });
-      const changed = stdout.trim().split("\n").filter(
+      const currentCommit = headSha.trim();
+
+      if (currentCommit === lastBuildCommit) {
+        logger.debug("scheduler", "KG is up to date, no rebuild needed");
+        return;
+      }
+
+      const { stdout } = await execFileP("git", [
+        "-C", repoPath, "log", "--name-only", "--diff-filter=ACMR",
+        "--pretty=format:", `${lastBuildCommit}..HEAD`,
+      ], { maxBuffer: 1024 * 1024 });
+      const changed = [...new Set(stdout.trim().split("\n").filter(
         f => f && (f.endsWith(".ts") || f.endsWith(".tsx")) && !f.endsWith(".d.ts"),
-      );
+      ))];
       if (changed.length === 0) {
         logger.debug("scheduler", "KG is up to date, no rebuild needed");
+        // Still update the commit SHA so we don't re-scan the same range
+        await saveLastBuildCommit(kgPath, currentCommit, createKGDatabase, logger);
         return;
       }
       logger.info("scheduler", `KG incremental rebuild: ${changed.length} changed files`);
       await buildIncrementalGraph(repoPath, changed, kgPath);
+      await saveLastBuildCommit(kgPath, currentCommit, createKGDatabase, logger);
       return;
     } catch {
-      // git diff failed, fall through to full build
+      // git log failed, fall through to full build
     }
   }
 
-  logger.info("scheduler", "KG full rebuild triggered (no prior build or git diff failed)");
+  logger.info("scheduler", "KG full rebuild triggered (no prior build or git log failed)");
   await buildFullGraph(repoPath, kgPath);
+
+  // Record current HEAD commit so subsequent ticks can do incremental builds
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileP = promisify(execFile);
+    const { stdout } = await execFileP("git", ["-C", repoPath, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
+    await saveLastBuildCommit(kgPath, stdout.trim(), createKGDatabase, logger);
+  } catch {
+    // best-effort
+  }
+}
+
+async function saveLastBuildCommit(
+  kgPath: string,
+  commitSha: string,
+  createKGDatabase: typeof import("../kg/storage.js").createKGDatabase,
+  logger: Logger,
+): Promise<void> {
+  let db: import("../kg/storage.js").KGDatabase | undefined;
+  try {
+    const { saveMeta } = await import("../kg/storage.js");
+    db = createKGDatabase(kgPath);
+    saveMeta(db, "last_build_commit", commitSha);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("scheduler", `Failed to save last_build_commit: ${msg}`);
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
 }
 
 function resolveDefaultKgPath(config: ForgectlConfig): string {
@@ -377,11 +435,10 @@ function issueToTaskSpec(issue: import("../tracker/types.js").TrackerIssue): imp
 export function startScheduler(deps: TickDeps): () => void {
   let stopped = false;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingResolve: (() => void) | null = null;
 
-  const scheduleTick = (): void => {
-    if (stopped) return;
-
-    void (async () => {
+  const loop = async (): Promise<void> => {
+    while (!stopped) {
       try {
         await tick(deps);
       } catch (err) {
@@ -389,20 +446,31 @@ export function startScheduler(deps: TickDeps): () => void {
         deps.logger.error("scheduler", `Tick error: ${msg}`);
       }
 
-      if (!stopped) {
-        pendingTimer = setTimeout(scheduleTick, deps.config.orchestrator.poll_interval_ms);
-      }
-    })();
+      if (stopped) break;
+
+      // setTimeout chain: wait poll_interval_ms before next tick
+      await new Promise<void>((resolve) => {
+        pendingResolve = resolve;
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null;
+          pendingResolve = null;
+          resolve();
+        }, deps.config.orchestrator.poll_interval_ms);
+      });
+    }
   };
 
-  // Start first tick immediately
-  scheduleTick();
+  void loop();
 
   return () => {
     stopped = true;
     if (pendingTimer !== null) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
+    }
+    if (pendingResolve !== null) {
+      pendingResolve();
+      pendingResolve = null;
     }
   };
 }

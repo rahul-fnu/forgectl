@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { RunQueue } from "./queue.js";
 import { registerRoutes } from "./routes.js";
-import { savePid, removePid } from "./lifecycle.js";
+import { savePid, removePid, generateAndSaveToken, removeToken } from "./lifecycle.js";
 import { loadConfig } from "../config/loader.js";
 import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
@@ -43,7 +43,22 @@ import type { ForgectlConfig } from "../config/schema.js";
 
 export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string): Promise<void> {
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: true });
+  await app.register(cors, { origin: [`http://127.0.0.1:${port}`, `http://localhost:${port}`] });
+
+  const daemonToken = generateAndSaveToken();
+
+  app.addHook("onRequest", async (request, reply) => {
+    const url = request.url;
+    if (url.startsWith("/api/v1/") || url.startsWith("/runs") || url.startsWith("/pipelines") || url.startsWith("/boards") || url.startsWith("/outcomes")) {
+      const authHeader = request.headers.authorization;
+      const queryToken = (request.query as Record<string, string>)?.token;
+      if (authHeader === `Bearer ${daemonToken}` || queryToken === daemonToken) {
+        return;
+      }
+      reply.code(401);
+      reply.send({ error: "Unauthorized" });
+    }
+  });
 
   let config = loadConfig(configPath);
 
@@ -79,7 +94,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   for (const r of recoveryResults) {
     daemonLogger.info("recovery", `Run ${r.runId}: ${r.action} -- ${r.reason}`);
   }
-  const requeuedCount = recoveryResults.filter(r => r.action === "resumed_from_workspace" || r.action === "resumed_rerun_agent").length;
+  const requeuedCount = recoveryResults.filter(r => r.action.startsWith("resumed")).length;
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
     const runConfig = loadConfig(configPath);
@@ -337,19 +352,22 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     join(selfDir, "..", "ui", "index.html"),    // alt layout
   ];
   const uiPath = uiCandidates.find((candidate) => existsSync(candidate));
+  const injectToken = (html: string): string =>
+    html.replace("<head>", `<head>\n  <meta name="forgectl-token" content="${daemonToken}" />`);
+
   app.get("/", async (_req, reply) => {
     if (!uiPath) {
       reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
       return;
     }
-    reply.type("text/html").send(readFileSync(uiPath, "utf-8"));
+    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
   });
   app.get("/ui", async (_req, reply) => {
     if (!uiPath) {
       reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
       return;
     }
-    reply.type("text/html").send(readFileSync(uiPath, "utf-8"));
+    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
   });
 
   // Start merge daemon poll loop alongside orchestrator (if merge_daemon or merger_app configured)
@@ -578,6 +596,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     recorder.close();
     closeDatabase(db);
     removePid();
+    removeToken();
     await app.close();
     process.exit(0);
   };

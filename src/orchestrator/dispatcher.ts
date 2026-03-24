@@ -402,6 +402,7 @@ async function executeWorkerAndHandle(
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
 ): Promise<void> {
   // --- Triage gate: fast pre-dispatch filtering ---
   const triageResult = await triageIssue(issue, state, config);
@@ -428,8 +429,8 @@ async function executeWorkerAndHandle(
         const { WorkspaceManager: WM } = await import("../workspace/manager.js");
         effectiveWorkspaceManager = new WM(overlay.workspace, logger);
       }
-      if ("validation" in overlay && overlay.validation) {
-        effectiveValidationConfig = (overlay as Record<string, unknown>).validation as typeof validationConfig;
+      if ((overlay as any).validation) {
+        effectiveValidationConfig = (overlay as any).validation as typeof validationConfig;
       }
       // Override PR target repo via githubContext
       if (effectiveGithubContext && overlay.tracker?.repo) {
@@ -553,6 +554,7 @@ async function executeWorkerAndHandle(
       skills,
       kgContext,
       outcomeDeps?.snapshotRepo,
+      promotedFindings,
     );
 
     // Remove from running
@@ -873,7 +875,7 @@ async function executeWorkerAndHandle(
         handleSynthesizerOutcome(issue, "success", tracker, logger);
       } else if (prCreated || !result.branch) {
         // Mark as recently completed IMMEDIATELY to prevent re-dispatch before tracker API reflects Done
-        state.recentlyCompleted.add(issue.id);
+        state.recentlyCompleted.set(issue.id, Date.now());
         // Close the issue: PR was created, or no branch was produced (files-mode output)
         if (config.tracker?.auto_close) {
           // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)

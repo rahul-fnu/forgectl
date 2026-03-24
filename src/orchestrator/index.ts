@@ -257,6 +257,8 @@ export class Orchestrator {
     this.state.running.clear();
     this.state.retryTimers.clear();
     this.state.retryAttempts.clear();
+    this.state.issueBranches.clear();
+    this.state.recentlyCompleted.clear();
 
     this.logger.info("orchestrator", "Orchestrator stopped");
   }
@@ -343,6 +345,9 @@ export class Orchestrator {
       this.subIssueCache,
       this.skills,
       this.validationConfig,
+      undefined,
+      undefined,
+      this.slotManager,
     );
   }
 
