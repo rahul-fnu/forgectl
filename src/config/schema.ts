@@ -191,6 +191,14 @@ export const ConfigSchema = z.object({
     branch_pattern: z.string().default("forge/*"),
   }).optional(),
 
+  scheduled_qa: z.object({
+    enabled: z.boolean().default(false),
+    interval_ms: z.number().int().positive().default(86_400_000), // 24 hours
+    coverage_threshold: z.number().min(0).max(1).default(0.5),
+    max_issues_per_run: z.number().int().positive().default(5),
+    labels: z.array(z.string()).default(["scheduled-qa"]),
+  }).optional(),
+
   team: z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),
