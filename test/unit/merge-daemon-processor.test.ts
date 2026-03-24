@@ -262,8 +262,8 @@ describe("parseStructuredReview", () => {
     expect(parseStructuredReview("")).toBeUndefined();
   });
 
-  it("returns undefined for invalid JSON", () => {
-    expect(parseStructuredReview("not json at all")).toBeUndefined();
+  it("returns undefined for completely unparseable text", () => {
+    expect(parseStructuredReview("just some random words with no structure")).toBeUndefined();
   });
 
   it("skips malformed comments", () => {
@@ -301,6 +301,74 @@ describe("parseStructuredReview", () => {
     });
     const result = parseStructuredReview(json);
     expect(result!.approval).toBe("approve");
+  });
+
+  it("handles JSON with trailing commas", () => {
+    const raw = `{"summary": "Looks good", "approval": "approve", "comments": [],}`;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("Looks good");
+  });
+
+  it("handles JSON wrapped in ```json fences with leading prose", () => {
+    const raw = [
+      "Here is my review of the changes:",
+      "",
+      "```json",
+      `{"summary": "Code looks clean", "approval": "approve", "comments": []}`,
+      "```",
+      "",
+      "Let me know if you have questions.",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("Code looks clean");
+  });
+
+  it("handles JSON with leading prose (no fences)", () => {
+    const raw = `Here is my review:\n{"summary":"issues found","approval":"request_changes","comments":[{"file":"src/a.ts","line":1,"severity":"must_fix","body":"bug"}]}`;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(1);
+  });
+
+  it("falls back to keyword extraction for unparseable text with approve", () => {
+    const raw = "I would approve this PR. The changes look reasonable and well-tested.";
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.comments).toHaveLength(0);
+  });
+
+  it("falls back to keyword extraction for unparseable text with request_changes", () => {
+    const raw = "This PR has issues. I would request_changes due to a must_fix security problem.";
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(0);
+  });
+
+  it("handles single quotes instead of double quotes", () => {
+    const raw = `{'summary': 'LGTM', 'approval': 'approve', 'comments': []}`;
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("extracts fields line-by-line when JSON is broken", () => {
+    const raw = [
+      `Here is the review:`,
+      `"summary": "Needs work",`,
+      `"approval": "request_changes",`,
+      `"comments": []`,
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.summary).toBe("Needs work");
   });
 
   it("parses suggested_fix from comments", () => {

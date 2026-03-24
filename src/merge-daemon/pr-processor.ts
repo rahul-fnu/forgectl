@@ -60,23 +60,79 @@ export function parseStructuredReview(raw: string): StructuredReview | undefined
   if (fenceMatch) {
     jsonText = fenceMatch[1].trim();
   } else {
-    // Try to find a raw JSON object
-    const objMatch = /\{[\s\S]*\}/.exec(trimmed);
-    if (objMatch) {
-      jsonText = objMatch[0];
+    // Try to find a raw JSON object (first { to last })
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      jsonText = trimmed.substring(firstBrace, lastBrace + 1);
     }
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return undefined;
+  // Try raw first, then with incremental cleanups
+  const parsed = tryParseJson(jsonText)
+    ?? tryParseJson(cleanJsonText(jsonText, false))
+    ?? tryParseJson(cleanJsonText(jsonText, true));
+  if (parsed) return buildReview(parsed);
+
+  // Fallback: regex extraction — find content between first { and last }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const extracted = trimmed.substring(firstBrace, lastBrace + 1);
+    const parsed2 = tryParseJson(extracted)
+      ?? tryParseJson(cleanJsonText(extracted, false))
+      ?? tryParseJson(cleanJsonText(extracted, true));
+    if (parsed2) return buildReview(parsed2);
   }
 
-  if (!parsed || typeof parsed !== "object") return undefined;
-  const obj = parsed as Record<string, unknown>;
+  // Fallback: line-by-line field extraction
+  const lineByLine = extractFieldsFromText(trimmed);
+  if (lineByLine) return lineByLine;
 
+  // Last resort: keyword-based extraction
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("request_changes") || lower.includes("must_fix")) {
+    return { summary: trimmed.slice(0, 200), approval: "request_changes", comments: [] };
+  }
+  if (lower.includes("approve")) {
+    return { summary: trimmed.slice(0, 200), approval: "approve", comments: [] };
+  }
+
+  return undefined;
+}
+
+function cleanJsonText(text: string, replaceSingleQuotes: boolean): string {
+  // Strip markdown fence lines
+  let cleaned = text.replace(/^```(?:json)?\s*$/gm, "").replace(/^```\s*$/gm, "");
+  // Remove trailing commas before } or ]
+  cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+  // Only replace single quotes as last resort (can corrupt apostrophes in text)
+  if (replaceSingleQuotes) {
+    cleaned = cleaned.replace(/'/g, '"');
+  }
+  return cleaned.trim();
+}
+
+function tryParseJson(text: string): Record<string, unknown> | undefined {
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+function extractFieldsFromText(text: string): StructuredReview | undefined {
+  const summaryMatch = /"summary"\s*:\s*"([^"]*)"/.exec(text);
+  const approvalMatch = /"approval"\s*:\s*"([^"]*)"/.exec(text);
+  if (!summaryMatch && !approvalMatch) return undefined;
+
+  const summary = summaryMatch?.[1] ?? "No summary";
+  const approvalRaw = approvalMatch?.[1] ?? "";
+  const approval = approvalRaw === "request_changes" ? "request_changes" as const : "approve" as const;
+  return { summary, approval, comments: [] };
+}
+
+function buildReview(obj: Record<string, unknown>): StructuredReview {
   const summary = typeof obj.summary === "string" ? obj.summary : "No summary";
   const approval = obj.approval === "request_changes" ? "request_changes" as const : "approve" as const;
 
