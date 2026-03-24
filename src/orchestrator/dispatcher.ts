@@ -875,7 +875,7 @@ async function executeWorkerAndHandle(
         handleSynthesizerOutcome(issue, "success", tracker, logger);
       } else if (prCreated || !result.branch) {
         // Mark as recently completed IMMEDIATELY to prevent re-dispatch before tracker API reflects Done
-        state.recentlyCompleted.add(issue.id);
+        state.recentlyCompleted.set(issue.id, Date.now());
         // Close the issue: PR was created, or no branch was produced (files-mode output)
         if (config.tracker?.auto_close) {
           // Use the first terminal state from config (e.g. "Done" for Linear, "closed" for GitHub)

@@ -136,12 +136,14 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
         const issueAuthor = issue.user?.login;
         if (commenter && commenter === issueAuthor) {
           deps.resumeRun(deps.runRepo, waitingRun.id, comment.body);
-          await (octokit as any).rest.reactions.createForIssueComment({
-            owner,
-            repo,
-            comment_id: comment.id,
-            content: "eyes",
-          });
+          try {
+            await (octokit as any).rest.reactions.createForIssueComment({
+              owner,
+              repo,
+              comment_id: comment.id,
+              content: "eyes",
+            });
+          } catch { /* reaction is best-effort */ }
         }
       }
       return;
@@ -163,12 +165,14 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
 
     if (!authorized) {
       // Add :x: reaction and post error reply
-      await (octokit as any).rest.reactions.createForIssueComment({
-        owner,
-        repo,
-        comment_id: comment.id,
-        content: "-1",
-      });
+      try {
+        await (octokit as any).rest.reactions.createForIssueComment({
+          owner,
+          repo,
+          comment_id: comment.id,
+          content: "-1",
+        });
+      } catch { /* reaction is best-effort */ }
       await (octokit as any).rest.issues.createComment({
         owner,
         repo,
@@ -181,12 +185,14 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
     }
 
     // Add :eyes: acknowledgment reaction
-    await (octokit as any).rest.reactions.createForIssueComment({
-      owner,
-      repo,
-      comment_id: comment.id,
-      content: "eyes",
-    });
+    try {
+      await (octokit as any).rest.reactions.createForIssueComment({
+        owner,
+        repo,
+        comment_id: comment.id,
+        content: "eyes",
+      });
+    } catch { /* reaction is best-effort */ }
 
     // Dispatch command
     const context: IssueContext = {

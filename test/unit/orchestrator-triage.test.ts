@@ -95,7 +95,7 @@ describe("triageIssue", () => {
   it("skips recently completed issues", async () => {
     const config = ConfigSchema.parse({ orchestrator: { enable_triage: true } });
     const state = createState();
-    state.recentlyCompleted.add("5");
+    state.recentlyCompleted.set("5", Date.now());
 
     const issue = makeIssue({ id: "5", identifier: "#5" });
     const result = await triageIssue(issue, state, config);
