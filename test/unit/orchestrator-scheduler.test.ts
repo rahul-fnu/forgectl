@@ -19,7 +19,7 @@ vi.mock("../../src/orchestrator/dispatcher.js", () => ({
   dispatchIssue: vi.fn(),
 }));
 
-import { tick, startScheduler, type TickDeps } from "../../src/orchestrator/scheduler.js";
+import { tick, startScheduler, evaluateSchedules, type TickDeps } from "../../src/orchestrator/scheduler.js";
 import { reconcile } from "../../src/orchestrator/reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue } from "../../src/orchestrator/dispatcher.js";
 
@@ -415,5 +415,92 @@ describe("startScheduler", () => {
     expect(reconcile).toHaveBeenCalledTimes(2);
 
     stop();
+  });
+});
+
+describe("evaluateSchedules", () => {
+  it("returns empty array when no schedules configured", async () => {
+    const config = { schedules: [] } as unknown as ForgectlConfig;
+    const result = await evaluateSchedules(config, "/tmp/test-kg.db", makeLogger());
+    expect(result).toEqual([]);
+  });
+
+  it("creates synthetic issue for matching schedule", async () => {
+    const now = new Date();
+    const minute = now.getMinutes();
+    const hour = now.getHours();
+
+    const config = {
+      schedules: [{
+        name: "qa-sweep",
+        cron: `${minute} ${hour} * * *`,
+        task: "Run QA checks on the codebase",
+      }],
+    } as unknown as ForgectlConfig;
+
+    const dbPath = `/tmp/test-eval-${Date.now()}.db`;
+    const result = await evaluateSchedules(config, dbPath, makeLogger());
+    expect(result.length).toBe(1);
+    expect(result[0].identifier).toBe("schedule/qa-sweep");
+    expect(result[0].description).toBe("Run QA checks on the codebase");
+    expect(result[0].labels).toContain("scheduled");
+    expect(result[0].metadata.synthetic).toBe(true);
+    expect(result[0].metadata.scheduleName).toBe("qa-sweep");
+  });
+
+  it("skips non-matching schedules", async () => {
+    const config = {
+      schedules: [{
+        name: "midnight-sweep",
+        cron: "0 0 31 2 *",
+        task: "Never runs",
+      }],
+    } as unknown as ForgectlConfig;
+
+    const result = await evaluateSchedules(config, "/tmp/test-nomatch-kg.db", makeLogger());
+    expect(result).toEqual([]);
+  });
+
+  it("prevents duplicate runs within same minute", async () => {
+    const now = new Date();
+    const minute = now.getMinutes();
+    const hour = now.getHours();
+
+    const config = {
+      schedules: [{
+        name: "dedup-test",
+        cron: `${minute} ${hour} * * *`,
+        task: "Test deduplication",
+      }],
+    } as unknown as ForgectlConfig;
+
+    const dbPath = `/tmp/test-dedup-${Date.now()}.db`;
+    const logger = makeLogger();
+
+    const result1 = await evaluateSchedules(config, dbPath, logger);
+    expect(result1.length).toBe(1);
+
+    const result2 = await evaluateSchedules(config, dbPath, logger);
+    expect(result2.length).toBe(0);
+  });
+
+  it("includes repo in metadata when specified", async () => {
+    const now = new Date();
+    const minute = now.getMinutes();
+    const hour = now.getHours();
+
+    const config = {
+      schedules: [{
+        name: "repo-sweep",
+        cron: `${minute} ${hour} * * *`,
+        task: "Sweep specific repo",
+        repo: "owner/repo",
+      }],
+    } as unknown as ForgectlConfig;
+
+    const dbPath = `/tmp/test-repo-${Date.now()}.db`;
+    const result = await evaluateSchedules(config, dbPath, makeLogger());
+    expect(result.length).toBe(1);
+    expect(result[0].metadata.repo).toBe("owner/repo");
   });
 });

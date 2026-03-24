@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import type { OrchestratorState } from "./state.js";
 import type { TwoTierSlotManager } from "./state.js";
-import type { TrackerAdapter } from "../tracker/types.js";
-import type { ForgectlConfig } from "../config/schema.js";
+import type { TrackerAdapter, TrackerIssue } from "../tracker/types.js";
+import type { ForgectlConfig, ScheduleEntry } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
 import type { MetricsCollector } from "./metrics.js";
@@ -17,6 +17,7 @@ import type { ContextResult } from "../context/builder.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
+import { parseCron, cronMatches } from "./cron.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -76,21 +77,27 @@ export async function tick(deps: TickDeps): Promise<void> {
     }
   }
 
+  // Step 1.6: Evaluate cron schedules and inject synthetic issues
+  const scheduledIssues = await evaluateSchedules(config, deps.kgDbPath ?? resolveDefaultKgPath(config), logger);
+
   // Step 2: Validate config (tracker must be defined)
-  if (!config.tracker) {
-    logger.warn("scheduler", "No tracker configured, skipping dispatch");
+  if (!config.tracker && scheduledIssues.length === 0) {
+    logger.warn("scheduler", "No tracker configured and no scheduled tasks, skipping dispatch");
     return;
   }
 
   // Step 3: Fetch candidates
-  let candidates;
-  try {
-    candidates = await tracker.fetchCandidateIssues();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("scheduler", `Failed to fetch candidates: ${msg}`);
-    return;
+  let candidates: TrackerIssue[] = [];
+  if (config.tracker) {
+    try {
+      candidates = await tracker.fetchCandidateIssues();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("scheduler", `Failed to fetch candidates: ${msg}`);
+      if (scheduledIssues.length === 0) return;
+    }
   }
+  candidates = [...candidates, ...scheduledIssues];
 
   // Step 4: Build terminalIssueIds from SubIssueCache (SUBISSUE-03), then filter candidates
   const terminalIds = new Set<string>();
@@ -199,6 +206,85 @@ export async function tick(deps: TickDeps): Promise<void> {
   for (const issue of sorted.slice(0, available)) {
     dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings);
   }
+}
+
+/**
+ * Evaluate configured schedules against the current time.
+ * Returns synthetic TrackerIssues for schedules that match and haven't run this minute.
+ */
+export async function evaluateSchedules(
+  config: ForgectlConfig,
+  kgDbPath: string,
+  logger: Logger,
+): Promise<TrackerIssue[]> {
+  const schedules = config.schedules ?? [];
+  if (schedules.length === 0) return [];
+
+  const now = new Date();
+  const results: TrackerIssue[] = [];
+
+  let kgDb: import("../kg/storage.js").KGDatabase | undefined;
+  try {
+    const { createKGDatabase, getMeta, saveMeta } = await import("../kg/storage.js");
+    kgDb = createKGDatabase(kgDbPath);
+
+    for (const schedule of schedules) {
+      try {
+        const fields = parseCron(schedule.cron);
+        if (!cronMatches(fields, now)) continue;
+
+        // Check last-run to prevent duplicate dispatch within the same minute
+        const metaKey = `schedule_last_run:${schedule.name}`;
+        const lastRun = getMeta(kgDb, metaKey);
+        const currentMinute = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+        if (lastRun === currentMinute) {
+          logger.debug("scheduler", `Schedule "${schedule.name}" already ran at ${currentMinute}, skipping`);
+          continue;
+        }
+
+        // Record this run
+        saveMeta(kgDb, metaKey, currentMinute);
+
+        results.push(scheduleToSyntheticIssue(schedule, now));
+        logger.info("scheduler", `Schedule "${schedule.name}" triggered at ${currentMinute}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("scheduler", `Failed to evaluate schedule "${schedule.name}": ${msg}`);
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("scheduler", `Failed to open KG for schedule tracking: ${msg}`);
+  } finally {
+    try { kgDb?.close(); } catch { /* best-effort */ }
+  }
+
+  return results;
+}
+
+function scheduleToSyntheticIssue(schedule: ScheduleEntry, now: Date): TrackerIssue {
+  const ts = now.toISOString();
+  const id = `schedule:${schedule.name}:${ts}`;
+  return {
+    id,
+    identifier: `schedule/${schedule.name}`,
+    title: `Scheduled: ${schedule.name}`,
+    description: schedule.task,
+    state: "open",
+    priority: null,
+    labels: ["scheduled"],
+    assignees: [],
+    url: "",
+    created_at: ts,
+    updated_at: ts,
+    blocked_by: [],
+    metadata: {
+      synthetic: true,
+      scheduleName: schedule.name,
+      ...(schedule.repo ? { repo: schedule.repo } : {}),
+    },
+  };
 }
 
 /**
