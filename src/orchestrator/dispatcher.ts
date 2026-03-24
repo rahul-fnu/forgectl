@@ -321,6 +321,7 @@ export function dispatchIssue(
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -380,6 +381,7 @@ export function dispatchIssue(
     validationConfig,
     outcomeDeps,
     kgContext,
+    promotedFindings,
   );
 }
 
