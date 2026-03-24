@@ -216,6 +216,8 @@ export interface PRProcessorConfig {
   mergerAuthorEmail?: string;
   /** Optional tracker adapter for creating issues (e.g. post-merge test gen). */
   tracker?: import("../tracker/types.js").TrackerAdapter;
+  /** Separate token for submitting reviews (different GitHub App identity to avoid "can't approve own PR"). */
+  reviewToken?: string;
 }
 
 export interface ReviewFailureState {
@@ -226,6 +228,8 @@ export interface ReviewFailureState {
 
 export class PRProcessor {
   private headers: Record<string, string>;
+  /** Separate headers for review submission (uses reviewToken if available, to avoid "can't approve own PR"). */
+  private reviewHeaders: Record<string, string>;
   private readonly history: ProcessResult[] = [];
   private readonly reviewRounds = new Map<number, number>();
   private readonly reviewFailures = new Map<number, ReviewFailureState>();
@@ -245,6 +249,11 @@ export class PRProcessor {
       "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
     };
+    this.reviewHeaders = {
+      Authorization: `token ${config.reviewToken ?? config.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/vnd.github+json",
+    };
   }
 
   /**
@@ -253,6 +262,21 @@ export class PRProcessor {
   updateToken(token: string, rawToken?: string): void {
     this.config = { ...this.config, token, rawToken: rawToken ?? token };
     this.headers = {
+      Authorization: `token ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/vnd.github+json",
+    };
+    if (!this.config.reviewToken) {
+      this.reviewHeaders = { ...this.headers };
+    }
+  }
+
+  /**
+   * Update the review token (separate identity for submitting reviews).
+   */
+  updateReviewToken(token: string): void {
+    this.config = { ...this.config, reviewToken: token };
+    this.reviewHeaders = {
       Authorization: `token ${token}`,
       "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
@@ -698,10 +722,15 @@ export class PRProcessor {
         `Do NOT flag: .gitignore changes, binary files, formatting, boilerplate.`,
         ``,
         `Severity: must_fix (blocks merge: bugs, security, data loss), should_fix (edge cases, weak error handling), nit (style).`,
-        `Set "approval" to "request_changes" ONLY if there are must_fix issues. Otherwise "approve".`,
+        `Set "approval" to "request_changes" if there are any must_fix issues. Set to "approve" only if there are NO must_fix issues.`,
         ``,
-        `Respond with ONLY this JSON object, no other text:`,
-        `{"summary": "<one sentence>", "approval": "approve", "comments": [{"file": "src/example.ts", "line": 1, "severity": "nit", "body": "description", "suggested_fix": "optional fix"}]}`,
+        `Respond with ONLY a JSON object, no other text. Two examples:`,
+        ``,
+        `Example with issues:`,
+        `{"summary": "Missing null check on user input could cause runtime crash", "approval": "request_changes", "comments": [{"file": "src/handler.ts", "line": 42, "severity": "must_fix", "body": "user input is not validated before use", "suggested_fix": "add null check"}]}`,
+        ``,
+        `Example when clean:`,
+        `{"summary": "Clean implementation with proper error handling", "approval": "approve", "comments": []}`,
       ].join("\n");
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
@@ -768,9 +797,10 @@ export class PRProcessor {
     const event = review.approval === "approve" ? "APPROVE" : "COMMENT";
 
     const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+    // Use reviewHeaders (separate app identity) to avoid "can't approve own pull request"
     const response = await fetch(url, {
       method: "POST",
-      headers: this.headers,
+      headers: this.reviewHeaders,
       body: JSON.stringify({
         event,
         body: fullBody,
@@ -786,11 +816,11 @@ export class PRProcessor {
         "merge-daemon",
         `PR #${prNumber}: Failed to submit review (${response.status}): ${text}`,
       );
-      // Fallback: post as a regular PR comment
+      // Fallback: post as a regular PR comment using review identity
       const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
       const commentResp = await fetch(commentUrl, {
         method: "POST",
-        headers: this.headers,
+        headers: this.reviewHeaders,
         body: JSON.stringify({ body: fullBody }),
       });
       if (commentResp.ok) {
