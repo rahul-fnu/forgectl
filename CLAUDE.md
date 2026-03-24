@@ -30,7 +30,11 @@ src/
 ├── orchestration/        # Multi-agent (single, review, parallel, Agent Relay integration)
 ├── validation/           # Validation retry loop (run checks, feed errors back to agent)
 ├── output/               # Output collection (git branch or files directory)
-├── context/              # Prompt building (system + context + task + validation info)
+├── context/              # Context Engine v2 (builder, prompt, learning, Merkle-aware budget assembly)
+├── kg/                   # Knowledge Graph with Merkle tree (parser, graph, storage, builder, query, merkle, conventions, test-mapping, git-history, flaky-tests)
+├── task/                 # Task specification (types, schema, loader, validator, scaffold)
+├── planner/              # Planner agent (planner, validator)
+├── analysis/             # Outcome analyzer (pattern detection, self-improvement task generation)
 ├── logging/              # Logger, terminal UI, JSON run logs, SSE events
 ├── ui/                   # Web dashboard (React + Vite, served by daemon)
 └── utils/                # Template expansion, slugs, timers, hashing, duration parsing
@@ -44,6 +48,9 @@ src/
 5. **Validation retries restart ALL steps** from the top after each agent fix.
 6. **Merge priority:** CLI flags > project config > workflow definition > global defaults.
 7. **Network is open by default.** Containers use standard Docker bridge networking. Optionally restricted via `allowlist` mode (iptables) or `airgapped` mode (`--network=none`).
+8. **Knowledge Graph uses Merkle trees.** Content hashing enables incremental invalidation — only reparse files whose content hash changed. Per-workspace KG builds support stacked diffs.
+9. **Convention extraction is data-driven.** Patterns are mined from the codebase (naming, testing, error handling) and injected into agent context automatically.
+10. **Context Engine is budget-aware.** Merkle tree nodes carry size metadata; assembly respects a token budget with compression tiers (full → signatures-only → names-only).
 
 ## Commands
 ```bash

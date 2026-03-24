@@ -20,7 +20,7 @@ VISION:
                 └────────── learns from outcomes ◄──────────────┘
 ```
 
-The execution layer is largely built. The decomposition layer and the learning layer are not.
+The execution layer is built. The decomposition layer (v1) and the learning layer (v1) are shipped and running. Refinement continues through real usage.
 
 -----
 
@@ -332,18 +332,72 @@ forgectl's own backlog
 - Validation loop with retry + feedback
 - SQLite persistence (runs, events, snapshots, governance)
 - Governance gates (autonomy levels, approval workflows)
-- Crash recovery (soft — marks interrupted, doesn't re-execute)
+- Crash recovery with workspace persistence and re-dispatch
 - Sub-issue DAG with cycle detection (3-color DFS)
-- Webhook-driven cache invalidation
+- Webhook-driven cache invalidation + SubIssueCache invalidation fixes
 - SSE real-time event stream
+- Knowledge Graph with Merkle tree (import graph, test mapping, git coupling, convention mining)
+- Context Engine v2 (budget-aware assembly, compression tiers, learning feedback)
+- Task Specification format (YAML + Zod validation)
+- Lint validation gate (deterministic checks before LLM review)
+- Review agent with structured YAML output and self-addressing loop (max 3 rounds)
+- DAG-aware scheduler with critical path dispatch
+- Loop detector (halt + emit event before turns are wasted)
+- Planner agent (KG → ExecutionPlan, module-boundary decomposition)
+- Outcome Analyzer with self-improvement task generation
+- Integrated review daemon (inline PR comments, approval workflow, quality tracking)
+- Integrated merge daemon (auto-review + auto-merge across multiple repos)
+- Per-issue repo routing (multi-repo support from single orchestrator)
+- Stacked PR support (dependent issues target blocker's branch)
+- Rich PR descriptions with ticket context
+- GitHub App token auto-refresh
+- Convention mining and injection (extract patterns from code, inject into agent context)
+- Context learning feedback (track agent file access, boost relevance)
+- Per-workspace KG builds for stacked diffs
 
-### Three bugs to fix first
+### Three bugs fixed (Month 1)
 
-| Bug | Impact | Fix |
-|-----|--------|-----|
-| CostRepository insertion gap | Effort tracking feeds on incomplete data — queries `run_costs` but data only written to `run_events` | Write to both tables at the same emission point |
-| OneShotSession zero token reporting | `tokenUsage` always `{0,0,0}` — turn/effort estimates feed on bad data | Parse Claude's output or use events as authoritative source |
-| Retry state in-memory | `retryTimers` + `retryAttempts` lost on crash, retry counts reset | Add `run_retries` SQLite table (runId, attempt, nextRetryAt, backoffMs) |
+| Bug | Status | Resolution |
+|-----|--------|------------|
+| CostRepository insertion gap | **Fixed** | Write to both tables at the same emission point |
+| OneShotSession zero token reporting | **Fixed** | Parse Claude's output as authoritative source |
+| Retry state in-memory | **Fixed** | Persist retry state to SQLite |
+
+-----
+
+## What's Been Built (as of March 2026)
+
+Four months of development, driven by dogfooding on real projects. The system has gone from an execution engine to an autonomous software delivery engine.
+
+### By the numbers
+
+- ~30K LOC TypeScript source
+- 100+ Linear issues completed autonomously (RAH-1 through RAH-102)
+- 60+ PRs merged across 3 repos (forgectl, forge-test-api, forge-test-cli)
+- Multi-repo orchestration tested with diamond DAGs up to 10 issues
+- Review daemon tested with self-addressing loop
+
+### Key subsystems shipped
+
+**Knowledge Graph (src/kg/):** Regex-based parser builds an import graph, test mapping, and git coupling metrics. Merkle tree extension enables content hashing and incremental invalidation — only reparse files whose content hash changed. Per-workspace KG builds support stacked diffs where each workspace sees an overlay of its blocker's changes.
+
+**Context Engine v2 (src/context/):** Budget-aware context assembly using Merkle tree node sizes. Three compression tiers: full file content, signatures + docstrings only, names only. Learning feedback tracks which files the agent actually reads and boosts their relevance for future runs.
+
+**Convention Mining:** Extracts naming patterns, testing patterns, and error handling conventions directly from the codebase. Injects discovered conventions into agent context so the review agent doesn't need to catch what the executing agent already knows.
+
+**Task Specification (src/task/):** First-class YAML format with Zod validation. Agents and humans can both author task specs. CLI scaffolding for new tasks.
+
+**Planner Agent (src/planner/):** Reads the Knowledge Graph and produces an ExecutionPlan. Module-boundary decomposition strategy isolates risk by respecting import graph boundaries.
+
+**Outcome Analyzer (src/analysis/):** Pattern detection from run history. Generates self-improvement tasks (e.g., "module X has high retry rate — add tests"). Review calibration tracking measures false positive rate over time.
+
+**Review Daemon:** Integrated inline PR comments with severity levels. Approval workflow with quality tracking. Self-addressing loop: agent fixes review comments, pushes, re-reviews, max 3 rounds before escalation.
+
+**Merge Daemon:** Auto-review + auto-merge across multiple repos. Coordinates with review daemon for quality gates.
+
+**Multi-Repo Orchestration:** Per-issue repo routing from a single orchestrator instance. Stacked PR support where dependent issues target their blocker's branch. Rich PR descriptions with ticket context.
+
+**Reliability:** Crash recovery with workspace persistence and re-dispatch. GitHub App token auto-refresh. SubIssueCache invalidation fixes for reliable DAG execution.
 
 -----
 
@@ -575,9 +629,9 @@ The flywheel metric: **percentage of tasks where your review is a rubber stamp.*
 | Copilot Workspace | Cloud tool | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Codex (OpenAI) | Cloud agent | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Cursor / Aider | Assistant | ✗ | ✗ | ✗ | ✗ | ✗ |
-| **forgectl (today)** | **Execution engine** | **✓** | **not yet** | **✓** | **✓** | **not yet** |
+| **forgectl (today)** | **Autonomous engine** | **✓** | **✓** | **✓** | **✓** | **✓** |
 
-*Note: This table reflects what's shipped today, not planned features. Competitors are also evolving fast. The gap is real but not permanent — execution speed matters.*
+*Note: This table reflects what's shipped as of March 2026. Competitors are also evolving fast. The gap is real but not permanent — execution speed matters.*
 
 **Target customer (eventual):** Technical founders and small engineering teams (2–5 engineers) who want 10–50x output without 10–50x headcount. The self-hosted angle solves the data privacy problem that blocks cloud coding agents from touching production codebases.
 
@@ -591,40 +645,40 @@ The flywheel metric: **percentage of tasks where your review is a rubber stamp.*
 
 ### Month 1 — Foundation + Observability
 
-- [ ] Fix token reporting (OneShotSession zero tokens)
-- [ ] Fix effort data insertion gap (write to both tables)
-- [ ] Persist retry state to SQLite
-- [ ] **Outcome logging table — log everything from day one**
-- [ ] Codebase Knowledge Graph v1 (tree-sitter, import graph, git history)
-- [ ] Task Specification format (YAML + Zod + `forgectl task new`)
+- [x] Fix token reporting (OneShotSession zero tokens)
+- [x] Fix effort data insertion gap (write to both tables)
+- [x] Persist retry state to SQLite
+- [x] **Outcome logging table — log everything from day one**
+- [x] Codebase Knowledge Graph v1 (regex parser, import graph, test mapping, git coupling)
+- [x] Task Specification format (YAML + Zod + CLI)
 
 ### Month 2 — Quality Gate
 
-- [ ] Lint-driven validation (deterministic checks run first)
-- [ ] Review agent v1 (structured output, severity levels)
-- [ ] Self-addressing comment loop (max 2 rounds, diff-scoped re-review)
-- [ ] DAG-aware scheduler (critical path first)
-- [ ] Loop detector (halt + emit event before turns are wasted)
+- [x] Lint-driven validation (deterministic checks run first)
+- [x] Review agent v1 (structured YAML output, severity levels)
+- [x] Self-addressing comment loop (max 2 rounds, diff-scoped re-review)
+- [x] DAG-aware scheduler (critical path first)
+- [x] Loop detector (halt + emit event before turns are wasted)
 
 ### Month 3 — Planning Layer
 
-- [ ] Context Engine v2 (semantic retrieval from knowledge graph)
-- [ ] Planner agent v1 (knowledge graph → ExecutionPlan)
-- [ ] Decomposition engine v1 (risk-isolated task trees — expect rewrites)
-- [ ] Review findings → context engine feedback loop
+- [x] Context Engine v2 (Merkle tree, budget-aware assembly, compression tiers)
+- [x] Planner agent v1 (knowledge graph → ExecutionPlan)
+- [x] Decomposition engine v1 (module-boundary strategy — expect rewrites)
+- [x] Review findings → context engine feedback loop
 
 ### Month 4 — Learning Loop
 
-- [ ] Outcome Analyzer v1 (pattern detection from run history)
-- [ ] Self-improvement task generation (human-confirmed root causes)
-- [ ] Review agent calibration tracking (false positive rate)
-- [ ] forgectl running on forgectl (the meta-loop begins — human reviews all PRs)
+- [x] Outcome Analyzer v1 (pattern detection from run history)
+- [x] Self-improvement task generation (human-confirmed root causes)
+- [x] Review agent calibration tracking (false positive rate)
+- [x] forgectl running on forgectl (the meta-loop begins — human reviews all PRs)
 
 ### Month 5–6 — Hardening
 
-- [ ] Crash recovery upgrade (re-dispatch with persisted workspace)
+- [x] Crash recovery upgrade (re-dispatch with persisted workspace)
 - [ ] Workflow definition format (multi-step pipelines)
-- [ ] Convention extraction from codebase (learn from code, not just CLAUDE.md)
+- [x] Convention extraction from codebase (mine patterns from code, inject into agent context)
 - [ ] Decomposition engine v2 (informed by 4 months of outcome data)
 
 ### Month 7+ — If Productizing
@@ -648,5 +702,6 @@ Build the knowledge graph first. Log outcomes from day one. Everything else foll
 
 -----
 
-*Updated from brainstorming session — March 2026*
+*Updated March 2026*
 *Incorporates: Max 20x subscription model, Opus-everywhere execution, lint-driven development with review agent, dogfood-first development approach, honest assessment of research-hard problems.*
+*Months 1–4 complete. Knowledge Graph, Context Engine v2, Planner, Review/Merge daemons, Outcome Analyzer all shipped and running.*
