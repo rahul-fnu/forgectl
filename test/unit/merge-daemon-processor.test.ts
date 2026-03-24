@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRProcessor, type PRProcessorConfig, type PRInfo, parseStructuredReview } from "../../src/merge-daemon/pr-processor.js";
+import { PRProcessor, type PRProcessorConfig, type PRInfo, parseStructuredReview, findCoverageGaps } from "../../src/merge-daemon/pr-processor.js";
 import type { Logger } from "../../src/logging/logger.js";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createKGDatabase, saveTestMappings } from "../../src/kg/storage.js";
+import type { TestCoverageMapping } from "../../src/kg/types.js";
 
 function makeLogger(): Logger {
   return {
@@ -578,5 +583,121 @@ describe("PRProcessor.submitPRReview with suggested_fix", () => {
     expect(body.body).toContain("[MUST_FIX]");
     expect(body.body).toContain("Suggested fix:");
     expect(body.body).toContain("Wrap in try/catch");
+  });
+});
+
+describe("findCoverageGaps", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "coverage-gaps-"));
+    mkdirSync(join(tmpDir, ".forgectl"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns all files when KG has no test mappings", () => {
+    const dbPath = join(tmpDir, ".forgectl", "kg.db");
+    createKGDatabase(dbPath).close();
+
+    const gaps = findCoverageGaps(["src/foo.ts", "src/bar.ts"], tmpDir);
+    expect(gaps).toEqual(["src/foo.ts", "src/bar.ts"]);
+  });
+
+  it("excludes files that have test mappings", () => {
+    const dbPath = join(tmpDir, ".forgectl", "kg.db");
+    const db = createKGDatabase(dbPath);
+    const mappings: TestCoverageMapping[] = [
+      { sourceFile: "src/foo.ts", testFiles: ["test/foo.test.ts"], confidence: "import" },
+    ];
+    saveTestMappings(db, mappings);
+    db.close();
+
+    const gaps = findCoverageGaps(["src/foo.ts", "src/bar.ts"], tmpDir);
+    expect(gaps).toEqual(["src/bar.ts"]);
+  });
+
+  it("returns empty when all files have coverage", () => {
+    const dbPath = join(tmpDir, ".forgectl", "kg.db");
+    const db = createKGDatabase(dbPath);
+    saveTestMappings(db, [
+      { sourceFile: "src/foo.ts", testFiles: ["test/foo.test.ts"], confidence: "import" },
+      { sourceFile: "src/bar.ts", testFiles: ["test/bar.test.ts"], confidence: "name_match" },
+    ]);
+    db.close();
+
+    const gaps = findCoverageGaps(["src/foo.ts", "src/bar.ts"], tmpDir);
+    expect(gaps).toEqual([]);
+  });
+
+  it("returns empty when KG database does not exist", () => {
+    const nonExistent = join(tmpDir, "no-such-dir");
+    const gaps = findCoverageGaps(["src/foo.ts"], nonExistent);
+    expect(gaps).toEqual([]);
+  });
+});
+
+describe("PRProcessor.postMergeAnalysis", () => {
+  let logger: Logger;
+
+  beforeEach(() => {
+    logger = makeLogger();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not throw on error (try/catch)", async () => {
+    const processor = new PRProcessor(makeConfig(), logger);
+    const pr = makePR();
+
+    // postMergeAnalysis with a non-existent tmpDir should not throw
+    await expect(processor.postMergeAnalysis(pr, "/nonexistent-dir")).resolves.toBeUndefined();
+    expect((logger.warn as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      "merge-daemon",
+      expect.stringContaining("Post-merge analysis failed"),
+    );
+  });
+
+  it("posts comment when coverage gaps found", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pma-test-"));
+    try {
+      // Set up a git repo with one commit
+      const { execSync } = await import("node:child_process");
+      execSync("git init && git config user.email 'test@test.com' && git config user.name 'Test'", { cwd: tmpDir, stdio: "pipe" });
+      const { writeFileSync } = await import("node:fs");
+      mkdirSync(join(tmpDir, "src"), { recursive: true });
+      writeFileSync(join(tmpDir, "src", "foo.ts"), "export const x = 1;");
+      execSync("git add -A && git commit -m 'init'", { cwd: tmpDir, stdio: "pipe" });
+      writeFileSync(join(tmpDir, "src", "bar.ts"), "export const y = 2;");
+      execSync("git add -A && git commit -m 'add bar'", { cwd: tmpDir, stdio: "pipe" });
+
+      // Create KG database with mapping for foo only
+      mkdirSync(join(tmpDir, ".forgectl"), { recursive: true });
+      const db = createKGDatabase(join(tmpDir, ".forgectl", "kg.db"));
+      saveTestMappings(db, [
+        { sourceFile: "src/foo.ts", testFiles: ["test/foo.test.ts"], confidence: "import" },
+      ]);
+      db.close();
+
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+
+      const processor = new PRProcessor(makeConfig(), logger);
+      const pr = makePR();
+      await processor.postMergeAnalysis(pr, tmpDir);
+
+      // Should have posted a comment about src/bar.ts
+      expect(fetchSpy).toHaveBeenCalled();
+      const lastCall = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1];
+      const commentBody = JSON.parse((lastCall[1] as RequestInit).body as string).body;
+      expect(commentBody).toContain("src/bar.ts");
+      expect(commentBody).toContain("no test coverage mapping found");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

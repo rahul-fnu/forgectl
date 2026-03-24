@@ -5,6 +5,7 @@
  */
 
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { resolveToken } from "../tracker/token.js";
 import {
   cloneAndRebase,
@@ -20,6 +21,7 @@ import type { ReviewFindingsRepository } from "../storage/repositories/review-fi
 import { extractAcceptanceCriteria } from "../github/pr-description.js";
 import { fetchCIErrorLog } from "../github/ci-logs.js";
 import { load as yamlLoad } from "js-yaml";
+import { createKGDatabase, getTestsFor, resolveKGPath } from "../kg/storage.js";
 
 const API_BASE = "https://api.github.com";
 
@@ -468,6 +470,7 @@ export class PRProcessor {
 
         if (mergeResponse.ok) {
           this.logger.info("merge-daemon", `PR #${pr.number}: Merged successfully`);
+          await this.postMergeAnalysis(pr, tmpDir);
           return this.recordResult(pr, "merged");
         }
 
@@ -1205,6 +1208,38 @@ export class PRProcessor {
     return true;
   }
 
+  async postMergeAnalysis(pr: PRInfo, tmpDir?: string): Promise<void> {
+    try {
+      const workDir = tmpDir ?? ".";
+      const diffOutput = execSync("git diff --name-only HEAD~1", {
+        cwd: workDir,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+
+      if (!diffOutput) return;
+
+      const changedFiles = diffOutput.split("\n").filter((f) => f.endsWith(".ts") && !f.includes(".test.") && !f.includes(".spec.") && !f.includes("test/"));
+
+      if (changedFiles.length === 0) return;
+
+      const gaps = findCoverageGaps(changedFiles, workDir);
+
+      if (gaps.length === 0) return;
+
+      const body = [
+        "**forgectl post-merge analysis:** Coverage gaps detected in merged files:\n",
+        ...gaps.map((f) => `- \`${f}\` — no test coverage mapping found`),
+        "\nConsider adding tests for these files.",
+      ].join("\n");
+
+      await this.postComment(pr.number, body);
+      this.logger.info("merge-daemon", `PR #${pr.number}: Posted coverage gap analysis (${gaps.length} file(s))`);
+    } catch (err) {
+      this.logger.warn("merge-daemon", `PR #${pr.number}: Post-merge analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** Get processing history. */
   getHistory(): readonly ProcessResult[] {
     return this.history;
@@ -1213,5 +1248,24 @@ export class PRProcessor {
   /** Get review failure states for all PRs. */
   getReviewFailures(): ReadonlyMap<number, ReviewFailureState> {
     return this.reviewFailures;
+  }
+}
+
+export function findCoverageGaps(changedFiles: string[], workDir: string): string[] {
+  const kgPath = resolveKGPath(workDir);
+  if (!existsSync(kgPath)) return [];
+
+  const db = createKGDatabase(kgPath);
+  try {
+    const gaps: string[] = [];
+    for (const file of changedFiles) {
+      const mappings = getTestsFor(db, file);
+      if (mappings.length === 0 || mappings.every((m) => m.testFiles.length === 0)) {
+        gaps.push(file);
+      }
+    }
+    return gaps;
+  } finally {
+    db.close();
   }
 }
