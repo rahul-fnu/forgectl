@@ -217,7 +217,7 @@ export async function runReviewAgent(
  * Extract the module directory from a file path.
  * e.g. "src/storage/repositories/runs.ts" -> "src/storage"
  */
-export function extractModule(filePath: string): string {
+function extractModule(filePath: string): string {
   const parts = filePath.split("/");
   if (parts.length >= 2) {
     return parts.slice(0, 2).join("/");
@@ -230,7 +230,7 @@ export function extractModule(filePath: string): string {
  * Upserts each comment's category+pattern+module into the findings table,
  * then promotes any findings that have reached the threshold.
  */
-export function accumulateFindings(
+function accumulateFindings(
   output: ReviewOutput,
   repo: ReviewFindingsRepository,
   logger: Logger,
@@ -256,7 +256,7 @@ export function accumulateFindings(
  * Record calibration data from human review overrides.
  * Call this when a human overrides review agent comments.
  */
-export function recordReviewCalibration(
+function recordReviewCalibration(
   repo: ReviewFindingsRepository,
   module: string,
   totalComments: number,

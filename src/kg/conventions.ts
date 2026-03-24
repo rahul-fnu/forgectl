@@ -45,7 +45,7 @@ function groupByDirectory(modules: ModuleInfo[]): Map<string, ModuleInfo[]> {
   return groups;
 }
 
-export function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
+function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const groups = groupByDirectory(modules);
 
@@ -125,7 +125,7 @@ export function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-export function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
+function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const groups = groupByDirectory(modules);
 
@@ -187,7 +187,7 @@ export function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-export function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
+function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const testModules = modules.filter(m => m.isTest);
 
@@ -274,7 +274,7 @@ export function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-export function analyzeErrorHandlingPatterns(
+function analyzeErrorHandlingPatterns(
   modules: ModuleInfo[],
   repoRoot: string,
 ): Convention[] {
@@ -382,7 +382,7 @@ export function saveConventions(db: KGDatabase, conventions: Convention[]): void
   ).run("conventions_updated_at", new Date().toISOString());
 }
 
-export function loadConventions(db: KGDatabase): Convention[] {
+function loadConventions(db: KGDatabase): Convention[] {
   const row = db.prepare(
     "SELECT value FROM kg_meta WHERE key = 'conventions'",
   ).get() as { value: string } | undefined;
@@ -480,7 +480,7 @@ export function saveConvention(db: KGDatabase, conv: Omit<Convention, "id" | "ex
 /**
  * Get all stored conventions (individual convention records with id/source/description).
  */
-export function getAllConventions(db: KGDatabase): Convention[] {
+function getAllConventions(db: KGDatabase): Convention[] {
   return loadStoredConventions(db);
 }
 
@@ -497,7 +497,7 @@ function loadStoredConventions(db: KGDatabase): Convention[] {
  * Only processes findings where promotedToConvention is true.
  * Returns count of conventions created or updated.
  */
-export function mergeReviewFindingsWithConventions(
+function mergeReviewFindingsWithConventions(
   db: KGDatabase,
   findings: Array<{
     category: string;
@@ -543,7 +543,7 @@ export function mergeReviewFindingsWithConventions(
 /**
  * Record whether a convention was followed or not in a given run.
  */
-export function recordConventionCompliance(
+function recordConventionCompliance(
   db: KGDatabase,
   conventionId: number,
   followed: boolean,
