@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import picomatch from "picomatch";
 
 export interface ExclusionCheckResult {
@@ -16,7 +16,7 @@ export function checkExclusionViolations(
   const isExcluded = picomatch(excludePatterns);
   let changedFiles: string[] = [];
   try {
-    const diffOutput = execSync("git diff --name-only HEAD", {
+    const diffOutput = execFileSync("git", ["diff", "--name-only", "HEAD"], {
       cwd: repoPath,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -31,7 +31,7 @@ export function checkExclusionViolations(
   if (violations.length > 0) {
     for (const file of violations) {
       try {
-        execSync(`git checkout HEAD -- ${JSON.stringify(file)}`, {
+        execFileSync("git", ["checkout", "HEAD", "--", file], {
           cwd: repoPath,
           stdio: "pipe",
         });

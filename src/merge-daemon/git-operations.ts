@@ -44,17 +44,40 @@ export interface CloneResult {
 }
 
 /**
+ * Configure a git credential store file in the given directory so the token
+ * is never embedded in the clone URL or visible in process listings.
+ */
+export function configureGitCredentials(dir: string, token: string, host = "github.com"): void {
+  const credFile = join(dir, ".git-credentials");
+  writeFileSync(credFile, `https://x-access-token:${token}@${host}\n`, { mode: 0o600 });
+  execFileSync("git", ["config", "credential.helper", `store --file=${credFile}`], { cwd: dir, stdio: "pipe" });
+}
+
+/**
  * Clone a repo and rebase a branch onto main.
  * Returns the tmpDir for further operations. Caller must clean up with cleanupTmpDir().
+ * Accepts an optional token to configure credentials without embedding in the URL.
  */
-export function cloneAndRebase(repoUrl: string, branch: string, authorName = "forgectl-merger[bot]", authorEmail = "forge-merger@localhost"): CloneResult {
+export function cloneAndRebase(repoUrl: string, branch: string, authorName = "forgectl-merger[bot]", authorEmail = "forge-merger@localhost", token?: string): CloneResult {
   const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-merge-"));
 
-  execFileSync("git", ["clone", "--no-checkout", repoUrl, "."], { cwd: tmpDir, stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", authorName], { cwd: tmpDir, stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", authorEmail], { cwd: tmpDir, stdio: "pipe" });
-  execFileSync("git", ["fetch", "origin", `${branch}:refs/remotes/origin/${branch}`], { cwd: tmpDir, stdio: "pipe" });
-  execFileSync("git", ["checkout", branch], { cwd: tmpDir, stdio: "pipe" });
+  // Pre-configure credentials before clone so they're not in the URL
+  if (token) {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "pipe" });
+    configureGitCredentials(tmpDir, token);
+    execFileSync("git", ["remote", "add", "origin", repoUrl], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["fetch", "origin"], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", authorName], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", authorEmail], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["fetch", "origin", `${branch}:refs/remotes/origin/${branch}`], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["checkout", branch], { cwd: tmpDir, stdio: "pipe" });
+  } else {
+    execFileSync("git", ["clone", "--no-checkout", repoUrl, "."], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", authorName], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", authorEmail], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["fetch", "origin", `${branch}:refs/remotes/origin/${branch}`], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["checkout", branch], { cwd: tmpDir, stdio: "pipe" });
+  }
 
   return { tmpDir };
 }

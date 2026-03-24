@@ -15,6 +15,7 @@ import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import type { EventRepository } from "../storage/repositories/events.js";
+import type { TwoTierSlotManager } from "./state.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
@@ -322,6 +323,7 @@ export function dispatchIssue(
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
+  slotManager?: TwoTierSlotManager,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -342,7 +344,7 @@ export function dispatchIssue(
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
   const startedAt = Date.now();
   const slotWeight = config.team?.size ?? 1;
-  state.running.set(issue.id, {
+  const workerInfo = {
     issueId: issue.id,
     identifier: issue.identifier,
     issue,
@@ -352,7 +354,11 @@ export function dispatchIssue(
     lastActivityAt: Date.now(),
     attempt,
     slotWeight,
-  });
+  };
+  state.running.set(issue.id, workerInfo);
+  if (slotManager) {
+    slotManager.registerTopLevel(issue.id, workerInfo);
+  }
 
   // Record dispatch metrics and emit SSE event
   metrics.recordDispatch(issue.id, issue.identifier);
@@ -382,6 +388,7 @@ export function dispatchIssue(
     outcomeDeps,
     kgContext,
     promotedFindings,
+    slotManager,
   );
 }
 
@@ -403,12 +410,14 @@ async function executeWorkerAndHandle(
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
+  slotManager?: TwoTierSlotManager,
 ): Promise<void> {
   // --- Triage gate: fast pre-dispatch filtering ---
   const triageResult = await triageIssue(issue, state, config);
   if (!triageResult.shouldDispatch) {
     logger.info("dispatcher", `Triage skipped ${issue.identifier}: ${triageResult.reason}`);
     state.running.delete(issue.id);
+    slotManager?.releaseTopLevel(issue.id);
     releaseIssue(state, issue.id);
     return;
   }
@@ -474,6 +483,7 @@ async function executeWorkerAndHandle(
       });
       logger.info("dispatcher", `Run ${issue.identifier} requires pre-approval (autonomy=${autonomy})`);
       state.running.delete(issue.id);
+      slotManager?.releaseTopLevel(issue.id);
       return;
     } else {
       logger.warn("dispatcher", `Pre-approval needed for ${issue.identifier} but no runRepo available, proceeding`);
@@ -560,6 +570,7 @@ async function executeWorkerAndHandle(
     // Remove from running
     const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);
+    slotManager?.releaseTopLevel(issue.id);
 
     // --- Delegation hook: check if lead agent output contains a manifest ---
     if (delegationManager) {
@@ -962,6 +973,7 @@ async function executeWorkerAndHandle(
     // Unexpected error in worker
     const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);
+    slotManager?.releaseTopLevel(issue.id);
     metrics.recordCompletion(issue.id, { input: 0, output: 0, total: 0 }, runtimeMs, "failed");
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("dispatcher", `Unexpected worker error for ${issue.identifier}: ${msg}`);

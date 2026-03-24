@@ -59,10 +59,11 @@ export async function runValidationLoop(
   let lastResults: StepResult[] = [];
   const loopState = createLoopDetectorState();
   let detectedLoop: LoopPattern | null = null;
+  const maxAttempts = maxRetries + 1;
 
-  while (attempt <= maxRetries) {
+  while (attempt < maxAttempts) {
     attempt++;
-    logger.info("validation", `Validation round ${attempt}/${maxRetries + 1}`);
+    logger.info("validation", `Validation round ${attempt}/${maxAttempts}`);
 
     const results: StepResult[] = [];
     let allPassed = true;
@@ -124,7 +125,7 @@ export async function runValidationLoop(
       };
     }
 
-    if (attempt > maxRetries) {
+    if (attempt >= maxAttempts) {
       break;
     }
 
@@ -241,10 +242,11 @@ export async function runLintGate(
 
   let iteration = 0;
   let lastResults: StepResult[] = [];
+  const maxLintAttempts = maxRetries + 1;
 
-  while (iteration <= maxRetries) {
+  while (iteration < maxLintAttempts) {
     iteration++;
-    logger.info("validation", `Lint gate iteration ${iteration}/${maxRetries + 1}`);
+    logger.info("validation", `Lint gate iteration ${iteration}/${maxLintAttempts}`);
 
     const results: StepResult[] = [];
     let allPassed = true;
@@ -281,7 +283,7 @@ export async function runLintGate(
       };
     }
 
-    if (iteration > maxRetries) {
+    if (iteration >= maxLintAttempts) {
       break;
     }
 

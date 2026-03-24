@@ -5,7 +5,7 @@ import { detectIssueCycles } from "./sub-issue-dag.js";
 import { MergeQueue } from "../orchestrator/merge-queue.js";
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertContainment } from "../workspace/safety.js";
@@ -169,11 +169,17 @@ async function resolveAndMerge(
   rawToken: string,
 ): Promise<void> {
   const tmpDir = mkdtempSync(join(tmpdir(), "forgectl-conflict-"));
-  const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+  const resolvedTokenValue = resolveToken(rawToken);
+  const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
   try {
-    // Clone and checkout the PR branch
-    execFileSync("git", ["clone", "--depth=50", repoUrl, "."], { cwd: tmpDir, stdio: "pipe" });
+    // Configure credentials via store file, then clone — never embed token in URL
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "pipe" });
+    const credFile = join(tmpDir, ".git-credentials");
+    writeFileSync(credFile, `https://x-access-token:${resolvedTokenValue}@github.com\n`, { mode: 0o600 });
+    execFileSync("git", ["config", "credential.helper", `store --file=${credFile}`], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["remote", "add", "origin", repoUrl], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["fetch", "--depth=50", "origin"], { cwd: tmpDir, stdio: "pipe" });
     execFileSync("git", ["config", "user.name", "forgectl"], { cwd: tmpDir, stdio: "pipe" });
     execFileSync("git", ["config", "user.email", "forge@localhost"], { cwd: tmpDir, stdio: "pipe" });
     execFileSync("git", ["checkout", branch], { cwd: tmpDir, stdio: "pipe" });

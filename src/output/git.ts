@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type Docker from "dockerode";
@@ -194,9 +194,13 @@ export async function collectGitOutput(
     // Push the branch to the remote
     try {
       const pushEnv = { ...process.env };
+      let credFile: string | undefined;
       if (pushToken) {
-        // Set up credential helper that provides the token
-        execFileSync("git", ["config", "credential.helper", `!f() { echo "password=${pushToken}"; }; f`], {
+        // Write token to a temp credential store file to avoid shell/process exposure
+        credFile = join(tmpGit, ".git-credentials");
+        writeFileSync(credFile, `https://x-access-token:${pushToken}@github.com\n`, { mode: 0o600 });
+        chmodSync(credFile, 0o600);
+        execFileSync("git", ["config", "credential.helper", `store --file=${credFile}`], {
           cwd: hostRepo, stdio: "pipe",
         });
       }
