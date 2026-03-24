@@ -74,11 +74,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     daemonLogger.info("recovery", `Released ${staleLockCount} stale execution lock(s) from previous daemon`);
   }
 
-  // Mark interrupted runs
+  // Recover interrupted runs (re-queue resumable, mark rest as interrupted)
   const recoveryResults = recoverInterruptedRuns(runRepo, snapshotRepo);
   for (const r of recoveryResults) {
     daemonLogger.info("recovery", `Run ${r.runId}: ${r.action} -- ${r.reason}`);
   }
+  const requeuedCount = recoveryResults.filter(r => r.action === "requeued").length;
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
     const runConfig = loadConfig(configPath);
@@ -86,6 +87,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     const logger = new Logger(false);
     return executeRun(plan, logger, false, { snapshotRepo, lockRepo, daemonPid: currentPid, runRepo }, { outcomeRepo });
   });
+
+  // Kick off processing for any runs re-queued during recovery
+  if (requeuedCount > 0) {
+    daemonLogger.info("recovery", `Re-queued ${requeuedCount} run(s) for execution`);
+    queue.drain();
+  }
 
   const pipelineService = new PipelineRunService(pipelineRepo);
   const boardStore = new BoardStore(resolveBoardStateDir(config.board.state_dir));
@@ -135,6 +142,14 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
       const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
 
+      // Load promoted review conventions for injection into agent prompts
+      const { createReviewFindingsRepository: createFindingsRepoForConventions } = await import("../storage/repositories/review-findings.js");
+      const conventionsRepo = createFindingsRepoForConventions(db);
+      const promotedFindings = conventionsRepo.getPromotedFindings();
+      if (promotedFindings.length > 0) {
+        daemonLogger.info("daemon", `Loaded ${promotedFindings.length} promoted review convention(s) for agent context`);
+      }
+
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
         runRepo, costRepo, retryRepo,
@@ -143,6 +158,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         subIssueCache,
         skills: wf?.config?.skills,
         validationConfig: wf?.config?.validation,
+        promotedFindings,
       });
       await orchestrator.start();
 
@@ -363,12 +379,17 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const [mdOwner, mdRepo] = config.tracker.repo.split("/");
       let mdToken = "";
 
+      // Token refresh state — GitHub App installation tokens expire after 1 hour
+      let mergerService: InstanceType<typeof import("../github/app.js").GitHubAppService> | null = null;
+      let tokenObtainedAt = 0;
+      const TOKEN_REFRESH_INTERVAL_MS = 50 * 60 * 1000; // Refresh after 50 minutes (tokens expire at 60)
+
       // Get merger app installation token for GitHub API auth
       if (config.merger_app?.installation_id) {
         try {
           const { GitHubAppService } = await import("../github/app.js");
           const resolvedKeyPath = config.merger_app.private_key_path.replace(/^~/, process.env.HOME || "/tmp");
-          const mergerService = new GitHubAppService({
+          mergerService = new GitHubAppService({
             appId: config.merger_app.app_id,
             privateKeyPath: resolvedKeyPath,
             webhookSecret: config.merger_app.webhook_secret,
@@ -376,7 +397,10 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
           });
           const mdOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
           const mdAuth = await (mdOctokit as any).auth({ type: "installation" }) as { token: string };
-          if (mdAuth?.token) mdToken = mdAuth.token;
+          if (mdAuth?.token) {
+            mdToken = mdAuth.token;
+            tokenObtainedAt = Date.now();
+          }
         } catch (mergerErr) {
           daemonLogger.warn("daemon", `Merge daemon: merger app token failed: ${mergerErr}`);
         }
@@ -385,6 +409,38 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       if (!mdToken && config.tracker.kind === "github") {
         mdToken = resolveToken(config.tracker.token);
       }
+
+      /**
+       * Refresh the installation token if it's near expiry.
+       * Returns the current (possibly refreshed) token.
+       */
+      const refreshTokenIfNeeded = async (): Promise<string> => {
+        if (!mergerService || !config.merger_app?.installation_id) return mdToken;
+        if (Date.now() - tokenObtainedAt < TOKEN_REFRESH_INTERVAL_MS) return mdToken;
+
+        try {
+          const freshOctokit = await mergerService.getInstallationOctokit(config.merger_app.installation_id);
+          const freshAuth = await (freshOctokit as any).auth({ type: "installation" }) as { token: string };
+          if (freshAuth?.token) {
+            mdToken = freshAuth.token;
+            tokenObtainedAt = Date.now();
+            daemonLogger.info("daemon", "Refreshed GitHub App installation token");
+
+            // Also refresh the orchestrator's GitHub context
+            if (orchestrator && config.tracker?.repo) {
+              const [ghOwner, ghRepo] = config.tracker.repo.split("/");
+              orchestrator.setGitHubContext({
+                octokit: freshOctokit,
+                prOctokit: freshOctokit,
+                repo: { owner: ghOwner, repo: ghRepo },
+              });
+            }
+          }
+        } catch (err) {
+          daemonLogger.warn("daemon", `Token refresh failed: ${err}`);
+        }
+        return mdToken;
+      };
 
       if (mdToken) {
         const daemonConfig = config.merge_daemon;
@@ -413,8 +469,22 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
           }, daemonLogger, reviewMetricsRepo, reviewFindingsRepo);
         });
 
+        let lastProcessorToken = mdToken;
         const mergePollLoop = async (): Promise<void> => {
           while (mergeDaemonRunning) {
+            // Refresh token before each poll cycle if near expiry
+            try {
+              const freshToken = await refreshTokenIfNeeded();
+              if (freshToken !== lastProcessorToken) {
+                for (const processor of processors) {
+                  processor.updateToken(freshToken);
+                }
+                lastProcessorToken = freshToken;
+              }
+            } catch (err) {
+              daemonLogger.warn("merge-daemon", `Token refresh check failed: ${err}`);
+            }
+
             for (const processor of processors) {
               if (!mergeDaemonRunning) break;
               try {
