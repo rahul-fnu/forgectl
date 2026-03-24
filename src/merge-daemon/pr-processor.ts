@@ -239,19 +239,19 @@ export class PRProcessor {
         }
 
         if (review) {
-          const mustFixCount = review.comments.filter(c => c.severity === "must_fix").length;
-          if (mustFixCount > 0) {
-            this.logger.info("merge-daemon", `PR #${pr.number}: ${mustFixCount} must-fix issue(s) — blocking merge`);
-            return this.recordResult(pr, "request_changes", `${mustFixCount} must-fix issue(s): ${review.summary}`);
+          if (review.approval === "request_changes") {
+            this.logger.info("merge-daemon", `PR #${pr.number}: Review requested changes (${review.comments.length} comments) — blocking merge`);
+            return this.recordResult(pr, "request_changes", review.summary);
           }
-          // SHOULD_FIX and NIT are posted as comments but don't block merge
+          // Approved — log non-blocking comments if any
           if (review.comments.length > 0) {
-            this.logger.info("merge-daemon", `PR #${pr.number}: ${review.comments.length} non-blocking comment(s) posted, proceeding to merge`);
+            this.logger.info("merge-daemon", `PR #${pr.number}: Approved with ${review.comments.length} comment(s), proceeding to merge`);
           }
         } else {
-          // Review failed completely — post a comment and proceed with caution
-          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries, merging without review`);
-          await this.postComment(pr.number, `**forgectl review:** Automated review could not be completed (output parsing failed). Merging without review — manual inspection recommended.`);
+          // Review failed completely — do NOT merge, skip this PR
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries — skipping (will retry next poll)`);
+          await this.postComment(pr.number, `**forgectl review:** Automated review could not be completed (output parsing failed). Will retry on next poll cycle.`);
+          return this.recordResult(pr, "skipped", "Review failed after retries");
         }
       }
 
