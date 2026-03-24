@@ -200,12 +200,22 @@ export async function collectGitOutput(
           cwd: hostRepo, stdio: "pipe",
         });
       }
-      execSync(`git push origin "${branch}"`, {
-        cwd: hostRepo,
-        stdio: "pipe",
-        env: pushEnv,
-      });
-      logger.info("output", `Branch ${branch} pushed to remote`);
+      try {
+        execSync(`git push origin "${branch}"`, {
+          cwd: hostRepo,
+          stdio: "pipe",
+          env: pushEnv,
+        });
+        logger.info("output", `Branch ${branch} pushed to remote`);
+      } finally {
+        if (pushToken) {
+          try {
+            execSync(`git config --unset credential.helper`, { cwd: hostRepo, stdio: "pipe" });
+          } catch {
+            // Already unset or not present
+          }
+        }
+      }
 
       // Advance host repo's local main to include this work so subsequent
       // issues in the same shared workspace build on accumulated changes.
