@@ -361,15 +361,11 @@ describe("startScheduler", () => {
 
     // First tick
     await flushTick();
-    console.log("after first flush: reconcile=", vi.mocked(reconcile).mock.calls.length, "timers=", vi.getTimerCount());
     expect(reconcile).toHaveBeenCalledTimes(1);
 
     // Advance past poll_interval_ms (100ms) and flush second tick
-    console.log("before advance: timers=", vi.getTimerCount());
     await vi.advanceTimersByTimeAsync(100);
-    console.log("after advance: reconcile=", vi.mocked(reconcile).mock.calls.length, "timers=", vi.getTimerCount());
     await flushTick();
-    console.log("after second flush: reconcile=", vi.mocked(reconcile).mock.calls.length, "timers=", vi.getTimerCount());
     expect(reconcile).toHaveBeenCalledTimes(2);
   });
 

@@ -371,19 +371,13 @@ function issueToTaskSpec(issue: import("../tracker/types.js").TrackerIssue): imp
 }
 
 /**
- * Promise-based delay using setTimeout (supports fake timers in tests).
- */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
  * Start the scheduler tick loop using setTimeout chain.
  * Returns a stop function to halt scheduling.
  */
 export function startScheduler(deps: TickDeps): () => void {
   let stopped = false;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingResolve: (() => void) | null = null;
 
   const loop = async (): Promise<void> => {
     while (!stopped) {
@@ -398,8 +392,10 @@ export function startScheduler(deps: TickDeps): () => void {
 
       // setTimeout chain: wait poll_interval_ms before next tick
       await new Promise<void>((resolve) => {
+        pendingResolve = resolve;
         pendingTimer = setTimeout(() => {
           pendingTimer = null;
+          pendingResolve = null;
           resolve();
         }, deps.config.orchestrator.poll_interval_ms);
       });
@@ -413,6 +409,10 @@ export function startScheduler(deps: TickDeps): () => void {
     if (pendingTimer !== null) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
+    }
+    if (pendingResolve !== null) {
+      pendingResolve();
+      pendingResolve = null;
     }
   };
 }
