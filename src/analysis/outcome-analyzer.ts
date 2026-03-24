@@ -716,6 +716,18 @@ export function buildReviewQualityReport(
     );
   }
 
+  const parseTotal = stats.parseFailureCount + stats.parseSuccessCount;
+  if (parseTotal > 0) {
+    recommendations.push(
+      `Parse success rate: ${(stats.parseSuccessRate * 100).toFixed(1)}% (${stats.parseSuccessCount}/${parseTotal}).`,
+    );
+    if (parseTotal >= 10 && stats.parseSuccessRate < 0.5) {
+      recommendations.push(
+        `Parse failure rate exceeds 50% — review prompt needs tuning.`,
+      );
+    }
+  }
+
   if (stats.escalatedCount > 0) {
     const pct = ((stats.escalatedCount / stats.totalPRs) * 100).toFixed(0);
     recommendations.push(

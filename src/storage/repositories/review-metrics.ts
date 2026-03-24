@@ -15,6 +15,8 @@ export interface ReviewMetricRow {
   reviewEscalated: boolean;
   finalOutcome: string | null;
   humanOverride: boolean;
+  parseFailureCount: number;
+  parseSuccessCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +33,8 @@ export interface ReviewMetricUpsertParams {
   reviewEscalated?: boolean;
   finalOutcome?: string;
   humanOverride?: boolean;
+  parseFailureCount?: number;
+  parseSuccessCount?: number;
 }
 
 export interface ReviewQualityStats {
@@ -44,12 +48,16 @@ export interface ReviewQualityStats {
   escalatedCount: number;
   humanOverrideCount: number;
   estimatedFalsePositiveRate: number;
+  parseFailureCount: number;
+  parseSuccessCount: number;
+  parseSuccessRate: number;
 }
 
 export interface ReviewMetricsRepository {
   upsert(params: ReviewMetricUpsertParams): void;
   updateOutcome(repo: string, prNumber: number, outcome: string): void;
   markHumanOverride(repo: string, prNumber: number): void;
+  recordParseResult(repo: string, prNumber: number, success: boolean): void;
   findByPR(repo: string, prNumber: number): ReviewMetricRow[];
   findByRepo(repo: string): ReviewMetricRow[];
   findAll(): ReviewMetricRow[];
@@ -70,6 +78,8 @@ function deserialize(raw: typeof reviewMetrics.$inferSelect): ReviewMetricRow {
     reviewEscalated: raw.reviewEscalated === 1,
     finalOutcome: raw.finalOutcome,
     humanOverride: raw.humanOverride === 1,
+    parseFailureCount: raw.parseFailureCount,
+    parseSuccessCount: raw.parseSuccessCount,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -102,6 +112,8 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
             reviewEscalated: params.reviewEscalated ? 1 : (existing.reviewEscalated ?? 0),
             finalOutcome: params.finalOutcome ?? existing.finalOutcome,
             humanOverride: params.humanOverride ? 1 : (existing.humanOverride ?? 0),
+            parseFailureCount: (params.parseFailureCount ?? 0) + existing.parseFailureCount,
+            parseSuccessCount: (params.parseSuccessCount ?? 0) + existing.parseSuccessCount,
             updatedAt: now,
           })
           .where(eq(reviewMetrics.id, existing.id))
@@ -120,6 +132,8 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
             reviewEscalated: params.reviewEscalated ? 1 : 0,
             finalOutcome: params.finalOutcome ?? null,
             humanOverride: params.humanOverride ? 1 : 0,
+            parseFailureCount: params.parseFailureCount ?? 0,
+            parseSuccessCount: params.parseSuccessCount ?? 0,
             createdAt: now,
             updatedAt: now,
           })
@@ -151,6 +165,46 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
           ),
         )
         .run();
+    },
+
+    recordParseResult(repo: string, prNumber: number, success: boolean): void {
+      const now = new Date().toISOString();
+      const existing = db
+        .select()
+        .from(reviewMetrics)
+        .where(
+          and(
+            eq(reviewMetrics.repo, repo),
+            eq(reviewMetrics.prNumber, prNumber),
+          ),
+        )
+        .get();
+
+      if (existing) {
+        const updates = success
+          ? { parseSuccessCount: existing.parseSuccessCount + 1, updatedAt: now }
+          : { parseFailureCount: existing.parseFailureCount + 1, updatedAt: now };
+        db.update(reviewMetrics)
+          .set(updates)
+          .where(eq(reviewMetrics.id, existing.id))
+          .run();
+      } else {
+        db.insert(reviewMetrics)
+          .values({
+            repo,
+            prNumber,
+            reviewRound: 1,
+            reviewCommentsCount: 0,
+            reviewMustFix: 0,
+            reviewShouldFix: 0,
+            reviewNit: 0,
+            parseFailureCount: success ? 0 : 1,
+            parseSuccessCount: success ? 1 : 0,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+      }
     },
 
     findByPR(repo: string, prNumber: number): ReviewMetricRow[] {
@@ -194,6 +248,9 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
           escalatedCount: 0,
           humanOverrideCount: 0,
           estimatedFalsePositiveRate: 0,
+          parseFailureCount: 0,
+          parseSuccessCount: 0,
+          parseSuccessRate: 0,
         };
       }
 
@@ -214,6 +271,8 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
       let totalNit = 0;
       let escalatedCount = 0;
       let humanOverrideCount = 0;
+      let parseFailureCount = 0;
+      let parseSuccessCount = 0;
 
       for (const [, prRows] of prMap) {
         const maxRound = Math.max(...prRows.map(r => r.reviewRound));
@@ -229,6 +288,11 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
         const firstRound = prRows.find(r => r.reviewRound === 1);
         if (firstRound && firstRound.reviewApprovedRound === 1) {
           firstPassApprovals++;
+        }
+
+        for (const r of prRows) {
+          parseFailureCount += r.parseFailureCount;
+          parseSuccessCount += r.parseSuccessCount;
         }
 
         if (prRows.some(r => r.reviewEscalated)) escalatedCount++;
@@ -251,6 +315,11 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
         escalatedCount,
         humanOverrideCount,
         estimatedFalsePositiveRate,
+        parseFailureCount,
+        parseSuccessCount,
+        parseSuccessRate: (parseFailureCount + parseSuccessCount) > 0
+          ? parseSuccessCount / (parseFailureCount + parseSuccessCount)
+          : 0,
       };
     },
   };

@@ -151,6 +151,8 @@ export const reviewMetrics = sqliteTable(
     reviewEscalated: integer("review_escalated").notNull().default(0),
     finalOutcome: text("final_outcome"), // "merged" | "escalated" | "failed"
     humanOverride: integer("human_override").notNull().default(0),
+    parseFailureCount: integer("parse_failure_count").notNull().default(0),
+    parseSuccessCount: integer("parse_success_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
