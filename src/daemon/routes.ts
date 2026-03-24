@@ -20,6 +20,7 @@ import type { CostRepository } from "../storage/repositories/costs.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
+import type { TrackerIssue } from "../tracker/types.js";
 
 interface InlineContext {
   name: string;
@@ -698,6 +699,61 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       }
     },
   );
+
+  // --- Generic Dispatch API ---
+
+  app.post<{
+    Body: {
+      title: string;
+      description?: string;
+      repo?: string;
+      priority?: string;
+      labels?: string[];
+    };
+  }>("/api/v1/dispatch", async (request, reply) => {
+    if (!orchestrator || !orchestrator.isRunning()) {
+      reply.code(503);
+      return orchError503;
+    }
+
+    const body = request.body ?? {};
+    const { title, description, repo, priority, labels } = body as {
+      title?: string;
+      description?: string;
+      repo?: string;
+      priority?: string;
+      labels?: string[];
+    };
+
+    if (!title || typeof title !== "string") {
+      reply.code(400);
+      return { error: { code: "BAD_REQUEST", message: "title is required" } };
+    }
+
+    const now = new Date().toISOString();
+    const syntheticId = `dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const issue: TrackerIssue = {
+      id: syntheticId,
+      identifier: syntheticId,
+      title,
+      description: description ?? "",
+      state: "open",
+      priority: priority ?? null,
+      labels: labels ?? [],
+      assignees: [],
+      url: "",
+      created_at: now,
+      updated_at: now,
+      blocked_by: [],
+      metadata: { source: "dispatch", ...(repo ? { repo } : {}) },
+    };
+
+    orchestrator.dispatchIssue(issue);
+
+    reply.code(202);
+    return { id: syntheticId, status: "dispatched" };
+  });
 
   // --- Human review result ---
   const VALID_HUMAN_REVIEW_RESULTS = new Set(["rubber_stamp", "minor_changes", "major_rework", "rejected"]);
