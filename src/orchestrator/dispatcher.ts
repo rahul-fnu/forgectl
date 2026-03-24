@@ -400,8 +400,8 @@ async function executeWorkerAndHandle(
         const { WorkspaceManager: WM } = await import("../workspace/manager.js");
         effectiveWorkspaceManager = new WM(overlay.workspace, logger);
       }
-      if (overlay.validation) {
-        effectiveValidationConfig = overlay.validation as typeof validationConfig;
+      if ((overlay as any).validation) {
+        effectiveValidationConfig = (overlay as any).validation as typeof validationConfig;
       }
       // Override PR target repo via githubContext
       if (effectiveGithubContext && overlay.tracker?.repo) {
