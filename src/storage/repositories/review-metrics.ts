@@ -188,23 +188,8 @@ export function createReviewMetricsRepository(db: AppDatabase): ReviewMetricsRep
           .set(updates)
           .where(eq(reviewMetrics.id, existing.id))
           .run();
-      } else {
-        db.insert(reviewMetrics)
-          .values({
-            repo,
-            prNumber,
-            reviewRound: 1,
-            reviewCommentsCount: 0,
-            reviewMustFix: 0,
-            reviewShouldFix: 0,
-            reviewNit: 0,
-            parseFailureCount: success ? 0 : 1,
-            parseSuccessCount: success ? 1 : 0,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run();
       }
+      // Don't create new metric rows for parse-only results to avoid inflating totalPRs count
     },
 
     findByPR(repo: string, prNumber: number): ReviewMetricRow[] {
