@@ -157,6 +157,7 @@ describe("OrchestratorConfigSchema", () => {
       continuation_delay_ms: 1000,
       in_progress_label: "in-progress",
       child_slots: 0,
+      enable_triage: false,
     });
   });
 

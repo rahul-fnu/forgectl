@@ -22,6 +22,7 @@ import { createProgressComment } from "../github/comments.js";
 import { serializeReviewOutput } from "../validation/review-agent.js";
 import { emitRunEvent } from "../logging/events.js";
 import { needsPreApproval } from "../governance/autonomy.js";
+import { triageIssue } from "./triage.js";
 import { enterPendingApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
 import {
@@ -375,6 +376,14 @@ async function executeWorkerAndHandle(
   outcomeDeps?: OutcomeDeps,
   kgContext?: ContextResult,
 ): Promise<void> {
+  // --- Triage gate: fast pre-dispatch filtering ---
+  const triageResult = await triageIssue(issue, state, config);
+  if (!triageResult.shouldDispatch) {
+    logger.info("dispatcher", `Triage skipped ${issue.identifier}: ${triageResult.reason}`);
+    releaseIssue(state, issue.id);
+    return;
+  }
+
   // Per-issue repo routing: detect repo from issue description and load profile overlay
   const issueRepo = extractRepoFromIssue(issue);
   let effectiveConfig = config;
