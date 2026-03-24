@@ -228,7 +228,16 @@ export class PRProcessor {
 
       // Step 5: Review diff (optional) — post review, only block on MUST_FIX
       if (this.config.enableReview) {
-        const review = await this.reviewDiff(tmpDir, pr);
+        // Try review up to 2 times (Claude may produce non-JSON on first attempt)
+        let review: StructuredReview | undefined;
+        for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
+          review = await this.reviewDiff(tmpDir, pr);
+          if (review) break;
+          if (reviewAttempt < 2) {
+            this.logger.info("merge-daemon", `PR #${pr.number}: Review parse failed, retrying (attempt ${reviewAttempt + 1})`);
+          }
+        }
+
         if (review) {
           const mustFixCount = review.comments.filter(c => c.severity === "must_fix").length;
           if (mustFixCount > 0) {
@@ -239,6 +248,10 @@ export class PRProcessor {
           if (review.comments.length > 0) {
             this.logger.info("merge-daemon", `PR #${pr.number}: ${review.comments.length} non-blocking comment(s) posted, proceeding to merge`);
           }
+        } else {
+          // Review failed completely — post a comment and proceed with caution
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries, merging without review`);
+          await this.postComment(pr.number, `**forgectl review:** Automated review could not be completed (output parsing failed). Merging without review — manual inspection recommended.`);
         }
       }
 
