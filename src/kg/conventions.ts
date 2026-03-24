@@ -415,7 +415,17 @@ export function getConventionsForModules(
   modulePrefixes: string[],
   minConfidence: number,
 ): Convention[] {
-  const all = loadStoredConventions(db);
+  const mined = loadConventions(db);
+  const stored = loadStoredConventions(db);
+  // Merge both sources, stored conventions override mined ones on collision
+  const byKey = new Map<string, Convention>();
+  for (const c of mined) {
+    byKey.set(`${c.module}::${c.pattern}`, c);
+  }
+  for (const c of stored) {
+    byKey.set(`${c.module}::${c.pattern}`, c);
+  }
+  const all = [...byKey.values()];
   return all.filter(c =>
     c.confidence >= minConfidence &&
     !c.ignored &&
