@@ -45,7 +45,7 @@ function groupByDirectory(modules: ModuleInfo[]): Map<string, ModuleInfo[]> {
   return groups;
 }
 
-function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
+export function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const groups = groupByDirectory(modules);
 
@@ -125,7 +125,7 @@ function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
+export function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const groups = groupByDirectory(modules);
 
@@ -187,7 +187,7 @@ function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
+export function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
   const conventions: Convention[] = [];
   const testModules = modules.filter(m => m.isTest);
 
@@ -274,7 +274,7 @@ function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
   return conventions;
 }
 
-function analyzeErrorHandlingPatterns(
+export function analyzeErrorHandlingPatterns(
   modules: ModuleInfo[],
   repoRoot: string,
 ): Convention[] {
