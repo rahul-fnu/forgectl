@@ -371,6 +371,104 @@ describe("parseStructuredReview", () => {
     expect(result!.summary).toBe("Needs work");
   });
 
+  it("parses YAML output as fallback", () => {
+    const raw = [
+      "summary: Clean implementation with good test coverage",
+      'approval: approve',
+      "comments: []",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("Clean implementation with good test coverage");
+    expect(result!.comments).toHaveLength(0);
+  });
+
+  it("parses YAML with comments array", () => {
+    const raw = [
+      "summary: Issues found",
+      "approval: request_changes",
+      "comments:",
+      "  - file: src/foo.ts",
+      "    line: 42",
+      "    severity: must_fix",
+      "    body: Missing null check",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(1);
+    expect(result!.comments[0].file).toBe("src/foo.ts");
+  });
+
+  it("parses YAML inside markdown fences", () => {
+    const raw = [
+      "Here is my review:",
+      "",
+      "```yaml",
+      "summary: Looks good",
+      "approval: approve",
+      "comments: []",
+      "```",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("parses YAML with leading prose", () => {
+    const raw = [
+      "After reviewing the diff, here is my assessment:",
+      "",
+      "summary: Code is clean",
+      "approval: approve",
+      "comments: []",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
+  it("unwraps Claude --output-format json envelope", () => {
+    const inner = JSON.stringify({
+      summary: "All good",
+      approval: "approve",
+      comments: [],
+    });
+    const envelope = JSON.stringify({ type: "result", result: inner });
+    const result = parseStructuredReview(envelope);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+    expect(result!.summary).toBe("All good");
+  });
+
+  it("unwraps Claude envelope with nested JSON in result string", () => {
+    const envelope = JSON.stringify({
+      result: `{"summary":"Issues found","approval":"request_changes","comments":[{"file":"src/a.ts","line":1,"severity":"must_fix","body":"bug"}]}`,
+    });
+    const result = parseStructuredReview(envelope);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("request_changes");
+    expect(result!.comments).toHaveLength(1);
+  });
+
+  it("handles multiple markdown fence blocks (picks the JSON one)", () => {
+    const raw = [
+      "Here is my analysis:",
+      "",
+      "```",
+      "Some general notes about the code",
+      "```",
+      "",
+      "```json",
+      '{"summary": "LGTM", "approval": "approve", "comments": []}',
+      "```",
+    ].join("\n");
+    const result = parseStructuredReview(raw);
+    expect(result).toBeDefined();
+    expect(result!.approval).toBe("approve");
+  });
+
   it("parses suggested_fix from comments", () => {
     const json = JSON.stringify({
       summary: "Issues found",
