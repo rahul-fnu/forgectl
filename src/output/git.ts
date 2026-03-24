@@ -225,6 +225,16 @@ export async function collectGitOutput(
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? (pushErr as any).stderr?.toString() || pushErr.message : String(pushErr);
       logger.warn("output", `Failed to push branch (continuing): ${msg}`);
+    } finally {
+      if (pushToken) {
+        try {
+          execFileSync("git", ["config", "--unset", "credential.helper"], {
+            cwd: hostRepo, stdio: "pipe",
+          });
+        } catch {
+          // Ignore — config key may already be absent
+        }
+      }
     }
   } finally {
     rmSync(tmpGit, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 import type { TrackerIssue, TrackerAdapter } from "../tracker/types.js";
-import type { OrchestratorState } from "./state.js";
+import type { OrchestratorState, TwoTierSlotManager } from "./state.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import type { Logger } from "../logging/logger.js";
@@ -15,7 +15,6 @@ import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import type { EventRepository } from "../storage/repositories/events.js";
-import type { TwoTierSlotManager } from "./state.js";
 import { claimIssue, releaseIssue } from "./state.js";
 import { classifyFailure, calculateBackoff, scheduleRetry, cleanupRetryRecords } from "./retry.js";
 import { executeWorker } from "./worker.js";
@@ -356,6 +355,8 @@ export function dispatchIssue(
     slotWeight,
   };
   state.running.set(issue.id, workerInfo);
+
+  // Register with TwoTierSlotManager so slot accounting reflects this worker
   if (slotManager) {
     slotManager.registerTopLevel(issue.id, workerInfo);
   }
