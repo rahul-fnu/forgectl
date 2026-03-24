@@ -90,14 +90,23 @@ describe("PRProcessor", () => {
 
   describe("waitForCI", () => {
     it("returns true when no CI is configured", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      vi.useFakeTimers();
+      // The method waits at least 60s with empty check_runs before concluding no CI.
+      // Return empty check_runs on every poll so it keeps looping until the 60s threshold.
+      vi.spyOn(globalThis, "fetch").mockResolvedValue({
         ok: true,
         json: async () => ({ check_runs: [] }),
       } as Response);
 
-      const processor = new PRProcessor(makeConfig(), logger);
-      const result = await processor.waitForCI(1, "sha123");
+      const processor = new PRProcessor(makeConfig({ ciTimeoutMs: 120_000 }), logger);
+      const promise = processor.waitForCI(1, "sha123");
+
+      // Advance past the 60s "no CI" threshold and the 30s poll interval
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      const result = await promise;
       expect(result).toBe(true);
+      vi.useRealTimers();
     });
 
     it("returns true when all checks pass", async () => {

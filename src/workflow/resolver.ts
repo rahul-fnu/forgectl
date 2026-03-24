@@ -18,7 +18,8 @@ export interface CLIOptions {
   workflow?: string;
   repo?: string;
   input?: string[];
-  context?: string[];
+  // Commander: --context <paths...> sets string[], --no-context sets false, neither sets undefined
+  context?: string[] | false;
   agent?: string;
   model?: string;
   review?: boolean;
@@ -35,8 +36,6 @@ export interface CLIOptions {
   team?: boolean;
   // Numeric override from --team-size
   teamSize?: number;
-  // Commander sets context=false when --no-context is passed, undefined when omitted
-  context?: boolean;
 }
 
 /**
@@ -181,7 +180,7 @@ export function resolveRunPlan(
     },
     context: {
       system: workflow.system,
-      files: options.context ?? [],
+      files: Array.isArray(options.context) ? options.context : [],
       inject: [],
     },
     validation: {
