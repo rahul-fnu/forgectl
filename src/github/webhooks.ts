@@ -7,6 +7,7 @@ import type { ResumeResult } from "../durability/pause.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { parseSlashCommand, buildErrorMessage } from "./commands.js";
 import { hasWriteAccess } from "./permissions.js";
+import { fetchCIErrorLog } from "./ci-logs.js";
 
 /** Dependencies injected into webhook handlers for testability. */
 export interface WebhookDeps {
@@ -194,6 +195,55 @@ export function registerWebhookHandlers(app: App, deps: WebhookDeps): void {
       issueNumber: issue.number,
     };
     await deps.onCommand(cmd, octokit as unknown as Octokit, context, sender, comment.id);
+  });
+
+  // CI failure dispatch: auto-fix broken builds on forge/* branches
+  app.webhooks.on("check_suite.completed" as any, async ({ payload, octokit }: any) => {
+    const suite = payload.check_suite;
+    if (suite.conclusion !== "failure") return;
+
+    const branch: string = suite.head_branch ?? "";
+    if (!branch.startsWith("forge/")) return;
+
+    const repository = payload.repository;
+    const owner: string = repository.owner.login;
+    const repoName: string = repository.name;
+    const sha: string = suite.head_sha;
+
+    const token = (octokit as any).auth?.token ?? "";
+    const headers: Record<string, string> = {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+    };
+    const ciLog = await fetchCIErrorLog(owner, repoName, sha, headers);
+
+    const errorContext = ciLog
+      ? `\n\n## CI Error Log\n\`\`\`\n${ciLog}\n\`\`\``
+      : "";
+
+    const issue: TrackerIssue = {
+      id: `ci-fix-${sha.slice(0, 8)}`,
+      identifier: `${repository.full_name}#ci-${sha.slice(0, 8)}`,
+      title: `CI failure on ${branch}`,
+      description: `CI check suite failed on branch \`${branch}\` at commit \`${sha}\`.\n\nPlease fix the build errors and push a fix to the branch.${errorContext}`,
+      state: "open",
+      priority: null,
+      labels: ["ci-fix"],
+      assignees: [],
+      url: `https://github.com/${owner}/${repoName}/commit/${sha}`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      blocked_by: [],
+      metadata: {
+        repo: repository.full_name,
+        branch,
+        sha,
+        ci_fix: true,
+      },
+    };
+
+    const repo: RepoContext = { owner, repo: repoName };
+    deps.onDispatch(issue, octokit as unknown as Octokit, repo);
   });
 
   // TODO: Wire handleReactionEvent when GitHub adds reaction webhook events.
