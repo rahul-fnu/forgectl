@@ -35,6 +35,8 @@ export const ValidationStepSchema = z.object({
   retries: z.number().int().min(0).default(3),
   timeout: duration.optional(),
   description: z.string().default(""),
+  expect_failure: z.boolean().optional(),
+  before_fix: z.boolean().optional(),
 });
 export type ValidationStep = z.infer<typeof ValidationStepSchema>;
 

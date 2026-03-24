@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ConfigSchema, WorkflowSchema } from "../../src/config/schema.js";
+import { ConfigSchema, ValidationStepSchema, WorkflowSchema } from "../../src/config/schema.js";
 import { deepMerge } from "../../src/config/loader.js";
 
 describe("ConfigSchema", () => {
@@ -103,6 +103,24 @@ describe("WorkflowSchema", () => {
       container: { image: "node:20" },
     });
     expect(workflow.skills).toEqual([]);
+  });
+});
+
+describe("ValidationStepSchema", () => {
+  it("defaults expect_failure and before_fix to undefined when omitted", () => {
+    const step = ValidationStepSchema.parse({ name: "test", command: "npm test" });
+    expect(step.expect_failure).toBeUndefined();
+    expect(step.before_fix).toBeUndefined();
+  });
+
+  it("accepts expect_failure=true", () => {
+    const step = ValidationStepSchema.parse({ name: "repro", command: "npm test", expect_failure: true });
+    expect(step.expect_failure).toBe(true);
+  });
+
+  it("accepts before_fix=true", () => {
+    const step = ValidationStepSchema.parse({ name: "repro", command: "npm test", before_fix: true });
+    expect(step.before_fix).toBe(true);
   });
 });
 

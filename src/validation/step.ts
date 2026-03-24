@@ -30,7 +30,7 @@ export async function runValidationStep(
 
   return {
     step,
-    passed: result.exitCode === 0,
+    passed: step.expect_failure === true ? result.exitCode !== 0 : result.exitCode === 0,
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,

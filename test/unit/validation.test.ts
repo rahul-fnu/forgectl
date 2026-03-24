@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { formatFeedback } from "../../src/validation/feedback.js";
 import type { StepResult } from "../../src/validation/step.js";
+import type { ValidationStep } from "../../src/config/schema.js";
 
 function makeStepResult(overrides: Partial<StepResult> = {}): StepResult {
   return {
@@ -13,6 +14,28 @@ function makeStepResult(overrides: Partial<StepResult> = {}): StepResult {
     ...overrides,
   };
 }
+
+describe("step pass/fail inversion", () => {
+  function computePassed(step: ValidationStep, exitCode: number): boolean {
+    return step.expect_failure === true ? exitCode !== 0 : exitCode === 0;
+  }
+
+  it("normal step passes when exitCode is 0", () => {
+    expect(computePassed({ name: "t", command: "t", retries: 0, description: "" }, 0)).toBe(true);
+  });
+
+  it("normal step fails when exitCode is non-zero", () => {
+    expect(computePassed({ name: "t", command: "t", retries: 0, description: "" }, 1)).toBe(false);
+  });
+
+  it("expect_failure step passes when exitCode is non-zero", () => {
+    expect(computePassed({ name: "t", command: "t", retries: 0, description: "", expect_failure: true, before_fix: true }, 1)).toBe(true);
+  });
+
+  it("expect_failure step fails when exitCode is 0", () => {
+    expect(computePassed({ name: "t", command: "t", retries: 0, description: "", expect_failure: true, before_fix: true }, 0)).toBe(false);
+  });
+});
 
 describe("formatFeedback", () => {
   it("includes VALIDATION FAILED header", () => {
