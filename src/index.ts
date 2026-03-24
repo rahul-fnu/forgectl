@@ -583,7 +583,7 @@ cacheCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
-import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand } from "./cli/kg.js";
+import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand, kgConventionsCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
@@ -653,6 +653,13 @@ kgCmd
   .option("--db <path>", "Custom database path")
   .option("--workspace <dir>", "Workspace directory for per-workspace KG")
   .action(kgStatusCommand);
+
+kgCmd
+  .command("conventions")
+  .description("Discover coding conventions from codebase analysis")
+  .option("--db <path>", "Custom database path")
+  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
+  .action(kgConventionsCommand);
 
 /**
  * Resolve --config or --repo to a config file path.

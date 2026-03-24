@@ -1,249 +1,384 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { KGDatabase } from "./storage.js";
-import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
+import type { ModuleInfo, ExportEntry, ImportEntry } from "./types.js";
 
 export interface Convention {
-  id: number;
-  module: string;
   pattern: string;
-  description: string;
+  module: string;
   confidence: number;
-  source: "mined" | "review" | "merged";
-  occurrences: number;
-  lastSeen: string;
+  examples: string[];
 }
 
-export interface ConventionCompliance {
-  conventionId: number;
-  followed: boolean;
-  runId: string;
-  timestamp: string;
+interface ModuleRow {
+  path: string;
+  exports_json: string;
+  imports_json: string;
+  is_test: number;
 }
 
-const CONVENTIONS_SCHEMA = `
-CREATE TABLE IF NOT EXISTS kg_conventions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  module TEXT NOT NULL,
-  pattern TEXT NOT NULL,
-  description TEXT NOT NULL,
-  confidence REAL NOT NULL DEFAULT 0.5,
-  source TEXT NOT NULL DEFAULT 'mined',
-  occurrences INTEGER NOT NULL DEFAULT 1,
-  last_seen TEXT NOT NULL,
-  UNIQUE(module, pattern)
-);
+function loadAllModules(db: KGDatabase): ModuleInfo[] {
+  const rows = db.prepare("SELECT path, exports_json, imports_json, is_test FROM kg_modules").all() as ModuleRow[];
+  return rows.map(r => ({
+    path: r.path,
+    exports: JSON.parse(r.exports_json) as ExportEntry[],
+    imports: JSON.parse(r.imports_json) as ImportEntry[],
+    isTest: r.is_test === 1,
+  }));
+}
 
-CREATE TABLE IF NOT EXISTS kg_convention_compliance (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  convention_id INTEGER NOT NULL,
-  followed INTEGER NOT NULL,
-  run_id TEXT NOT NULL,
-  timestamp TEXT NOT NULL
-);
-`;
-
-export function ensureConventionTables(db: KGDatabase): void {
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='kg_conventions'",
-    )
-    .all();
-  if (tables.length === 0) {
-    db.exec(CONVENTIONS_SCHEMA);
+function groupByDirectory(modules: ModuleInfo[]): Map<string, ModuleInfo[]> {
+  const groups = new Map<string, ModuleInfo[]>();
+  for (const mod of modules) {
+    const dir = dirname(mod.path);
+    const list = groups.get(dir) ?? [];
+    list.push(mod);
+    groups.set(dir, list);
   }
+  return groups;
 }
 
-export function saveConvention(
-  db: KGDatabase,
-  conv: Omit<Convention, "id">,
-): void {
-  ensureConventionTables(db);
-  const now = conv.lastSeen || new Date().toISOString();
-  db.prepare(
-    `INSERT INTO kg_conventions (module, pattern, description, confidence, source, occurrences, last_seen)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(module, pattern) DO UPDATE SET
-       description = excluded.description,
-       confidence = MAX(kg_conventions.confidence, excluded.confidence),
-       source = CASE WHEN excluded.source = 'merged' THEN 'merged' ELSE kg_conventions.source END,
-       occurrences = kg_conventions.occurrences + 1,
-       last_seen = excluded.last_seen`,
-  ).run(
-    conv.module,
-    conv.pattern,
-    conv.description,
-    conv.confidence,
-    conv.source,
-    conv.occurrences,
-    now,
-  );
+export function analyzeExportPatterns(modules: ModuleInfo[]): Convention[] {
+  const conventions: Convention[] = [];
+  const groups = groupByDirectory(modules);
+
+  for (const [dir, mods] of groups) {
+    const sourceMods = mods.filter(m => !m.isTest);
+    if (sourceMods.length < 2) continue;
+
+    // Detect barrel exports (index.ts re-exports)
+    const indexMod = sourceMods.find(m => m.path.endsWith("/index.ts") || m.path === "index.ts");
+    if (indexMod && indexMod.imports.length > 0) {
+      const localImports = indexMod.imports.filter(i => i.source.startsWith(dir + "/") || i.source.startsWith("./"));
+      if (localImports.length >= 2) {
+        conventions.push({
+          pattern: "barrel exports via index.ts re-exports",
+          module: dir,
+          confidence: Math.min(1.0, localImports.length / sourceMods.length),
+          examples: localImports.slice(0, 3).map(i => `re-exports from ${i.source}`),
+        });
+      }
+    }
+
+    // Detect factory function pattern (createXxx)
+    const factoryMods: string[] = [];
+    for (const mod of sourceMods) {
+      const factories = mod.exports.filter(
+        e => e.kind === "function" && /^create[A-Z]/.test(e.name),
+      );
+      if (factories.length > 0) {
+        factoryMods.push(`${mod.path}: ${factories.map(f => f.name).join(", ")}`);
+      }
+    }
+    if (factoryMods.length >= 2) {
+      conventions.push({
+        pattern: "factory function pattern (createXxx)",
+        module: dir,
+        confidence: factoryMods.length / sourceMods.length,
+        examples: factoryMods.slice(0, 3),
+      });
+    }
+
+    // Detect class-based exports
+    const classMods: string[] = [];
+    for (const mod of sourceMods) {
+      const classes = mod.exports.filter(e => e.kind === "class");
+      if (classes.length > 0) {
+        classMods.push(`${mod.path}: ${classes.map(c => c.name).join(", ")}`);
+      }
+    }
+    if (classMods.length >= 2) {
+      const classRatio = classMods.length / sourceMods.length;
+      conventions.push({
+        pattern: "class-based exports",
+        module: dir,
+        confidence: classRatio,
+        examples: classMods.slice(0, 3),
+      });
+    }
+
+    // Detect interface-heavy modules (types files)
+    const interfaceMods: string[] = [];
+    for (const mod of sourceMods) {
+      const typeExports = mod.exports.filter(e => e.kind === "interface" || e.kind === "type");
+      if (typeExports.length >= 3) {
+        interfaceMods.push(`${mod.path}: ${typeExports.length} type exports`);
+      }
+    }
+    if (interfaceMods.length >= 1) {
+      conventions.push({
+        pattern: "dedicated type definition files",
+        module: dir,
+        confidence: 0.9,
+        examples: interfaceMods.slice(0, 3),
+      });
+    }
+  }
+
+  return conventions;
 }
 
-export function getConventionsForModules(
-  db: KGDatabase,
-  modules: string[],
-  minConfidence = 0.7,
+export function analyzeImportPatterns(modules: ModuleInfo[]): Convention[] {
+  const conventions: Convention[] = [];
+  const groups = groupByDirectory(modules);
+
+  for (const [dir, mods] of groups) {
+    const sourceMods = mods.filter(m => !m.isTest);
+    if (sourceMods.length < 2) continue;
+
+    // Detect type-only import separation
+    let typeOnlySeparated = 0;
+    const typeOnlyExamples: string[] = [];
+    for (const mod of sourceMods) {
+      const hasTypeOnly = mod.imports.some(i => i.isTypeOnly);
+      const hasValue = mod.imports.some(i => !i.isTypeOnly);
+      if (hasTypeOnly && hasValue) {
+        typeOnlySeparated++;
+        if (typeOnlyExamples.length < 3) {
+          typeOnlyExamples.push(`${mod.path}: separates type-only imports`);
+        }
+      }
+    }
+    if (typeOnlySeparated >= 2) {
+      conventions.push({
+        pattern: "type-only imports separated from value imports",
+        module: dir,
+        confidence: typeOnlySeparated / sourceMods.length,
+        examples: typeOnlyExamples,
+      });
+    }
+
+    // Detect absolute (src/) vs relative (./) import preference
+    let absoluteCount = 0;
+    let relativeCount = 0;
+    for (const mod of sourceMods) {
+      for (const imp of mod.imports) {
+        if (imp.source.startsWith("src/")) absoluteCount++;
+        else if (imp.source.startsWith("./") || imp.source.startsWith("../")) relativeCount++;
+      }
+    }
+    const total = absoluteCount + relativeCount;
+    if (total >= 5) {
+      if (absoluteCount > relativeCount * 2) {
+        conventions.push({
+          pattern: "absolute imports (src/ paths)",
+          module: dir,
+          confidence: absoluteCount / total,
+          examples: [`${absoluteCount} absolute vs ${relativeCount} relative imports`],
+        });
+      } else if (relativeCount > absoluteCount * 2) {
+        conventions.push({
+          pattern: "relative imports (./ paths)",
+          module: dir,
+          confidence: relativeCount / total,
+          examples: [`${relativeCount} relative vs ${absoluteCount} absolute imports`],
+        });
+      }
+    }
+  }
+
+  return conventions;
+}
+
+export function analyzeTestingPatterns(modules: ModuleInfo[]): Convention[] {
+  const conventions: Convention[] = [];
+  const testModules = modules.filter(m => m.isTest);
+
+  if (testModules.length === 0) return conventions;
+
+  const groups = groupByDirectory(testModules);
+
+  for (const [dir, mods] of groups) {
+    if (mods.length < 2) continue;
+
+    // Test file naming: .test.ts vs .spec.ts
+    const testNamed = mods.filter(m => m.path.includes(".test."));
+    const specNamed = mods.filter(m => m.path.includes(".spec."));
+    if (testNamed.length > specNamed.length && testNamed.length >= 2) {
+      conventions.push({
+        pattern: "test file naming: *.test.ts",
+        module: dir,
+        confidence: testNamed.length / mods.length,
+        examples: testNamed.slice(0, 3).map(m => m.path),
+      });
+    } else if (specNamed.length > testNamed.length && specNamed.length >= 2) {
+      conventions.push({
+        pattern: "test file naming: *.spec.ts",
+        module: dir,
+        confidence: specNamed.length / mods.length,
+        examples: specNamed.slice(0, 3).map(m => m.path),
+      });
+    }
+
+    // Test structure: check imports for describe/it/vi patterns
+    const vitestUsers: string[] = [];
+    const viMockUsers: string[] = [];
+    for (const mod of mods) {
+      const vitestImport = mod.imports.find(
+        i => i.source === "vitest" || i.source.endsWith("/vitest"),
+      );
+      if (vitestImport) {
+        const hasDescribe = vitestImport.names.includes("describe");
+        const hasIt = vitestImport.names.includes("it");
+        const hasVi = vitestImport.names.includes("vi");
+        if (hasDescribe && hasIt) {
+          vitestUsers.push(mod.path);
+        }
+        if (hasVi) {
+          viMockUsers.push(mod.path);
+        }
+      }
+    }
+    if (vitestUsers.length >= 2) {
+      conventions.push({
+        pattern: "test structure: describe/it blocks (vitest)",
+        module: dir,
+        confidence: vitestUsers.length / mods.length,
+        examples: vitestUsers.slice(0, 3),
+      });
+    }
+    if (viMockUsers.length >= 2) {
+      conventions.push({
+        pattern: "mocking with vi.fn()/vi.mock() (vitest)",
+        module: dir,
+        confidence: viMockUsers.length / mods.length,
+        examples: viMockUsers.slice(0, 3),
+      });
+    }
+
+    // Setup patterns: beforeEach
+    const beforeEachUsers: string[] = [];
+    for (const mod of mods) {
+      const vitestImport = mod.imports.find(i => i.source === "vitest");
+      if (vitestImport?.names.includes("beforeEach")) {
+        beforeEachUsers.push(mod.path);
+      }
+    }
+    if (beforeEachUsers.length >= 2) {
+      conventions.push({
+        pattern: "test setup using beforeEach",
+        module: dir,
+        confidence: beforeEachUsers.length / mods.length,
+        examples: beforeEachUsers.slice(0, 3),
+      });
+    }
+  }
+
+  return conventions;
+}
+
+export function analyzeErrorHandlingPatterns(
+  modules: ModuleInfo[],
+  repoRoot: string,
 ): Convention[] {
-  ensureConventionTables(db);
+  const conventions: Convention[] = [];
+  const sourceModules = modules.filter(m => !m.isTest);
+  const groups = groupByDirectory(sourceModules);
+
+  for (const [dir, mods] of groups) {
+    if (mods.length < 2) continue;
+
+    let tryCatchCount = 0;
+    let throwCount = 0;
+    const tryCatchExamples: string[] = [];
+    const throwExamples: string[] = [];
+    const customErrorExamples: string[] = [];
+
+    for (const mod of mods) {
+      let content: string;
+      try {
+        content = readFileSync(join(repoRoot, mod.path), "utf-8");
+      } catch {
+        continue;
+      }
+
+      const tryCatches = content.match(/\btry\s*\{/g);
+      if (tryCatches && tryCatches.length > 0) {
+        tryCatchCount++;
+        if (tryCatchExamples.length < 3) {
+          tryCatchExamples.push(`${mod.path}: ${tryCatches.length} try/catch blocks`);
+        }
+      }
+
+      const throws = content.match(/\bthrow\s+new\s+(\w+)/g);
+      if (throws && throws.length > 0) {
+        throwCount++;
+        if (throwExamples.length < 3) {
+          throwExamples.push(`${mod.path}: ${throws.join(", ")}`);
+        }
+        // Detect custom error classes
+        const customErrors = throws
+          .map(t => t.replace(/^throw\s+new\s+/, ""))
+          .filter(e => e !== "Error" && e !== "TypeError" && e !== "RangeError");
+        if (customErrors.length > 0 && customErrorExamples.length < 3) {
+          customErrorExamples.push(`${mod.path}: ${customErrors.join(", ")}`);
+        }
+      }
+    }
+
+    if (tryCatchCount >= 2) {
+      conventions.push({
+        pattern: "error handling with try/catch",
+        module: dir,
+        confidence: tryCatchCount / mods.length,
+        examples: tryCatchExamples,
+      });
+    }
+    if (throwCount >= 2) {
+      conventions.push({
+        pattern: "error propagation via throw",
+        module: dir,
+        confidence: throwCount / mods.length,
+        examples: throwExamples,
+      });
+    }
+    if (customErrorExamples.length >= 1) {
+      conventions.push({
+        pattern: "custom error classes",
+        module: dir,
+        confidence: customErrorExamples.length / mods.length,
+        examples: customErrorExamples,
+      });
+    }
+  }
+
+  return conventions;
+}
+
+export function analyzeConventions(
+  db: KGDatabase,
+  repoRoot: string,
+): Convention[] {
+  const modules = loadAllModules(db);
   if (modules.length === 0) return [];
 
-  const placeholders = modules.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT * FROM kg_conventions
-       WHERE (module IN (${placeholders}) OR module = '*')
-         AND confidence >= ?
-       ORDER BY confidence DESC, occurrences DESC`,
-    )
-    .all(...modules, minConfidence) as Array<{
-    id: number;
-    module: string;
-    pattern: string;
-    description: string;
-    confidence: number;
-    source: string;
-    occurrences: number;
-    last_seen: string;
-  }>;
+  const conventions: Convention[] = [
+    ...analyzeExportPatterns(modules),
+    ...analyzeImportPatterns(modules),
+    ...analyzeTestingPatterns(modules),
+    ...analyzeErrorHandlingPatterns(modules, repoRoot),
+  ];
 
-  return rows.map(deserializeConvention);
+  // Sort by confidence descending
+  conventions.sort((a, b) => b.confidence - a.confidence);
+
+  return conventions;
 }
 
-export function getAllConventions(
-  db: KGDatabase,
-  minConfidence = 0.0,
-): Convention[] {
-  ensureConventionTables(db);
-  const rows = db
-    .prepare(
-      `SELECT * FROM kg_conventions WHERE confidence >= ? ORDER BY confidence DESC`,
-    )
-    .all(minConfidence) as Array<{
-    id: number;
-    module: string;
-    pattern: string;
-    description: string;
-    confidence: number;
-    source: string;
-    occurrences: number;
-    last_seen: string;
-  }>;
-
-  return rows.map(deserializeConvention);
-}
-
-export function mergeReviewFindingsWithConventions(
-  db: KGDatabase,
-  findings: ReviewFindingRow[],
-): number {
-  ensureConventionTables(db);
-  let merged = 0;
-
-  for (const finding of findings) {
-    if (!finding.promotedToConvention) continue;
-
-    const existing = db
-      .prepare(
-        `SELECT * FROM kg_conventions WHERE module = ? AND pattern = ?`,
-      )
-      .get(finding.module, finding.pattern) as
-      | { id: number; confidence: number }
-      | undefined;
-
-    if (existing) {
-      const boostedConfidence = Math.min(1.0, existing.confidence + 0.1);
-      db.prepare(
-        `UPDATE kg_conventions SET confidence = ?, source = 'merged', occurrences = occurrences + ? WHERE id = ?`,
-      ).run(boostedConfidence, finding.occurrenceCount, existing.id);
-      merged++;
-    } else {
-      const desc =
-        finding.exampleComment ??
-        `${finding.category} in ${finding.module}`;
-      saveConvention(db, {
-        module: finding.module,
-        pattern: finding.pattern,
-        description: desc,
-        confidence: Math.min(1.0, 0.5 + finding.occurrenceCount * 0.05),
-        source: "review",
-        occurrences: finding.occurrenceCount,
-        lastSeen: finding.lastSeen,
-      });
-      merged++;
-    }
-  }
-
-  return merged;
-}
-
-export function recordConventionCompliance(
-  db: KGDatabase,
-  conventionId: number,
-  followed: boolean,
-  runId: string,
-): void {
-  ensureConventionTables(db);
-  const now = new Date().toISOString();
+export function saveConventions(db: KGDatabase, conventions: Convention[]): void {
+  // Store conventions in kg_meta as JSON
   db.prepare(
-    `INSERT INTO kg_convention_compliance (convention_id, followed, run_id, timestamp)
-     VALUES (?, ?, ?, ?)`,
-  ).run(conventionId, followed ? 1 : 0, runId, now);
+    "INSERT OR REPLACE INTO kg_meta (key, value) VALUES (?, ?)",
+  ).run("conventions", JSON.stringify(conventions));
+  db.prepare(
+    "INSERT OR REPLACE INTO kg_meta (key, value) VALUES (?, ?)",
+  ).run("conventions_updated_at", new Date().toISOString());
 }
 
-export function formatConventionsForContext(conventions: Convention[]): string {
-  if (conventions.length === 0) return "";
-
-  const lines: string[] = ["## Conventions"];
-  lines.push(
-    "The following coding conventions apply to the modules you are working in:",
-  );
-
-  const byModule = new Map<string, Convention[]>();
-  for (const conv of conventions) {
-    const existing = byModule.get(conv.module) ?? [];
-    existing.push(conv);
-    byModule.set(conv.module, existing);
-  }
-
-  for (const [mod, convs] of byModule) {
-    const label = mod === "*" ? "Global" : `When working in ${mod}/`;
-    const descs = convs.map((c) => c.description).join(". ");
-    lines.push(`- ${label}: ${descs}`);
-  }
-
-  return lines.join("\n");
-}
-
-function deserializeConvention(row: {
-  id: number;
-  module: string;
-  pattern: string;
-  description: string;
-  confidence: number;
-  source: string;
-  occurrences: number;
-  last_seen: string;
-}): Convention {
-  return {
-    id: row.id,
-    module: row.module,
-    pattern: row.pattern,
-    description: row.description,
-    confidence: row.confidence,
-    source: row.source as Convention["source"],
-    occurrences: row.occurrences,
-    lastSeen: row.last_seen,
-  };
-}
-
-export function extractModulePrefixes(filePaths: string[]): string[] {
-  const prefixes = new Set<string>();
-  for (const p of filePaths) {
-    const parts = p.split("/");
-    // Extract directory-based prefixes (drop the filename)
-    const dirParts = parts.slice(0, -1);
-    for (let i = 1; i <= dirParts.length; i++) {
-      prefixes.add(dirParts.slice(0, i).join("/"));
-    }
-  }
-  return [...prefixes];
+export function loadConventions(db: KGDatabase): Convention[] {
+  const row = db.prepare(
+    "SELECT value FROM kg_meta WHERE key = 'conventions'",
+  ).get() as { value: string } | undefined;
+  if (!row) return [];
+  return JSON.parse(row.value) as Convention[];
 }

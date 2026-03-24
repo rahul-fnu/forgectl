@@ -187,7 +187,7 @@ describe("PRProcessor", () => {
       expect(body.body).toContain("LGTM");
     });
 
-    it("posts REQUEST_CHANGES review with inline comments", async () => {
+    it("posts COMMENT review with issues in body (not inline)", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
         ok: true,
         json: async () => ({}),
@@ -203,11 +203,12 @@ describe("PRProcessor", () => {
       });
 
       const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-      expect(body.event).toBe("REQUEST_CHANGES");
-      expect(body.comments).toHaveLength(1);
-      expect(body.comments[0].path).toBe("src/foo.ts");
-      expect(body.comments[0].line).toBe(10);
-      expect(body.comments[0].body).toContain("[MUST_FIX]");
+      expect(body.event).toBe("COMMENT");
+      expect(body.comments).toHaveLength(0);
+      expect(body.body).toContain("[MUST_FIX]");
+      expect(body.body).toContain("src/foo.ts:10");
+      expect(body.body).toContain("Missing error handling");
+      expect(body.body).toContain("Changes requested");
     });
   });
 });
@@ -391,7 +392,7 @@ describe("PRProcessor.enrichPRDescription", () => {
 });
 
 describe("PRProcessor.submitPRReview with suggested_fix", () => {
-  it("includes suggested fix in comment body", async () => {
+  it("includes suggested fix in review body", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       json: async () => ({}),
@@ -407,8 +408,9 @@ describe("PRProcessor.submitPRReview with suggested_fix", () => {
     });
 
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.comments[0].body).toContain("[MUST_FIX]");
-    expect(body.comments[0].body).toContain("Suggested fix:");
-    expect(body.comments[0].body).toContain("Wrap in try/catch");
+    expect(body.comments).toHaveLength(0);
+    expect(body.body).toContain("[MUST_FIX]");
+    expect(body.body).toContain("Suggested fix:");
+    expect(body.body).toContain("Wrap in try/catch");
   });
 });

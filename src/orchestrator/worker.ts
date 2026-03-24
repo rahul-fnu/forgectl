@@ -33,6 +33,8 @@ import { emitRunEvent } from "../logging/events.js";
 import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
+import { saveCheckpoint } from "../durability/checkpoint.js";
+import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -240,6 +242,7 @@ export async function executeWorker(
   governance?: GovernanceOpts,
   skills?: string[],
   kgContext?: ContextResult,
+  snapshotRepo?: SnapshotRepository,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -334,6 +337,14 @@ export async function executeWorker(
   // 3. Build RunPlan (with optional validationConfig and skills)
   const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
 
+  // Save prepare checkpoint with workspace metadata
+  if (snapshotRepo) {
+    saveCheckpoint(snapshotRepo, plan.runId, "prepare", {
+      workspacePath,
+      issueId: issue.id,
+    });
+  }
+
   // 4. Create CleanupContext with empty tempDirs (workspace persists)
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
 
@@ -383,6 +394,15 @@ export async function executeWorker(
     const fullPrompt = buildPrompt(plan, kgContext);
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(fullPrompt);
+
+    // Save execute checkpoint with workspace metadata
+    if (snapshotRepo) {
+      saveCheckpoint(snapshotRepo, plan.runId, "execute", {
+        workspacePath,
+        issueId: issue.id,
+        metadata: { agentStatus: agentResult.status },
+      });
+    }
 
     // Update progress: agent_executing complete
     if (githubDeps) {
@@ -439,6 +459,15 @@ export async function executeWorker(
           stderr: `Loop detected (${loop.type}): ${loop.detail}`,
         };
       }
+    }
+
+    // Save validate checkpoint
+    if (snapshotRepo) {
+      saveCheckpoint(snapshotRepo, plan.runId, "validate", {
+        workspacePath,
+        issueId: issue.id,
+        metadata: { validationPassed: validationResult?.passed ?? true },
+      });
     }
 
     // Update progress: validating complete
@@ -523,6 +552,15 @@ export async function executeWorker(
       }
     } else {
       logger.warn("worker", `Skipping output collection for ${issue.identifier} — agent/gate already failed`);
+    }
+
+    // Save output checkpoint
+    if (snapshotRepo) {
+      saveCheckpoint(snapshotRepo, plan.runId, "output", {
+        workspacePath,
+        branchName: branch,
+        issueId: issue.id,
+      });
     }
 
     // Update progress: collecting_output complete
