@@ -343,6 +343,9 @@ export class Orchestrator {
       this.subIssueCache,
       this.skills,
       this.validationConfig,
+      undefined,
+      undefined,
+      this.slotManager,
     );
   }
 

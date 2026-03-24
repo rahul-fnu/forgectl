@@ -377,6 +377,9 @@ export async function executeWorker(
     // 5. Prepare execution (container, credentials, network)
     const { container, agentOptions, agentEnv, adapter } = await prepareExecution(plan, logger, cleanup);
 
+    // Ensure container is in worker-level cleanup context so it is destroyed on errors
+    cleanup.container = container;
+
     // 6. Create agent session with onActivity callback for stall detection
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
       onActivity,
