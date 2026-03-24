@@ -382,3 +382,43 @@ export function loadConventions(db: KGDatabase): Convention[] {
   if (!row) return [];
   return JSON.parse(row.value) as Convention[];
 }
+
+/**
+ * Extract unique module prefixes (directory paths) from file paths.
+ * e.g., ["src/auth/store.ts", "src/auth/claude.ts"] → ["src/auth"]
+ */
+export function extractModulePrefixes(paths: string[]): string[] {
+  const prefixes = new Set<string>();
+  for (const p of paths) {
+    const dir = dirname(p);
+    if (dir && dir !== ".") prefixes.add(dir);
+  }
+  return [...prefixes];
+}
+
+/**
+ * Get conventions relevant to the given module prefixes.
+ * Filters by minimum confidence threshold.
+ */
+export function getConventionsForModules(
+  db: KGDatabase,
+  modulePrefixes: string[],
+  minConfidence: number,
+): Convention[] {
+  const all = loadConventions(db);
+  return all.filter(c =>
+    c.confidence >= minConfidence &&
+    modulePrefixes.some(prefix => c.module.startsWith(prefix) || prefix.startsWith(c.module))
+  );
+}
+
+/**
+ * Format conventions as a text block suitable for agent context injection.
+ */
+export function formatConventionsForContext(conventions: Convention[]): string {
+  if (!conventions || conventions.length === 0) return "";
+  const lines = conventions.map(c =>
+    `- [${c.module}] ${c.pattern} (confidence: ${(c.confidence * 100).toFixed(0)}%)`
+  );
+  return `## Codebase Conventions\n\n${lines.join("\n")}`;
+}
