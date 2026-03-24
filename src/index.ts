@@ -58,7 +58,14 @@ program
   .option("--no-context", "Skip KG context building for this run")
   .option("--no-team", "Disable agent team mode for this run")
   .option("--team-size <n>", "Override team size (2-5)", parseInt)
-  .action(runCommand);
+  .action((rawOpts: Record<string, unknown>) => {
+    // Commander's --no-context sets context=false, normalize to noContext boolean
+    if (rawOpts.context === false) {
+      rawOpts.noContext = true;
+      rawOpts.context = undefined;
+    }
+    return runCommand(rawOpts as any);
+  });
 
 // forgectl auth
 const auth = program
