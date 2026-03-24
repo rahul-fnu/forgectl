@@ -430,8 +430,22 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
             // Also refresh the orchestrator's GitHub context
             if (orchestrator && config.tracker?.repo) {
               const [ghOwner, ghRepo] = config.tracker.repo.split("/");
+              // Use creator app (ghAppService) for octokit (comments/issues API)
+              // and merger app (freshOctokit) for prOctokit (PR creation)
+              let creatorOctokitForContext: unknown = freshOctokit;
+              if (ghAppService && config.github_app?.installation_id) {
+                try {
+                  creatorOctokitForContext = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
+                } catch (creatorErr) {
+                  daemonLogger.warn("daemon", `Failed to refresh creator app octokit, using merger app for comments (may lack .rest.issues): ${creatorErr}`);
+                }
+              }
+              const octokitForContext = creatorOctokitForContext as any;
+              if (!octokitForContext?.rest?.issues) {
+                daemonLogger.warn("daemon", "Refreshed octokit for orchestrator GitHub context is missing .rest.issues — progress comments will fail");
+              }
               orchestrator.setGitHubContext({
-                octokit: freshOctokit,
+                octokit: creatorOctokitForContext,
                 prOctokit: freshOctokit,
                 repo: { owner: ghOwner, repo: ghRepo },
               });
