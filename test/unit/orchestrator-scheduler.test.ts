@@ -336,7 +336,8 @@ describe("startScheduler", () => {
     vi.useRealTimers();
   });
 
-  /** Flush microtasks so async tick() fully completes and schedules its setTimeout. */
+  /** Flush microtasks so async tick() fully completes and schedules its setTimeout.
+   *  50 iterations is empirically sufficient to drain the microtask queue for tick() + setTimeout promise chain. */
   async function flushTick(): Promise<void> {
     for (let i = 0; i < 50; i++) await vi.advanceTimersByTimeAsync(0);
   }
@@ -386,6 +387,7 @@ describe("startScheduler", () => {
   });
 
   it("uses setTimeout chain (not setInterval)", async () => {
+    const setIntervalSpy = vi.spyOn(global, 'setInterval');
     const deps = makeDeps();
     stopFn = startScheduler(deps);
 
@@ -403,6 +405,9 @@ describe("startScheduler", () => {
     await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(3);
 
+    // Verify setInterval was never used with the poll interval
+    expect(setIntervalSpy.mock.calls.filter(c => c[1] === 100)).toHaveLength(0);
+
     // With setInterval, ticks would still fire after stop.
     // With setTimeout chain, stop prevents the next tick from scheduling.
     stopFn();
@@ -411,6 +416,8 @@ describe("startScheduler", () => {
     await vi.advanceTimersByTimeAsync(200);
     await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(countAfterStop);
+
+    setIntervalSpy.mockRestore();
   });
 
   it("continues scheduling even after tick errors", async () => {
