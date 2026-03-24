@@ -79,7 +79,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   for (const r of recoveryResults) {
     daemonLogger.info("recovery", `Run ${r.runId}: ${r.action} -- ${r.reason}`);
   }
-  const requeuedCount = recoveryResults.filter(r => r.action === "requeued").length;
+  const requeuedCount = recoveryResults.filter(r => r.action.startsWith("resumed")).length;
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
     const runConfig = loadConfig(configPath);
@@ -377,7 +377,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const allRepos = [...repoSet];
       daemonLogger.info("daemon", `Merge daemon will poll ${allRepos.length} repo(s): ${allRepos.join(", ")}`);
 
-      const [mdOwner, mdRepo] = config.tracker.repo.split("/");
       let mdToken = "";
 
       // Token refresh state — GitHub App installation tokens expire after 1 hour
