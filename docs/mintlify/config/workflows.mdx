@@ -1,0 +1,66 @@
+---
+title: Custom Workflows
+description: "Create workflow profiles tailored to your project."
+---
+
+## Creating a Workflow
+
+Place YAML files in `.forgectl/workflows/`:
+
+```yaml
+# .forgectl/workflows/backend-api.yaml
+name: backend-api
+extends: code
+container:
+  image: forgectl/code-node20
+  resources:
+    memory: 8g
+    cpus: 4
+  network:
+    mode: allowlist
+    allow:
+      - "api.anthropic.com"
+      - "registry.npmjs.org"
+validation:
+  steps:
+    - name: typecheck
+      command: npm run typecheck
+    - name: test
+      command: npm test -- --reporter=verbose
+    - name: lint
+      command: npm run lint
+  max_retries: 5
+output:
+  mode: git
+```
+
+## Using Your Workflow
+
+```bash
+forgectl run --task "Add pagination to the users endpoint" --workflow backend-api
+```
+
+## Extending Built-in Workflows
+
+The `extends` field inherits all settings from a built-in workflow. Your overrides take precedence:
+
+```yaml
+extends: code          # Start with the "code" workflow defaults
+validation:            # Override just the validation steps
+  steps:
+    - name: test
+      command: pytest -v
+```
+
+## Workflow-Specific Prompts
+
+Add context that's always included in the agent's prompt:
+
+```yaml
+name: my-workflow
+prompt:
+  system: "You are working on a Django REST API. Use Django REST Framework conventions."
+  context:
+    - docs/API-GUIDE.md
+    - docs/CONVENTIONS.md
+```

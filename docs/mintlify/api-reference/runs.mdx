@@ -1,0 +1,24 @@
+---
+title: Run Management
+description: "Approve, resume, and inspect runs."
+---
+
+## POST /api/v1/runs/:id/approve
+
+Approve a run waiting at a governance gate.
+
+```bash
+curl -X POST http://127.0.0.1:4856/api/v1/runs/RAH-42/approve \
+  -H "Authorization: Bearer $(cat ~/.forgectl/daemon.token)"
+```
+
+## POST /api/v1/runs/:id/resume
+
+Resume a paused run (e.g., waiting for user input).
+
+```bash
+curl -X POST http://127.0.0.1:4856/api/v1/runs/RAH-42/resume \
+  -H "Authorization: Bearer $(cat ~/.forgectl/daemon.token)" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Use the PostgreSQL adapter, not MySQL"}'
+```

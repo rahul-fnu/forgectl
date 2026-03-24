@@ -1,0 +1,44 @@
+---
+title: Output Modes
+description: "Collect agent output as git branches or file directories."
+---
+
+## Git Mode
+
+Creates a branch with the agent's commits. Best for code changes.
+
+```yaml
+output:
+  mode: git
+  branch:
+    template: "forge/{{slug}}/{{ts}}"
+    base: main
+```
+
+**Template variables:**
+- `{{slug}}` — slugified task title
+- `{{ts}}` — timestamp (YYYYMMDDHHmmssSSS)
+- `{{id}}` — issue identifier (e.g., RAH-42)
+
+After the run, the branch is pushed to your repo. If the orchestrator is running, a PR is automatically created.
+
+## Files Mode
+
+Copies output to a local directory. Best for research, content, and data.
+
+```yaml
+output:
+  mode: files
+  path: ./forge-output
+```
+
+The agent's work is extracted from the container and saved to the output directory. Each run creates a timestamped subdirectory.
+
+## Configuration Priority
+
+Output mode is determined by (highest to lowest priority):
+
+1. CLI flags (`--output-mode git`)
+2. Project config (`.forgectl/config.yaml`)
+3. Workflow definition (e.g., `code` defaults to `git`)
+4. Global defaults (`files`)

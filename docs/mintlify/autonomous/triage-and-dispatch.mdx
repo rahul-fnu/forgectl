@@ -1,0 +1,65 @@
+---
+title: Triage & Dispatch
+description: "Smart pre-dispatch filtering and reactive maintenance features."
+---
+
+## Triage Gate
+
+Before dispatching an issue, the orchestrator can run a fast LLM evaluation:
+
+- **Duplicate detection** — is this the same as a running/recently-completed issue?
+- **Complexity estimation** — low, medium, or high
+- **Feasibility check** — can an AI agent handle this?
+
+```yaml
+orchestrator:
+  enable_triage: true
+```
+
+Issues that fail triage are skipped and left in the tracker for manual handling.
+
+## CI Failure Dispatch
+
+When CI fails on a `forge/*` branch:
+
+```
+check_suite.completed (failure) → Extract error logs
+    → Create synthetic issue with CI context
+    → Dispatch agent with error logs in prompt
+    → Agent fixes the build → Push → Re-run CI
+```
+
+This is triggered via GitHub webhooks — no polling needed.
+
+## Post-Merge Test Generation
+
+After a PR merges, forgectl analyzes the changed files against the Knowledge Graph's test mappings:
+
+```
+PR merged → Get changed files → Check KG test mappings
+    → Find files without test coverage
+    → Create issue: "Add tests for 3 uncovered files from PR #42"
+```
+
+## Scheduled QA Sweeps
+
+Cron-triggered codebase health checks:
+
+```yaml
+scheduled_qa:
+  enabled: true
+  cron: "0 6 * * 1"      # Every Monday at 6 AM
+  min_gap_threshold: 5    # Only create issue if 5+ gaps found
+```
+
+Scans the KG for coverage gaps and creates issues automatically.
+
+## Reproduce-First Prompting
+
+For bug reports, agents are instructed to prove the bug exists before fixing:
+
+1. Run reproduction steps (expected to fail)
+2. Apply fix
+3. Run verification steps (expected to pass)
+
+This prevents "fixes" that pass tests without actually addressing the bug.

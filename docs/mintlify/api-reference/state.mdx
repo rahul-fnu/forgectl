@@ -1,0 +1,32 @@
+---
+title: GET /api/v1/state
+description: "Get the current orchestrator state."
+api: "GET http://127.0.0.1:4856/api/v1/state"
+---
+
+## Response
+
+```json
+{
+  "running": {
+    "RAH-42": {
+      "issue": {
+        "identifier": "RAH-42",
+        "title": "Add health endpoint"
+      },
+      "startedAt": "2026-03-24T10:00:00Z",
+      "attempt": 1
+    }
+  },
+  "claimed": ["RAH-42", "RAH-43"],
+  "recentlyCompleted": ["RAH-40", "RAH-41"],
+  "uptime": 3600
+}
+```
+
+## Example
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.forgectl/daemon.token)" \
+  http://127.0.0.1:4856/api/v1/state | jq
+```

@@ -1,0 +1,73 @@
+---
+title: Validation
+description: "Run checks after every agent attempt. Errors are fed back to the agent for automatic retry."
+---
+
+## How Validation Works
+
+```
+Agent writes code → Run ALL validation steps → Any fail?
+    → YES: Feed error output to agent → Agent fixes → Re-run ALL steps → Retry
+    → NO: Success! Collect output.
+```
+
+Validation is **universal** — the same mechanism works for all workflows. What changes is the commands you configure.
+
+<Warning>
+  Validation retries restart ALL steps from the top after each agent fix. This ensures the fix didn't break something else.
+</Warning>
+
+## Configuration
+
+```yaml
+# .forgectl/config.yaml or workflow YAML
+validation:
+  steps:
+    - name: typecheck
+      command: npm run typecheck
+      retries: 3
+      timeout: 5m
+    - name: test
+      command: npm test
+      retries: 3
+      timeout: 10m
+    - name: lint
+      command: npm run lint
+      retries: 2
+      timeout: 2m
+  max_retries: 5   # Total retries across all steps
+```
+
+## Step Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | required | Human-readable step name |
+| `command` | string | required | Shell command to run inside the container |
+| `retries` | number | 3 | Max retries for this specific step |
+| `timeout` | string | none | Timeout (e.g., `5m`, `30s`, `1h`) |
+| `description` | string | `""` | Shown in logs and agent prompts |
+| `expect_failure` | boolean | `false` | Inverts pass/fail — for reproduce-first mode |
+| `before_fix` | boolean | `false` | Marks as a reproduction step (run before agent fixes) |
+
+## Reproduce-First Mode
+
+For bug reports, you can instruct the agent to **prove the bug exists** before fixing:
+
+```yaml
+validation:
+  steps:
+    - name: reproduce
+      command: npm test -- --grep "the-failing-test"
+      expect_failure: true    # Must FAIL before the fix
+      before_fix: true        # Run before agent starts fixing
+    - name: verify
+      command: npm test
+      # Must PASS after the fix (default behavior)
+```
+
+The agent's prompt will show:
+```
+REPRODUCE: npm test -- --grep "the-failing-test" — should FAIL before your fix
+VERIFY: npm test — should PASS after your fix
+```

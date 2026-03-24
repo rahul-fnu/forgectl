@@ -1,0 +1,69 @@
+---
+title: Introduction
+description: "Run AI coding agents in isolated Docker containers. You bring the AI subscription, forgectl provides the sandbox, orchestration, and quality gates."
+---
+
+# What is forgectl?
+
+forgectl is a CLI and daemon that runs AI agents (Claude Code, Codex, browser-use) inside isolated Docker containers for any workflow — code, research, content, data, or ops.
+
+<CardGroup cols={2}>
+  <Card title="Bring Your Own Key" icon="key">
+    Use your own Anthropic or OpenAI API keys. No vendor lock-in.
+  </Card>
+  <Card title="Docker Sandbox" icon="docker">
+    Every task runs in an isolated container with configurable network access.
+  </Card>
+  <Card title="Validation Loop" icon="check">
+    Run tests, lint, typecheck after every agent attempt. Auto-retry on failure.
+  </Card>
+  <Card title="Autonomous Factory" icon="robot">
+    Poll issue trackers, dispatch agents, review PRs, merge — fully autonomous.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+```
+You give forgectl a task
+    → It builds a Docker container
+    → Injects an AI agent (Claude Code or Codex)
+    → Agent writes code / researches / generates content
+    → Validation loop runs your checks (tests, lint, etc.)
+    → If checks fail, errors are fed back to the agent → retry
+    → Output collected as a git branch or files directory
+    → PR created, reviewed by LLM, auto-merged
+```
+
+## Two Modes
+
+### Interactive Mode
+Run a single task from the command line:
+
+```bash
+forgectl run --task "Add a GET /health endpoint that returns 200"
+```
+
+### Autonomous Mode
+Start the orchestrator and let it work through your issue tracker:
+
+```bash
+forgectl orchestrate --foreground
+```
+
+The orchestrator polls GitHub Issues, Linear, or Notion for tasks, dispatches agents in parallel, validates their work, creates PRs, reviews them, and merges — all without human intervention.
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-agent support** | Claude Code, Codex, browser-use — switch with a flag |
+| **7 built-in workflows** | code, research, content, data, ops, general, browser-research |
+| **Knowledge Graph** | Merkle-tree-indexed codebase understanding with budget-aware context assembly |
+| **Convention mining** | Auto-discovers your coding patterns and teaches them to agents |
+| **Review daemon** | LLM reviews every PR with MUST_FIX / SHOULD_FIX / NIT severity levels |
+| **Pipeline engine** | DAG-based task decomposition with conditional branching and loops |
+| **Durable runtime** | SQLite persistence, crash recovery, checkpoint/resume |
+| **GitHub App** | Webhooks, slash commands, check runs, PR enrichment |
+| **Flight recorder** | Full audit trail of every agent action |
+| **Cost tracking** | Token usage and estimated USD per run |

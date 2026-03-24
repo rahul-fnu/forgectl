@@ -1,0 +1,98 @@
+---
+title: Quickstart
+description: "Get forgectl running in under 5 minutes."
+---
+
+## Prerequisites
+
+- **Node.js 20+** and npm
+- **Docker** running locally
+- An **Anthropic API key** (`sk-ant-...`) or **OpenAI API key**
+
+<Note>
+  On Linux, you also need `build-essential` and `libsecret-1-dev` for native dependencies:
+  ```bash
+  sudo apt-get install build-essential libsecret-1-dev
+  ```
+</Note>
+
+## Install
+
+```bash
+# Clone and build
+git clone https://github.com/rahul-fnu/forgectl.git
+cd forgectl
+npm install
+npm run build
+
+# Make it globally available
+npm link
+```
+
+## Setup
+
+<Steps>
+  <Step title="Initialize config">
+    ```bash
+    forgectl init --stack node
+    ```
+    Creates `.forgectl/config.yaml` with sensible defaults for a Node.js project.
+  </Step>
+
+  <Step title="Add your API key">
+    ```bash
+    forgectl auth add claude-code
+    # Paste your Anthropic API key when prompted
+    ```
+    Keys are stored in your OS keychain (or `~/.forgectl/credentials.json` on headless systems).
+  </Step>
+
+  <Step title="Build the Docker image">
+    ```bash
+    docker build -t forgectl/code-node20 -f dockerfiles/Dockerfile.code-node20 dockerfiles/
+    ```
+    This creates the container image that agents run inside.
+  </Step>
+
+  <Step title="Run the health check">
+    ```bash
+    forgectl doctor
+    ```
+    Verifies Docker, credentials, config, and database are all working.
+  </Step>
+</Steps>
+
+## Your First Task
+
+```bash
+forgectl run --task "Add a GET /health endpoint that returns { status: 'ok' }" --dry-run
+```
+
+The `--dry-run` flag shows the full execution plan without running anything. Remove it when you're ready:
+
+```bash
+forgectl run --task "Add a GET /health endpoint that returns { status: 'ok' }"
+```
+
+forgectl will:
+1. Start a Docker container with your project mounted
+2. Run Claude Code with your task
+3. Validate the output (if validation steps are configured)
+4. Collect the result as a git branch
+
+## What's Next?
+
+<CardGroup cols={2}>
+  <Card title="Workflows" icon="layer-group" href="/concepts/workflows">
+    Learn about the 7 built-in workflows and how to create custom ones.
+  </Card>
+  <Card title="Validation" icon="shield-check" href="/concepts/validation">
+    Configure tests, lint, and typecheck to run after every agent attempt.
+  </Card>
+  <Card title="Autonomous Mode" icon="robot" href="/autonomous/orchestrator">
+    Set up the orchestrator to work through your issue tracker.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/config/overview">
+    Full reference for all config options.
+  </Card>
+</CardGroup>

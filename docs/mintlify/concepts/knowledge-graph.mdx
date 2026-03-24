@@ -1,0 +1,67 @@
+---
+title: Knowledge Graph
+description: "Merkle-tree-indexed codebase understanding with budget-aware context assembly."
+---
+
+## What is the Knowledge Graph?
+
+The KG is a SQLite database that indexes your codebase — files, imports, exports, test mappings, and coding conventions. It enables agents to receive targeted, relevant context instead of the entire codebase.
+
+## How It Works
+
+```
+Your codebase → Parser extracts files, imports, exports, dependencies
+    → Merkle tree assigns content hashes to each file
+    → Convention miner discovers patterns (naming, testing, error handling)
+    → Test mapper links source files to their tests
+    → Budget-aware assembler selects context within token limits
+```
+
+## Building the KG
+
+```bash
+# Full build
+forgectl kg build
+
+# Incremental update (only re-parses changed files)
+forgectl kg update
+
+# View stats
+forgectl kg stats
+
+# Query the graph
+forgectl kg query --file src/auth/store.ts
+```
+
+## Budget-Aware Context Assembly
+
+The Context Engine respects a token budget (default: 60,000 tokens). When the full KG exceeds the budget, it applies compression tiers:
+
+1. **Full** — complete file contents
+2. **Signatures only** — function/class signatures without bodies
+3. **Names only** — just file and export names
+
+Files most relevant to the current task get the highest tier.
+
+## Convention Mining
+
+forgectl automatically discovers your project's coding patterns:
+
+```bash
+# List discovered conventions
+forgectl kg conventions
+
+# Example output:
+# [export] factory_function — 87% confidence — src/storage/, src/tracker/
+# [test] vitest_describe_it — 92% confidence — test/
+# [naming] camelCase_functions — 95% confidence — src/
+```
+
+These conventions are injected into agent prompts so the AI follows your project's patterns.
+
+## Automatic Rebuilds
+
+When running in autonomous mode, the KG rebuilds incrementally before each dispatch:
+- Tracks the last build commit SHA
+- Only re-parses files changed since the last build
+- Falls back to full rebuild if incremental fails

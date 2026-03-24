@@ -1,0 +1,62 @@
+---
+title: Review Daemon
+description: "LLM-powered code review on every PR with auto-fix and escalation."
+---
+
+## How It Works
+
+The review daemon runs alongside the merge daemon, reviewing every PR on `forge/*` branches:
+
+```
+PR created → Fetch diff → LLM reviews → Post review comment
+    → LGTM? → Wait for CI → Merge
+    → Changes requested? → Dispatch fix agent → Push fixes → Re-review
+    → Still failing after 3 rounds? → Escalate (label + comment)
+```
+
+## Review Severity Levels
+
+| Severity | Blocks Merge? | Description |
+|----------|---------------|-------------|
+| `must_fix` | Yes | Bugs, security issues, data loss risks |
+| `should_fix` | No | Edge cases, weak error handling |
+| `nit` | No | Style, minor improvements |
+
+Only `must_fix` issues trigger `request_changes`. Everything else is posted as feedback.
+
+## Self-Addressing Loop
+
+When the review requests changes:
+
+1. Review comments are collected
+2. A fix agent is dispatched with the review context
+3. Agent addresses the comments on the same branch
+4. New commits are pushed
+5. Re-review happens on next poll cycle (new SHA detected)
+6. After 3 failed rounds, the PR is labeled `needs-manual-review`
+
+## Configuration
+
+```yaml
+merge_daemon:
+  enable_review: true
+  branch_pattern: "forge/*"
+  poll_interval_ms: 60000
+  ci_timeout_ms: 2700000    # 45 min max CI wait
+  enable_build_fix: true
+  validation_commands:
+    - npm test
+    - npm run typecheck
+```
+
+## SHA Tracking
+
+The review daemon tracks the last reviewed SHA for each PR. If the SHA hasn't changed since the last review, it skips re-reviewing — saving API costs and avoiding redundant feedback.
+
+## Review Quality
+
+Reviews are posted as GitHub PR comments by the merger app. Each review includes:
+
+- **Verdict** — LGTM or Changes requested
+- **Summary** — one-sentence description of the changes
+- **Comments** — inline-style feedback with file, line, severity, and suggested fix

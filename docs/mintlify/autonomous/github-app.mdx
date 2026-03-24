@@ -1,0 +1,69 @@
+---
+title: GitHub App
+description: "Webhooks, slash commands, check runs, and PR enrichment."
+---
+
+## Overview
+
+forgectl integrates with GitHub as a GitHub App, enabling:
+- **Webhooks** — react to issue events, PR events, and CI failures
+- **Slash commands** — `/forge` in issue comments to trigger dispatch
+- **Check runs** — report validation status on PRs
+- **PR descriptions** — auto-enrich PRs with issue context
+
+## Setup
+
+You need two GitHub Apps:
+
+<Steps>
+  <Step title="Creator App">
+    Handles webhooks, issue comments, and check runs. Needs permissions:
+    - Issues: read/write
+    - Pull requests: read
+    - Checks: read/write
+    - Contents: read
+  </Step>
+
+  <Step title="Merger App">
+    Creates PRs, posts reviews, and merges. Needs permissions:
+    - Pull requests: read/write
+    - Contents: read/write
+    - Issues: read/write (for review comments)
+  </Step>
+</Steps>
+
+```yaml
+# .forgectl/config.yaml
+github_app:
+  app_id: 12345
+  private_key_path: ~/.forgectl/creator-app.pem
+  webhook_secret: your-webhook-secret
+  installation_id: 67890
+
+merger_app:
+  app_id: 12346
+  private_key_path: ~/.forgectl/merger-app.pem
+  webhook_secret: your-webhook-secret
+  installation_id: 67891
+```
+
+## Slash Commands
+
+In any issue comment:
+
+```
+/forge
+```
+
+This triggers immediate dispatch of the issue, bypassing the normal polling cycle.
+
+## CI Failure Dispatch
+
+When a GitHub Actions check run fails on a `forge/*` branch, the webhook handler automatically:
+1. Extracts failure logs from the CI run
+2. Creates a synthetic issue with the error context
+3. Dispatches an agent to fix the CI failure
+
+## Token Refresh
+
+GitHub App installation tokens expire after 1 hour. forgectl auto-refreshes tokens every 50 minutes to prevent expiry during long-running operations.

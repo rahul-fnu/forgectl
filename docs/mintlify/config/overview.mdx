@@ -1,0 +1,105 @@
+---
+title: Configuration Overview
+description: "Everything is configurable via YAML with sensible defaults."
+---
+
+## Config File Locations
+
+forgectl searches for config in this order:
+
+1. `--config <path>` CLI flag
+2. `.forgectl/config.yaml` in current directory (walks up)
+3. `~/.forgectl/config.yaml` (global)
+4. No config → all defaults apply
+
+## Merge Priority
+
+Settings merge with this priority (highest wins):
+
+```
+CLI flags > Project config > Workflow definition > Global defaults
+```
+
+## Minimal Config
+
+Everything has defaults. The smallest useful config:
+
+```yaml
+# .forgectl/config.yaml
+agent:
+  provider: claude-code
+```
+
+## Full Config Reference
+
+```yaml
+agent:
+  provider: claude-code     # or "codex", "browser-use"
+  model: ""                 # Model override (e.g., "claude-sonnet-4-20250514")
+  max_turns: 50             # Max agent conversation turns
+  timeout: 30m              # Agent timeout
+
+container:
+  image: forgectl/code-node20
+  resources:
+    memory: 4g
+    cpus: 2
+  network:
+    mode: open              # "open", "allowlist", "airgapped"
+    allow: []               # Hosts for allowlist mode
+
+repo:
+  branch:
+    template: "forge/{{slug}}/{{ts}}"
+    base: main
+  exclude:                  # Files to exclude from context
+    - node_modules
+    - dist
+    - "*.lock"
+
+validation:
+  steps: []
+  max_retries: 3
+
+output:
+  mode: git                 # "git" or "files"
+  path: ./forge-output
+
+orchestrator:
+  max_concurrent_agents: 2
+  poll_interval_ms: 30000
+  enable_triage: false
+  mode: single              # "single", "review", "parallel"
+
+tracker:
+  kind: github              # "github", "linear", "notion"
+  token: $GITHUB_TOKEN
+  repo: owner/repo
+  active_states: ["open"]
+  terminal_states: ["closed"]
+
+merge_daemon:
+  enable_review: true
+  branch_pattern: "forge/*"
+  poll_interval_ms: 60000
+  ci_timeout_ms: 2700000
+  enable_build_fix: true
+
+github_app:
+  app_id: 0
+  private_key_path: ""
+  webhook_secret: ""
+  installation_id: 0
+
+storage:
+  db_path: ~/.forgectl/forgectl.db
+
+commit:
+  prefix: "[forge]"
+  author: "forgectl <forge@localhost>"
+
+scheduled_qa:
+  enabled: false
+  cron: "0 6 * * 1"
+  min_gap_threshold: 5
+```

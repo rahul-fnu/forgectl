@@ -1,0 +1,86 @@
+---
+title: Orchestrator Config
+description: "Configure the autonomous agent factory."
+---
+
+## Orchestrator Settings
+
+```yaml
+orchestrator:
+  max_concurrent_agents: 2    # Parallel agent slots
+  poll_interval_ms: 30000     # Scheduler tick interval
+  enable_triage: true         # LLM-based pre-dispatch filtering
+  mode: single                # "single", "review", "parallel"
+```
+
+## Tracker Settings
+
+### GitHub Issues
+
+```yaml
+tracker:
+  kind: github
+  token: $GITHUB_TOKEN
+  repo: owner/repo
+  active_states: ["open"]
+  terminal_states: ["closed"]
+```
+
+### Linear
+
+```yaml
+tracker:
+  kind: linear
+  token: $LINEAR_API_KEY
+  team: your-team-uuid
+  repo: owner/repo           # GitHub repo for PRs
+  active_states: ["Todo", "In Progress"]
+  terminal_states: ["Done", "Canceled"]
+```
+
+### Notion
+
+```yaml
+tracker:
+  kind: notion
+  token: $NOTION_TOKEN
+  database_id: your-database-uuid
+  repo: owner/repo
+  active_states: ["Not started", "In progress"]
+  terminal_states: ["Done"]
+```
+
+## Merge Daemon Settings
+
+```yaml
+merge_daemon:
+  enable_review: true          # LLM code review on PRs
+  branch_pattern: "forge/*"    # Which branches to process
+  poll_interval_ms: 60000      # Poll interval
+  ci_timeout_ms: 2700000       # Max CI wait (45 min)
+  enable_build_fix: true       # Auto-fix build failures
+  validation_commands:          # Extra validation before merge
+    - npm test
+    - npm run typecheck
+```
+
+## Governance
+
+Control what the orchestrator can do without human approval:
+
+```yaml
+governance:
+  autonomy_level: full         # "full", "supervised", "manual"
+  auto_approve:
+    labels: ["auto-approve"]   # Issues with this label skip approval
+    complexity: ["low"]        # Low-complexity issues skip approval
+```
+
+## Scheduled QA
+
+```yaml
+scheduled_qa:
+  enabled: true
+  cron: "0 6 * * 1"           # Every Monday at 6 AM
+  min_gap_threshold: 5         # Min gaps before creating an issue
+```

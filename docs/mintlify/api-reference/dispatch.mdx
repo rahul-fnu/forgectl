@@ -1,0 +1,45 @@
+---
+title: POST /api/v1/dispatch
+description: "Dispatch a task to the orchestrator."
+api: "POST http://127.0.0.1:4856/api/v1/dispatch"
+---
+
+## Request Body
+
+```json
+{
+  "title": "Add health endpoint",
+  "description": "Add a GET /health endpoint that returns { status: 'ok' }",
+  "repo": "owner/repo",
+  "context": "This is for the Express API in src/server.ts"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Task title (used as issue identifier) |
+| `description` | string | Yes | Full task description for the agent |
+| `repo` | string | No | Target repo (defaults to tracker.repo) |
+| `context` | string | No | Additional context appended to prompt |
+
+## Response
+
+```json
+{
+  "status": "dispatched",
+  "runId": "dispatch-1711234567890",
+  "message": "Task dispatched successfully"
+}
+```
+
+## Example
+
+```bash
+curl -X POST http://127.0.0.1:4856/api/v1/dispatch \
+  -H "Authorization: Bearer $(cat ~/.forgectl/daemon.token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Fix login timeout",
+    "description": "The login endpoint times out after 5s. Increase to 30s and add retry logic."
+  }'
+```

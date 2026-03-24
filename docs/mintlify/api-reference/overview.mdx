@@ -1,0 +1,42 @@
+---
+title: API Overview
+description: "REST API for the forgectl daemon."
+---
+
+## Base URL
+
+```
+http://127.0.0.1:4856
+```
+
+The daemon binds to localhost only. All API routes require a bearer token.
+
+## Authentication
+
+The daemon generates a random token on startup, stored at `~/.forgectl/daemon.token`.
+
+```bash
+# Read the token
+TOKEN=$(cat ~/.forgectl/daemon.token)
+
+# Use in requests
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4856/api/v1/state
+```
+
+For SSE endpoints (EventSource doesn't support headers), pass the token as a query parameter:
+
+```
+http://127.0.0.1:4856/api/v1/events?token=YOUR_TOKEN
+```
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/dispatch` | Dispatch a task |
+| POST | `/api/v1/refresh` | Trigger scheduler tick |
+| GET | `/api/v1/state` | Get orchestrator state |
+| POST | `/api/v1/runs/:id/approve` | Approve a governance gate |
+| POST | `/api/v1/runs/:id/resume` | Resume a paused run |
+| GET | `/api/v1/events` | SSE event stream |
+| GET | `/health` | Health check (no auth required) |

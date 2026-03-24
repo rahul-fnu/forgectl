@@ -1,0 +1,99 @@
+---
+title: Workflows
+description: "Workflows are profiles that configure the sandbox — image, network, tools, validation, and output mode."
+---
+
+## What is a Workflow?
+
+A workflow is a **profile**, not a pipeline. It configures the sandbox environment (Docker image, network access, validation commands, output mode) but the AI agent decides how to do the task.
+
+## Built-in Workflows
+
+| Workflow | Output | Image | Best For |
+|----------|--------|-------|----------|
+| `code` | git branch | `forgectl/code-node20` | Writing code, fixing bugs, refactoring |
+| `general` | files | `forgectl/code-node20` | General tasks, scripts, automation |
+| `research` | files | `forgectl/research-browser` | Web research with browser access |
+| `content` | files | `forgectl/content` | Writing docs, blog posts, reports |
+| `data` | files | `forgectl/data` | Data analysis, transformations |
+| `ops` | git branch | `forgectl/ops` | Infrastructure, CI/CD, DevOps |
+| `browser-research` | files | `forgectl/research-browser` | Deep web research with browser |
+
+## Using a Workflow
+
+```bash
+# Explicit workflow
+forgectl run --task "Add unit tests" --workflow code
+
+# Auto-detected (looks at your project)
+forgectl run --task "Add unit tests"
+```
+
+**Auto-detection logic:**
+- Has `--repo` flag → `code`
+- Input has `.csv/.json/.parquet` → `data`
+- Input has `.md/.txt/.docx` → `content`
+- Current dir is a git repo → `code`
+- Otherwise → `general`
+
+## Custom Workflows
+
+Create YAML files in `.forgectl/workflows/`:
+
+```yaml
+# .forgectl/workflows/my-api.yaml
+name: my-api
+extends: code
+container:
+  image: forgectl/code-node20
+  resources:
+    memory: 8g
+    cpus: 4
+validation:
+  steps:
+    - name: typecheck
+      command: npm run typecheck
+    - name: test
+      command: npm test
+    - name: lint
+      command: npm run lint
+  max_retries: 5
+output:
+  mode: git
+  branch:
+    template: "forge/{{slug}}/{{ts}}"
+```
+
+List available workflows:
+```bash
+forgectl workflows list
+forgectl workflows show code
+```
+
+## Output Modes
+
+<CardGroup cols={2}>
+  <Card title="Git Mode" icon="code-branch">
+    Creates a branch with commits. Best for code changes. Optionally creates a PR.
+  </Card>
+  <Card title="Files Mode" icon="folder">
+    Copies output to a local directory. Best for research, content, data analysis.
+  </Card>
+</CardGroup>
+
+## Network Modes
+
+| Mode | Description |
+|------|-------------|
+| `open` | Standard Docker bridge networking (default) |
+| `allowlist` | iptables firewall — only allowed hosts/IPs |
+| `airgapped` | `--network=none` — completely offline |
+
+```yaml
+container:
+  network:
+    mode: allowlist
+    allow:
+      - "api.anthropic.com"
+      - "github.com"
+```

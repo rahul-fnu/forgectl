@@ -1,0 +1,90 @@
+---
+title: Installation
+description: "Detailed installation guide for all platforms."
+---
+
+## System Requirements
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| Node.js | 20.0+ | 22.x LTS |
+| Docker | 20.10+ | 24.x+ |
+| RAM | 4 GB (host) | 8 GB+ |
+| Disk | 5 GB (images + DB) | 20 GB+ |
+| OS | Linux, macOS, WSL2 | Ubuntu 22.04+ |
+
+## Install from Source
+
+```bash
+git clone https://github.com/rahul-fnu/forgectl.git
+cd forgectl
+npm install
+npm run build
+npm link
+```
+
+### Linux Dependencies
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install build-essential libsecret-1-dev
+
+# Fedora/RHEL
+sudo dnf install gcc-c++ make libsecret-devel
+```
+
+`build-essential` is needed for `better-sqlite3` (native SQLite binding). `libsecret` is needed for `keytar` (OS keychain integration) — if unavailable, forgectl falls back to encrypted file storage at `~/.forgectl/credentials.json`.
+
+### macOS Dependencies
+
+Xcode Command Line Tools are required:
+
+```bash
+xcode-select --install
+```
+
+## Build Docker Images
+
+forgectl runs agents inside Docker containers. You need to build at least one image:
+
+```bash
+# Required — used by the "code" and "general" workflows
+docker build -t forgectl/code-node20 -f dockerfiles/Dockerfile.code-node20 dockerfiles/
+
+# Optional — for research/browser workflows
+docker build -t forgectl/research-browser -f dockerfiles/Dockerfile.research-browser dockerfiles/
+
+# Optional — for content workflows
+docker build -t forgectl/content -f dockerfiles/Dockerfile.content dockerfiles/
+
+# Optional — for data workflows
+docker build -t forgectl/data -f dockerfiles/Dockerfile.data dockerfiles/
+
+# Optional — for ops workflows
+docker build -t forgectl/ops -f dockerfiles/Dockerfile.ops dockerfiles/
+```
+
+## Verify Installation
+
+```bash
+# Check everything is working
+forgectl doctor
+```
+
+Expected output:
+```
+[ok] Node.js version: v22.x.x
+[ok] Docker: connected
+[ok] Image forgectl/code-node20: available
+[ok] Credentials: claude-code configured
+[ok] Database: ~/.forgectl/forgectl.db
+[ok] Config: .forgectl/config.yaml loaded
+```
+
+## Uninstall
+
+```bash
+npm unlink -g forgectl
+rm -rf ~/.forgectl          # Remove config, DB, credentials
+docker rmi forgectl/code-node20  # Remove Docker images
+```

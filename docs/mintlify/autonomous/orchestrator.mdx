@@ -1,0 +1,117 @@
+---
+title: Orchestrator
+description: "Poll issue trackers, dispatch agents, validate, review, and merge — fully autonomous."
+---
+
+## Overview
+
+The orchestrator is the brain of forgectl's autonomous mode. It continuously polls your issue tracker, picks eligible tasks, dispatches agents in Docker containers, validates their output, creates PRs, reviews them, and merges.
+
+```
+Issue Tracker (GitHub/Linear/Notion)
+    → Scheduler tick (every 30s)
+    → Filter candidates (state, labels, blocking relations)
+    → Triage gate (LLM: should we work on this?)
+    → Dispatch to Docker container
+    → Agent works + validation loop
+    → PR creation → Review daemon → Auto-merge
+    → Close issue → Next
+```
+
+## Starting the Orchestrator
+
+```bash
+# Foreground (recommended for first run)
+forgectl orchestrate --foreground
+
+# As a daemon
+forgectl up
+forgectl status
+forgectl down
+```
+
+## Configuration
+
+```yaml
+# .forgectl/config.yaml
+orchestrator:
+  max_concurrent_agents: 2
+  poll_interval_ms: 30000
+  enable_triage: true
+
+tracker:
+  kind: linear          # or "github", "notion"
+  token: $LINEAR_API_KEY
+  team: your-team-id
+  repo: owner/repo      # GitHub repo for PRs
+  active_states: ["Todo", "In Progress"]
+  terminal_states: ["Done", "Canceled"]
+```
+
+## Issue Tracker Support
+
+<CardGroup cols={3}>
+  <Card title="GitHub Issues" icon="github">
+    Polls open issues with configurable labels.
+  </Card>
+  <Card title="Linear" icon="chart-gantt">
+    Polls by team, respects blocking relations and sub-issues.
+  </Card>
+  <Card title="Notion" icon="book">
+    Polls a Notion database with status property filtering.
+  </Card>
+</CardGroup>
+
+## Scheduling and Dispatch
+
+The scheduler runs a tick every `poll_interval_ms` (default: 30 seconds):
+
+1. **Fetch candidates** from the issue tracker
+2. **Filter** by state (must be in `active_states`), blocking relations, and recently completed
+3. **Claim** up to `max_concurrent_agents` issues
+4. **Triage** each claimed issue (optional LLM-based filtering)
+5. **Dispatch** — build KG context, start Docker container, run agent
+
+### Blocking Relations
+
+The orchestrator respects issue dependencies:
+- Linear: blocking/blocked-by relations
+- GitHub: referenced issues in description
+- Sub-issues: parent waits for all children to complete
+
+## Multi-Repo Support
+
+The orchestrator can work across multiple repositories:
+
+```yaml
+# ~/.forgectl/repos/my-api.yaml
+tracker:
+  repo: owner/my-api
+validation:
+  steps:
+    - name: test
+      command: npm test
+```
+
+Issues with `**Repo:** https://github.com/owner/my-api` in their description are automatically routed to the correct repo profile.
+
+## Crash Recovery
+
+If the daemon crashes mid-run:
+- Runs with checkpoints are resumed from the last checkpoint
+- Runs without checkpoints are marked as interrupted
+- Stale execution locks are released on restart
+- Workspace directories are cleaned up
+
+## Monitoring
+
+```bash
+# View daemon logs
+tail -f /tmp/orch-dogfood.log
+
+# Check daemon status
+forgectl status
+
+# Web dashboard
+open http://127.0.0.1:4856
+```

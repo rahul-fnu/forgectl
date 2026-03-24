@@ -1,0 +1,76 @@
+---
+title: Docker
+description: "Container images, resource limits, and network isolation."
+---
+
+## Images
+
+Each workflow uses a Docker image with the tools the agent needs:
+
+| Image | Contents |
+|-------|----------|
+| `forgectl/code-node20` | Node.js 20, git, Claude Code CLI |
+| `forgectl/research-browser` | Chromium, Playwright, Claude Code CLI |
+| `forgectl/content` | Writing tools, Claude Code CLI |
+| `forgectl/data` | Python 3, pandas, jupyter, Claude Code CLI |
+| `forgectl/ops` | Terraform, kubectl, AWS CLI, Claude Code CLI |
+
+### Building Images
+
+```bash
+# Build the default code image
+docker build -t forgectl/code-node20 -f dockerfiles/Dockerfile.code-node20 dockerfiles/
+```
+
+### Custom Images
+
+Point to your own Dockerfile:
+
+```yaml
+container:
+  dockerfile: ./Dockerfile.my-stack
+  # OR use a pre-built image:
+  image: my-registry/my-image:latest
+```
+
+## Resource Limits
+
+```yaml
+container:
+  resources:
+    memory: 4g      # Container memory limit
+    cpus: 2         # CPU cores allocated
+```
+
+## Network Isolation
+
+Three modes for controlling container network access:
+
+### Open (Default)
+Standard Docker bridge networking. Container can reach the internet.
+
+### Allowlist
+iptables firewall inside the container. Only allowed hosts can be reached:
+
+```yaml
+container:
+  network:
+    mode: allowlist
+    allow:
+      - "api.anthropic.com"
+      - "github.com"
+      - "registry.npmjs.org"
+```
+
+### Airgapped
+Complete network isolation (`--network=none`):
+
+```yaml
+container:
+  network:
+    mode: airgapped
+```
+
+<Warning>
+  Airgapped mode prevents the agent from downloading packages or accessing APIs. Make sure all dependencies are pre-installed in the Docker image.
+</Warning>

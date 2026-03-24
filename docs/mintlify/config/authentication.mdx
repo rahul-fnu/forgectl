@@ -1,0 +1,65 @@
+---
+title: Authentication
+description: "Bring Your Own Key — manage AI and service credentials."
+---
+
+## AI Agent Keys
+
+forgectl uses your own AI API keys. No middleman, no markup.
+
+```bash
+# Add Anthropic API key (for Claude Code)
+forgectl auth add claude-code
+# Paste: sk-ant-api03-...
+
+# Add OpenAI API key (for Codex)
+forgectl auth add codex
+# Paste: sk-...
+
+# List configured credentials
+forgectl auth list
+
+# Remove a credential
+forgectl auth remove claude-code
+```
+
+## Storage
+
+Credentials are stored securely:
+
+1. **OS Keychain** (preferred) — macOS Keychain, Linux libsecret, Windows Credential Manager
+2. **File fallback** — `~/.forgectl/credentials.json` with 0600 permissions
+
+<Note>
+  On headless Linux servers without a desktop environment, keytar will fall back to file storage. Install `libsecret-1-dev` and `gnome-keyring` for keychain support.
+</Note>
+
+## Service Tokens
+
+Tokens for issue trackers and GitHub Apps go in your config YAML:
+
+```yaml
+tracker:
+  kind: linear
+  token: $LINEAR_API_KEY    # Reads from environment variable
+
+github_app:
+  app_id: 12345
+  private_key_path: ~/.forgectl/my-app.pem
+  webhook_secret: $WEBHOOK_SECRET
+
+merger_app:
+  app_id: 12346
+  private_key_path: ~/.forgectl/merger-app.pem
+```
+
+**Token resolution:** Values starting with `$` are resolved from environment variables. The special sentinel `$linear` reads `LINEAR_API_KEY` from the environment.
+
+## How Keys Reach Containers
+
+API keys are **never** passed as environment variables visible in process listings. Instead:
+
+1. Key is written to a temporary file
+2. File is bind-mounted into the container at `/run/secrets/`
+3. The agent reads the key from the file
+4. Temporary file is deleted after the run

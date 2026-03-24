@@ -1,0 +1,87 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "forgectl",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#6366f1",
+    "light": "#818cf8",
+    "dark": "#4f46e5",
+    "anchors": {
+      "from": "#6366f1",
+      "to": "#8b5cf6"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/rahul-fnu/forgectl"
+    }
+  ],
+  "tabs": [
+    {
+      "name": "API Reference",
+      "url": "api-reference"
+    }
+  ],
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/rahul-fnu/forgectl"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "introduction",
+        "quickstart",
+        "installation"
+      ]
+    },
+    {
+      "group": "Core Concepts",
+      "pages": [
+        "concepts/workflows",
+        "concepts/validation",
+        "concepts/output-modes",
+        "concepts/knowledge-graph"
+      ]
+    },
+    {
+      "group": "Autonomous Mode",
+      "pages": [
+        "autonomous/orchestrator",
+        "autonomous/review-daemon",
+        "autonomous/github-app",
+        "autonomous/triage-and-dispatch"
+      ]
+    },
+    {
+      "group": "Configuration",
+      "pages": [
+        "config/overview",
+        "config/authentication",
+        "config/docker",
+        "config/workflows",
+        "config/orchestrator"
+      ]
+    },
+    {
+      "group": "API Reference",
+      "pages": [
+        "api-reference/overview",
+        "api-reference/dispatch",
+        "api-reference/runs",
+        "api-reference/state"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/rahul-fnu/forgectl"
+  }
+}
