@@ -213,17 +213,14 @@ export interface PRProcessorConfig {
   mergerAuthorEmail?: string;
 }
 
-export interface ReviewFailureState {
-  attempts: number;
-  lastFailure: string;
-  lastAttemptAt: number;
-}
-
 export class PRProcessor {
   private headers: Record<string, string>;
   private readonly history: ProcessResult[] = [];
   private readonly reviewRounds = new Map<number, number>();
-  private readonly reviewFailures = new Map<number, ReviewFailureState>();
+  /** Tracks the last SHA we reviewed for each PR — only re-review if SHA changed */
+  private readonly lastReviewedSha = new Map<number, string>();
+  /** Tracks the last review verdict per PR — persists across poll cycles */
+  private readonly lastReviewVerdict = new Map<number, "approve" | "request_changes">();
 
   constructor(
     private config: PRProcessorConfig,
@@ -333,13 +330,28 @@ export class PRProcessor {
       // Step 4: Enrich PR description with ticket context
       await this.enrichPRDescription(pr, tmpDir);
 
-      // Step 5: Review diff (optional) — post review, only block on MUST_FIX
+      // Step 5: Review diff (optional) — post review, block on request_changes
       if (this.config.enableReview) {
-        // Check if this PR has been escalated due to persistent parse failures
-        const failureState = this.reviewFailures.get(pr.number);
-        if (failureState && failureState.attempts >= 3) {
-          this.logger.info("merge-daemon", `PR #${pr.number}: Skipping review — previously escalated for manual review`);
-          return this.recordResult(pr, "skipped", "Escalated for manual review");
+        // Check if we already reviewed this exact SHA and requested changes.
+        // If SHA hasn't changed since last review, the old verdict still stands — don't re-review.
+        const previousSha = this.lastReviewedSha.get(pr.number);
+        const previousVerdict = this.lastReviewVerdict.get(pr.number);
+        if (previousSha === pr.sha && previousVerdict === "request_changes") {
+          this.logger.info("merge-daemon", `PR #${pr.number}: SHA unchanged since last review (changes still requested) — auto-addressing`);
+          // Re-run self-addressing on the existing branch
+          const review = await this.reviewDiff(tmpDir, pr);
+          if (review && review.approval === "request_changes") {
+            const reviewRound = this.reviewRounds.get(pr.number) ?? 0;
+            if (reviewRound >= 3) {
+              await this.postComment(pr.number, `**forgectl review:** Changes still requested after ${reviewRound} rounds. Escalating for manual review.`);
+              return this.recordResult(pr, "request_changes", `Escalated after ${reviewRound} rounds`);
+            }
+            const fixed = await this.addressReviewComments(tmpDir, pr, review);
+            if (fixed) {
+              return this.recordResult(pr, "request_changes", `Self-addressed round ${reviewRound + 1}, awaiting re-review`);
+            }
+          }
+          return this.recordResult(pr, "request_changes", "Changes requested, SHA unchanged, auto-address failed");
         }
 
         // Try review up to 2 times (Claude may produce non-JSON on first attempt)
@@ -352,10 +364,11 @@ export class PRProcessor {
           }
         }
 
+        // Track SHA and verdict for this review
+        this.lastReviewedSha.set(pr.number, pr.sha);
+
         if (review) {
-          // Record parse success and clear failure state
-          this.reviewFailures.delete(pr.number);
-          this.recordParseResult(pr, true);
+          this.lastReviewVerdict.set(pr.number, review.approval);
 
           if (review.approval === "request_changes") {
             const reviewRound = this.reviewRounds.get(pr.number) ?? 0;
@@ -382,26 +395,9 @@ export class PRProcessor {
             this.logger.info("merge-daemon", `PR #${pr.number}: Approved with ${review.comments.length} comment(s), proceeding to merge`);
           }
         } else {
-          // Record parse failure
-          this.recordParseResult(pr, false);
-          const current = this.reviewFailures.get(pr.number) ?? { attempts: 0, lastFailure: "", lastAttemptAt: 0 };
-          current.attempts++;
-          current.lastFailure = "Review output parsing failed";
-          current.lastAttemptAt = Date.now();
-          this.reviewFailures.set(pr.number, current);
-
-          if (current.attempts >= 3) {
-            // Escalate: comment + label + skip on future polls
-            this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed ${current.attempts} times — escalating for manual review`);
-            await this.postComment(pr.number, `**forgectl review:** Review daemon unable to review this PR after ${current.attempts} attempts. Escalating for manual review.`);
-            await this.addLabel(pr.number, "needs-manual-review");
-            return this.recordResult(pr, "skipped", "Escalated for manual review after persistent parse failures");
-          }
-
-          // Not yet at threshold — skip this cycle, retry next poll
-          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries (${current.attempts}/3) — skipping (will retry next poll)`);
+          // Review failed completely — do NOT merge, skip this PR
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries — skipping (will retry next poll)`);
           await this.postComment(pr.number, `**forgectl review:** Automated review could not be completed (output parsing failed). Will retry on next poll cycle.`);
-          this.checkParseFailureRate();
           return this.recordResult(pr, "skipped", "Review failed after retries");
         }
       }
@@ -1078,48 +1074,6 @@ export class PRProcessor {
     return this.fetchPRFull(prNumber);
   }
 
-  /** Add a label to a PR. */
-  private async addLabel(prNumber: number, label: string): Promise<void> {
-    const { owner, repo } = this.config;
-    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/labels`;
-    await fetch(url, {
-      method: "POST",
-      headers: this.headers,
-      body: JSON.stringify({ labels: [label] }),
-    }).catch(() => {});
-  }
-
-  /** Record a parse success/failure in metrics. */
-  private recordParseResult(pr: PRInfo, success: boolean): void {
-    if (this.metricsRepo) {
-      const { owner, repo } = this.config;
-      this.metricsRepo.recordParseResult(`${owner}/${repo}`, pr.number, success);
-    }
-  }
-
-  /**
-   * Check recent parse failure rate across all tracked PRs.
-   * If >50% of the last 10 results are failures, log a warning.
-   */
-  private checkParseFailureRate(): void {
-    const allStates = Array.from(this.reviewFailures.values());
-    // Count recent results: each entry tracks attempts for one PR
-    // We look at the last 10 parse results across all PRs
-    if (allStates.length === 0) return;
-
-    if (this.metricsRepo) {
-      const { owner, repo } = this.config;
-      const stats = this.metricsRepo.computeStats(`${owner}/${repo}`);
-      const total = stats.parseFailureCount + stats.parseSuccessCount;
-      if (total >= 10 && stats.parseSuccessRate < 0.5) {
-        this.logger.warn(
-          "merge-daemon",
-          `Parse failure rate is ${((1 - stats.parseSuccessRate) * 100).toFixed(0)}% over ${total} reviews — consider tuning the review prompt`,
-        );
-      }
-    }
-  }
-
   /** Post a comment on a PR. */
   private async postComment(prNumber: number, body: string): Promise<void> {
     const { owner, repo } = this.config;
@@ -1173,6 +1127,12 @@ export class PRProcessor {
   private recordResult(pr: PRInfo, status: ProcessResult["status"], error?: string): ProcessResult {
     const result: ProcessResult = { prNumber: pr.number, branch: pr.branch, status, error };
     this.history.push(result);
+    // Clean up tracking state on terminal outcomes
+    if (status === "merged" || status === "failed") {
+      this.lastReviewedSha.delete(pr.number);
+      this.lastReviewVerdict.delete(pr.number);
+      this.reviewRounds.delete(pr.number);
+    }
     // Keep last 100 results
     if (this.history.length > 100) this.history.shift();
 
@@ -1226,10 +1186,5 @@ export class PRProcessor {
   /** Get processing history. */
   getHistory(): readonly ProcessResult[] {
     return this.history;
-  }
-
-  /** Get review failure states for all PRs. */
-  getReviewFailures(): ReadonlyMap<number, ReviewFailureState> {
-    return this.reviewFailures;
   }
 }
