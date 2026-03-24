@@ -192,6 +192,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   });
 
   // GitHub App initialization (optional, only when config.github_app is present)
+  let ghAppService: Awaited<ReturnType<typeof import("../github/app.js").createGitHubAppService>> | null = null;
   if (config.github_app) {
     try {
       const { createGitHubAppService } = await import("../github/app.js");
@@ -199,7 +200,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const { registerWebhookHandlers } = await import("../github/webhooks.js");
       const { resumeRun } = await import("../durability/pause.js");
 
-      const ghAppService = createGitHubAppService({
+      ghAppService = createGitHubAppService({
         appId: config.github_app.app_id,
         privateKeyPath: config.github_app.private_key_path,
         webhookSecret: config.github_app.webhook_secret,
