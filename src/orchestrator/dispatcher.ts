@@ -337,6 +337,31 @@ export function dispatchIssue(
       logger.warn("dispatcher", `Failed to add in_progress label for ${issue.identifier}: ${msg}`);
     });
 
+  // Add WorkerInfo to running map synchronously so slot accounting is immediate
+  const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
+  const startedAt = Date.now();
+  const slotWeight = config.team?.size ?? 1;
+  state.running.set(issue.id, {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    issue,
+    session: null,
+    cleanup: { tempDirs: [], secretCleanups: [] },
+    startedAt,
+    lastActivityAt: Date.now(),
+    attempt,
+    slotWeight,
+  });
+
+  // Record dispatch metrics and emit SSE event
+  metrics.recordDispatch(issue.id, issue.identifier);
+  emitRunEvent({
+    runId: "orchestrator",
+    type: "dispatch",
+    timestamp: new Date().toISOString(),
+    data: { issueId: issue.id, identifier: issue.identifier, attempt },
+  });
+
   // Fire-and-forget worker execution
   void executeWorkerAndHandle(
     issue,
@@ -380,6 +405,7 @@ async function executeWorkerAndHandle(
   const triageResult = await triageIssue(issue, state, config);
   if (!triageResult.shouldDispatch) {
     logger.info("dispatcher", `Triage skipped ${issue.identifier}: ${triageResult.reason}`);
+    state.running.delete(issue.id);
     releaseIssue(state, issue.id);
     return;
   }
@@ -414,6 +440,7 @@ async function executeWorkerAndHandle(
 
   const orchestratorConfig = effectiveConfig.orchestrator;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
+  const startedAt = state.running.get(issue.id)?.startedAt ?? Date.now();
 
   // Activity callback for stall detection
   const onActivity = (): void => {
@@ -422,30 +449,6 @@ async function executeWorkerAndHandle(
       worker.lastActivityAt = Date.now();
     }
   };
-
-  // Add WorkerInfo to running map
-  const startedAt = Date.now();
-  const slotWeight = config.team?.size ?? 1;
-  state.running.set(issue.id, {
-    issueId: issue.id,
-    identifier: issue.identifier,
-    issue,
-    session: null, // Session is managed inside executeWorker
-    cleanup: { tempDirs: [], secretCleanups: [] },
-    startedAt,
-    lastActivityAt: Date.now(),
-    attempt,
-    slotWeight,
-  });
-
-  // Record dispatch metrics and emit SSE event
-  metrics.recordDispatch(issue.id, issue.identifier);
-  emitRunEvent({
-    runId: "orchestrator",
-    type: "dispatch",
-    timestamp: new Date().toISOString(),
-    data: { issueId: issue.id, identifier: issue.identifier, attempt },
-  });
 
   // --- Pre-execution approval gate ---
   const autonomy = governance?.autonomy ?? "full";
