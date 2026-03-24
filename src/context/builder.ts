@@ -5,6 +5,7 @@ import { getModule, getMeta, getCoupledFiles, getTestsFor } from "../kg/storage.
 import { estimateTokenCount } from "../kg/merkle.js";
 import type { ModuleInfo } from "../kg/types.js";
 import { computeLearningBoosts, applyDiscoveryMissBoosts, type LearningResult, type AgenticSearchHint } from "./learning.js";
+import { getConventionsForModules, extractModulePrefixes, formatConventionsForContext, type Convention } from "../kg/conventions.js";
 
 export interface ContextResult {
   systemContext: string;
@@ -13,6 +14,7 @@ export interface ContextResult {
   merkleRoot: string;
   includedFiles: Array<{ path: string; tier: "full" | "exports" | "name"; tokens: number }>;
   learningInsights?: LearningInsights;
+  conventions?: Convention[];
 }
 
 export interface LearningInsights {
@@ -29,6 +31,7 @@ interface ScoredFile {
 
 const DEFAULT_BUDGET = 60000;
 const AGENT_RESERVE_RATIO = 0.5;
+const CONVENTION_BUDGET = 2000;
 
 /**
  * Build budget-aware hybrid context from the KG for a given task.
@@ -282,6 +285,43 @@ export async function buildContext(
     includedFiles.push({ path: entry.path, tier, tokens });
   }
 
+  // 5. Query conventions for relevant modules
+  let conventions: Convention[] = [];
+  try {
+    const allPaths = includedFiles.map(f => f.path);
+    const modulePrefixes = extractModulePrefixes(allPaths);
+    if (modulePrefixes.length > 0) {
+      const rawConventions = getConventionsForModules(kgDb, modulePrefixes, 0.7);
+      const conventionText = formatConventionsForContext(rawConventions);
+      const conventionTokens = estimateTokenCount(conventionText);
+      if (conventionText && conventionTokens <= CONVENTION_BUDGET) {
+        contextParts.push(conventionText);
+        tokensUsed += conventionTokens;
+        conventions = rawConventions;
+      } else if (conventionText) {
+        // Trim to fit budget by taking highest-confidence conventions
+        const sorted = [...rawConventions].sort((a, b) => b.confidence - a.confidence);
+        const trimmed: Convention[] = [];
+        let accum = 0;
+        for (const c of sorted) {
+          const lineTokens = estimateTokenCount(c.description);
+          if (accum + lineTokens + 40 > CONVENTION_BUDGET) break;
+          trimmed.push(c);
+          accum += lineTokens + 10;
+        }
+        if (trimmed.length > 0) {
+          const trimmedText = formatConventionsForContext(trimmed);
+          const trimmedTokens = estimateTokenCount(trimmedText);
+          contextParts.push(trimmedText);
+          tokensUsed += trimmedTokens;
+          conventions = trimmed;
+        }
+      }
+    }
+  } catch {
+    // Convention injection is best-effort
+  }
+
   // Build system context header
   const systemLines = [
     "# Codebase Context (auto-generated from Knowledge Graph)",
@@ -322,6 +362,7 @@ export async function buildContext(
     merkleRoot,
     includedFiles,
     learningInsights,
+    conventions: conventions.length > 0 ? conventions : undefined,
   };
 
   // Cache result

@@ -82,6 +82,7 @@ export interface GitHubContext {
 export interface OutcomeDeps {
   outcomeRepo: OutcomeRepository;
   eventRepo?: EventRepository;
+  snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
 }
 
 /** Optional governance context for pre-execution approval gate. */
@@ -537,6 +538,7 @@ async function executeWorkerAndHandle(
       governanceWithRunId,
       skills,
       kgContext,
+      outcomeDeps?.snapshotRepo,
     );
 
     // Remove from running

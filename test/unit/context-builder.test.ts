@@ -11,6 +11,7 @@ import {
 import type { KGDatabase } from "../../src/kg/storage.js";
 import type { ModuleInfo, DependencyEdge, ChangeCoupling, TestCoverageMapping } from "../../src/kg/types.js";
 import type { TaskSpec } from "../../src/task/types.js";
+import { saveConvention } from "../../src/kg/conventions.js";
 
 function makeTask(overrides: Partial<TaskSpec> = {}): TaskSpec {
   return {
@@ -263,5 +264,42 @@ describe("Context Builder", () => {
     const result = await buildContext(task, db);
 
     expect(result.includedFiles).toHaveLength(0);
+  });
+
+  it("includes conventions for relevant modules", async () => {
+    saveConvention(db, {
+      module: "src",
+      pattern: "factory_function",
+      description: "use factory function pattern (createXxxRepository)",
+      confidence: 0.85,
+      source: "mined",
+      occurrences: 5,
+      lastSeen: "2026-03-01T00:00:00Z",
+    });
+
+    const task = makeTask();
+    const result = await buildContext(task, db);
+
+    expect(result.conventions).toBeDefined();
+    expect(result.conventions!.length).toBeGreaterThanOrEqual(1);
+    expect(result.taskContext).toContain("Conventions");
+    expect(result.taskContext).toContain("factory function");
+  });
+
+  it("excludes low-confidence conventions", async () => {
+    saveConvention(db, {
+      module: "src",
+      pattern: "uncertain_pattern",
+      description: "something uncertain",
+      confidence: 0.3,
+      source: "mined",
+      occurrences: 1,
+      lastSeen: "2026-03-01T00:00:00Z",
+    });
+
+    const task = makeTask();
+    const result = await buildContext(task, db);
+
+    expect(result.conventions).toBeUndefined();
   });
 });
