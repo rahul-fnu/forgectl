@@ -97,7 +97,8 @@ describe("buildPrompt", () => {
       },
     });
     const prompt = buildPrompt(plan);
-    expect(prompt).toContain("validation checks will run");
+    expect(prompt).toContain("VERIFY");
+    expect(prompt).toContain("should PASS after your fix");
     expect(prompt).toContain("lint");
     expect(prompt).toContain("npm run lint");
     expect(prompt).toContain("test");
@@ -108,7 +109,41 @@ describe("buildPrompt", () => {
   it("omits validation section when no steps", () => {
     const plan = makeMinimalPlan({ validation: { steps: [], onFailure: "abandon" } });
     const prompt = buildPrompt(plan);
-    expect(prompt).not.toContain("validation checks will run");
+    expect(prompt).not.toContain("VERIFY");
+    expect(prompt).not.toContain("REPRODUCE");
+  });
+
+  it("splits reproduction and verification steps in prompt", () => {
+    const plan = makeMinimalPlan({
+      validation: {
+        steps: [
+          { name: "repro", command: "npm test -- --grep bug", retries: 0, description: "Reproduce the bug", expect_failure: true, before_fix: true },
+          { name: "lint", command: "npm run lint", retries: 3, description: "ESLint check", expect_failure: false, before_fix: false },
+        ],
+        onFailure: "abandon",
+      },
+    });
+    const prompt = buildPrompt(plan);
+    expect(prompt).toContain("REPRODUCE");
+    expect(prompt).toContain("should FAIL before your fix");
+    expect(prompt).toContain("repro");
+    expect(prompt).toContain("VERIFY");
+    expect(prompt).toContain("should PASS after your fix");
+    expect(prompt).toContain("lint");
+  });
+
+  it("shows only VERIFY section when no before_fix steps", () => {
+    const plan = makeMinimalPlan({
+      validation: {
+        steps: [
+          { name: "test", command: "npm test", retries: 3, description: "Unit tests", expect_failure: false, before_fix: false },
+        ],
+        onFailure: "abandon",
+      },
+    });
+    const prompt = buildPrompt(plan);
+    expect(prompt).toContain("VERIFY");
+    expect(prompt).not.toContain("REPRODUCE");
   });
 
   it("includes output path instruction for files mode", () => {

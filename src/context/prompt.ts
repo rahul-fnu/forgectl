@@ -112,10 +112,23 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
 
   // 5. Validation instructions (so the agent knows what will be checked)
   if (plan.validation.steps.length > 0) {
-    parts.push(`\nAfter you finish, these validation checks will run:`);
-    for (const step of plan.validation.steps) {
-      parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
+    const reproSteps = plan.validation.steps.filter((s) => s.before_fix === true);
+    const verifySteps = plan.validation.steps.filter((s) => s.before_fix !== true);
+
+    if (reproSteps.length > 0) {
+      parts.push(`\nREPRODUCE — these checks should FAIL before your fix (proving the bug exists):`);
+      for (const step of reproSteps) {
+        parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
+      }
     }
+
+    if (verifySteps.length > 0) {
+      parts.push(`\nVERIFY — these checks should PASS after your fix:`);
+      for (const step of verifySteps) {
+        parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
+      }
+    }
+
     parts.push(`\nIf any check fails, you'll receive the error output and must fix it.\n`);
   }
 
