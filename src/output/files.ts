@@ -68,7 +68,7 @@ export async function collectFileOutput(
   };
 }
 
-export function listFilesRecursive(dir: string, prefix = ""): string[] {
+function listFilesRecursive(dir: string, prefix = ""): string[] {
   const files: string[] = [];
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -85,7 +85,7 @@ export function listFilesRecursive(dir: string, prefix = ""): string[] {
   return files;
 }
 
-export function formatBytes(bytes: number): string {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;

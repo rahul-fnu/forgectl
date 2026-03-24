@@ -266,7 +266,7 @@ export function collectDescendants(pipeline: PipelineDefinition, nodeId: string)
 }
 
 /** Return true when `ancestorId` is a transitive ancestor of `nodeId`. */
-export function isAncestor(
+function isAncestor(
   pipeline: PipelineDefinition,
   ancestorId: string,
   nodeId: string,
