@@ -216,8 +216,6 @@ export interface PRProcessorConfig {
   mergerAuthorEmail?: string;
   /** Optional tracker adapter for creating issues (e.g. post-merge test gen). */
   tracker?: import("../tracker/types.js").TrackerAdapter;
-  /** Separate token for submitting reviews (different GitHub App identity to avoid "can't approve own PR"). */
-  reviewToken?: string;
 }
 
 export interface ReviewFailureState {
@@ -228,8 +226,6 @@ export interface ReviewFailureState {
 
 export class PRProcessor {
   private headers: Record<string, string>;
-  /** Separate headers for review submission (uses reviewToken if available, to avoid "can't approve own PR"). */
-  private reviewHeaders: Record<string, string>;
   private readonly history: ProcessResult[] = [];
   private readonly reviewRounds = new Map<number, number>();
   private readonly reviewFailures = new Map<number, ReviewFailureState>();
@@ -249,11 +245,6 @@ export class PRProcessor {
       "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
     };
-    this.reviewHeaders = {
-      Authorization: `token ${config.reviewToken ?? config.token}`,
-      "Content-Type": "application/json",
-      Accept: "application/vnd.github+json",
-    };
   }
 
   /**
@@ -262,21 +253,6 @@ export class PRProcessor {
   updateToken(token: string, rawToken?: string): void {
     this.config = { ...this.config, token, rawToken: rawToken ?? token };
     this.headers = {
-      Authorization: `token ${token}`,
-      "Content-Type": "application/json",
-      Accept: "application/vnd.github+json",
-    };
-    if (!this.config.reviewToken) {
-      this.reviewHeaders = { ...this.headers };
-    }
-  }
-
-  /**
-   * Update the review token (separate identity for submitting reviews).
-   */
-  updateReviewToken(token: string): void {
-    this.config = { ...this.config, reviewToken: token };
-    this.reviewHeaders = {
       Authorization: `token ${token}`,
       "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
@@ -750,8 +726,12 @@ export class PRProcessor {
         return undefined;
       }
 
-      // Post review to GitHub
-      await this.submitPRReview(pr.number, review);
+      // Post review to GitHub — block merge if review can't be posted
+      const posted = await this.submitPRReview(pr.number, review);
+      if (!posted) {
+        this.logger.warn("merge-daemon", `PR #${pr.number}: Review not posted — will not merge without visible review`);
+        return undefined;
+      }
 
       this.logger.info(
         "merge-daemon",
@@ -772,7 +752,7 @@ export class PRProcessor {
   /**
    * Post a structured review with inline comments on the PR via GitHub API.
    */
-  async submitPRReview(prNumber: number, review: StructuredReview): Promise<void> {
+  async submitPRReview(prNumber: number, review: StructuredReview): Promise<boolean> {
     const { owner, repo } = this.config;
 
     // Build the review body with all comments included as a formatted list
@@ -795,44 +775,46 @@ export class PRProcessor {
       ...(commentLines.length > 0 ? [`### Comments`, ``, ...commentLines] : []),
     ].join("\n");
 
-    // Try to submit as a formal review first.
-    // Use COMMENT event instead of REQUEST_CHANGES to avoid "can't request changes on own PR" error.
-    // The review body clearly states whether it's an approval or has requested changes.
-    const event = review.approval === "approve" ? "APPROVE" : "COMMENT";
+    // Always use COMMENT event — APPROVE triggers "can't approve own PR" when
+    // the same app created the PR. The review body clearly states the verdict.
+    const event = "COMMENT";
 
     const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
-    // Use reviewHeaders (separate app identity) to avoid "can't approve own pull request"
     const response = await fetch(url, {
       method: "POST",
-      headers: this.reviewHeaders,
+      headers: this.headers,
       body: JSON.stringify({
         event,
         body: fullBody,
-        // Skip inline comments — line positions in the diff are unreliable.
-        // All comments are included in the review body instead.
         comments: [],
       }),
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      this.logger.warn(
-        "merge-daemon",
-        `PR #${prNumber}: Failed to submit review (${response.status}): ${text}`,
-      );
-      // Fallback: post as a regular PR comment using review identity
-      const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
-      const commentResp = await fetch(commentUrl, {
-        method: "POST",
-        headers: this.reviewHeaders,
-        body: JSON.stringify({ body: fullBody }),
-      });
-      if (commentResp.ok) {
-        this.logger.info("merge-daemon", `PR #${prNumber}: Review posted as comment (fallback)`);
-      }
-    } else {
+    if (response.ok) {
       this.logger.info("merge-daemon", `PR #${prNumber}: Review submitted — ${verdict}`);
+      return true;
     }
+
+    const text = await response.text();
+    this.logger.warn(
+      "merge-daemon",
+      `PR #${prNumber}: Failed to submit review (${response.status}): ${text}`,
+    );
+
+    // Fallback: post as a regular PR comment
+    const commentUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+    const commentResp = await fetch(commentUrl, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({ body: fullBody }),
+    });
+    if (commentResp.ok) {
+      this.logger.info("merge-daemon", `PR #${prNumber}: Review posted as comment (fallback)`);
+      return true;
+    }
+
+    this.logger.warn("merge-daemon", `PR #${prNumber}: Failed to post review comment — review not visible on PR`);
+    return false;
   }
 
   /**

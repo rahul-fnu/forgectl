@@ -481,21 +481,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         const pollIntervalMs = daemonConfig?.poll_interval_ms ?? 60_000;
         mergeDaemonRunning = true;
 
-        // Get creator app token for reviews (different identity than merger app to avoid "can't approve own PR")
-        let reviewToken: string | undefined;
-        if (ghAppService && config.github_app?.installation_id) {
-          try {
-            const creatorOctokit = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
-            const creatorAuth = await (creatorOctokit as any).auth({ type: "installation" }) as { token: string };
-            if (creatorAuth?.token) {
-              reviewToken = creatorAuth.token;
-              daemonLogger.info("daemon", "Review submissions will use creator app (separate identity from PR author)");
-            }
-          } catch (err) {
-            daemonLogger.warn("daemon", `Could not get creator app token for reviews, reviews will use merger app (may fail on own PRs): ${err}`);
-          }
-        }
-
         // Create review metrics + findings repos for tracking
         const { createReviewMetricsRepository } = await import("../storage/repositories/review-metrics.js");
         const { createReviewFindingsRepository } = await import("../storage/repositories/review-findings.js");
@@ -513,7 +498,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
             enableReview: daemonConfig?.enable_review ?? true,
             enableBuildFix: daemonConfig?.enable_build_fix ?? true,
             validationCommands: daemonConfig?.validation_commands ?? [],
-            reviewToken,
           }, daemonLogger, reviewMetricsRepo, reviewFindingsRepo);
         });
 
@@ -528,19 +512,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
                   processor.updateToken(freshToken);
                 }
                 lastProcessorToken = freshToken;
-              }
-              // Also refresh creator app token for reviews
-              if (ghAppService && config.github_app?.installation_id && reviewToken) {
-                try {
-                  const creatorOctokit = await ghAppService.getInstallationOctokit(config.github_app.installation_id);
-                  const creatorAuth = await (creatorOctokit as any).auth({ type: "installation" }) as { token: string };
-                  if (creatorAuth?.token && creatorAuth.token !== reviewToken) {
-                    reviewToken = creatorAuth.token;
-                    for (const processor of processors) {
-                      processor.updateReviewToken(reviewToken);
-                    }
-                  }
-                } catch { /* review token refresh is best-effort */ }
               }
             } catch (err) {
               daemonLogger.warn("merge-daemon", `Token refresh check failed: ${err}`);

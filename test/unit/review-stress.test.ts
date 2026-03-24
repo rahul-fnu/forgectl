@@ -408,14 +408,15 @@ describe("stress: parallel PR processing and quality tracking", () => {
     const body2 = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
     const body3 = JSON.parse((fetchSpy.mock.calls[2][1] as RequestInit).body as string);
 
-    expect(body1.event).toBe("APPROVE");
+    // All events are COMMENT (avoids "can't approve own PR" from same app)
+    expect(body1.event).toBe("COMMENT");
     expect(body1.body).toContain("LGTM");
 
     expect(body2.event).toBe("COMMENT");
     expect(body2.body).toContain("Changes requested");
     expect(body2.body).toContain("[MUST_FIX]");
 
-    expect(body3.event).toBe("APPROVE");
+    expect(body3.event).toBe("COMMENT");
     expect(body3.body).toContain("LGTM");
     expect(body3.body).toContain("[NIT]");
   });

@@ -176,28 +176,29 @@ describe("PRProcessor", () => {
   });
 
   describe("submitPRReview", () => {
-    it("posts APPROVE review with LGTM body", async () => {
+    it("posts COMMENT review with LGTM body", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
         ok: true,
         json: async () => ({}),
       } as Response);
 
       const processor = new PRProcessor(makeConfig(), logger);
-      await processor.submitPRReview(42, {
+      const posted = await processor.submitPRReview(42, {
         summary: "Looks good",
         approval: "approve",
         comments: [],
       });
 
+      expect(posted).toBe(true);
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining("/pulls/42/reviews"),
         expect.objectContaining({
           method: "POST",
-          body: expect.stringContaining('"APPROVE"'),
+          body: expect.stringContaining('"COMMENT"'),
         }),
       );
       const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-      expect(body.event).toBe("APPROVE");
+      expect(body.event).toBe("COMMENT");
       expect(body.body).toContain("LGTM");
     });
 
