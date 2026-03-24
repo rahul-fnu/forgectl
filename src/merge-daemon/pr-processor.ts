@@ -442,6 +442,8 @@ export class PRProcessor {
       const prDescription = await this.fetchPRDescription(pr.number);
 
       const prompt = [
+        `CRITICAL: Output ONLY a JSON object. No markdown, no fences, no explanation. Start with { and end with }.`,
+        ``,
         `You are reviewing PR #${pr.number}: "${pr.title}".`,
         ``,
         ...(prDescription ? [`PR description:`, prDescription, ``] : []),
@@ -457,7 +459,7 @@ export class PRProcessor {
         `- Code patterns (consistent with codebase style)`,
         `- Unused imports/variables`,
         ``,
-        `Output ONLY a JSON object (no markdown fences, no extra text) in this exact format:`,
+        `Output format — a JSON object with this exact schema:`,
         `{`,
         `  "summary": "Overall assessment of the changes",`,
         `  "approval": "approve" or "request_changes",`,
@@ -465,6 +467,12 @@ export class PRProcessor {
         `    { "file": "src/foo.ts", "line": 42, "severity": "must_fix", "body": "Description of issue", "suggested_fix": "How to fix it" }`,
         `  ]`,
         `}`,
+        ``,
+        `Example 1 — clean code, no issues:`,
+        `{"summary": "Clean refactor of the config loader. Types are correct, tests cover the new paths.", "approval": "approve", "comments": []}`,
+        ``,
+        `Example 2 — issues found:`,
+        `{"summary": "SQL query uses string interpolation, creating an injection risk.", "approval": "request_changes", "comments": [{"file": "src/db/query.ts", "line": 15, "severity": "must_fix", "body": "SQL injection: user input is interpolated directly into the query string", "suggested_fix": "Use parameterized queries instead of string interpolation"}]}`,
         ``,
         `Severity levels:`,
         `- must_fix: Blocks merge. Correctness bugs, security issues, data loss risks.`,
@@ -474,12 +482,14 @@ export class PRProcessor {
         `Set approval to "request_changes" ONLY if there are must_fix issues (real bugs, security holes, data loss). Otherwise "approve".`,
         `If the code is clean or only has minor issues, set approval to "approve".`,
         `Do NOT flag: .gitignore additions, binary files (kg.db), formatting preferences, or boilerplate code.`,
+        ``,
+        `CRITICAL: Output ONLY a JSON object. No markdown, no fences, no explanation. Start with { and end with }.`,
       ].join("\n");
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
       ws(promptFile, prompt);
       const output = execSync(
-        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 3`,
+        `cat "${promptFile}" | claude -p - --output-format json --dangerously-skip-permissions --max-turns 1`,
         { cwd: tmpDir, encoding: "utf-8", timeout: 120_000 },
       );
 
