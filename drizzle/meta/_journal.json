@@ -99,6 +99,13 @@
       "when": 1773728400000,
       "tag": "0013_recovered_column",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1773814800000,
+      "tag": "0014_parse_failure_columns",
+      "breakpoints": true
     }
   ]
 }

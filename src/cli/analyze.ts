@@ -142,6 +142,10 @@ function formatReviewQualityReport(report: ReviewQualityReport): void {
   console.log(`  Escalated PRs:              ${s.escalatedCount}`);
   console.log(`  Human overrides:            ${s.humanOverrideCount}`);
   console.log(`  Est. false positive rate:   ${(s.estimatedFalsePositiveRate * 100).toFixed(1)}%`);
+  const parseTotal = s.parseFailureCount + s.parseSuccessCount;
+  if (parseTotal > 0) {
+    console.log(`  Parse success rate:         ${(s.parseSuccessRate * 100).toFixed(1)}% (${s.parseSuccessCount}/${parseTotal})`);
+  }
 
   if (report.topFindings.length > 0) {
     console.log(chalk.bold("\n  Most Common Findings:"));
