@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export interface MergeResult {
   success: boolean;
@@ -20,27 +20,27 @@ export async function mergeUpstreamBranches(
 
   if (upstreamBranches.length === 1) {
     // Single branch, just create target from it
-    execSync(`git checkout -b ${targetBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
+    execFileSync("git", ["checkout", "-b", targetBranch, upstreamBranches[0]], { cwd: repoPath, stdio: "pipe" });
     return { success: true };
   }
 
   // Create target from first upstream
-  execSync(`git checkout -b ${targetBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["checkout", "-b", targetBranch, upstreamBranches[0]], { cwd: repoPath, stdio: "pipe" });
 
   // Merge remaining upstreams
   for (const branch of upstreamBranches.slice(1)) {
     try {
-      execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+      execFileSync("git", ["merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
     } catch {
       // Merge conflict
       let conflicts = "";
       try {
-        conflicts = execSync("git diff --name-only --diff-filter=U", { cwd: repoPath, encoding: "utf-8" });
+        conflicts = execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], { cwd: repoPath, encoding: "utf-8" });
       } catch {
         // ignore
       }
       try {
-        execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" });
+        execFileSync("git", ["merge", "--abort"], { cwd: repoPath, stdio: "pipe" });
       } catch {
         // ignore
       }
