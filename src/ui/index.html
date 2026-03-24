@@ -83,6 +83,7 @@
     const { useEffect, useMemo, useState, useRef } = React;
 
     const API = "";
+    const DAEMON_TOKEN = document.querySelector('meta[name="forgectl-token"]')?.getAttribute("content") || "";
 
     const WORKFLOW_COLORS = {
       code: "#4da3ff",
@@ -106,6 +107,8 @@
     const AGENTS = ["codex", "claude-code"];
 
     function fetchJson(path, options) {
+      options = options || {};
+      options.headers = { ...options.headers, ...(DAEMON_TOKEN ? { Authorization: `Bearer ${DAEMON_TOKEN}` } : {}) };
       return fetch(`${API}${path}`, options).then(async (res) => {
         const text = await res.text();
         let data = null;
@@ -943,7 +946,7 @@
       }, [pipelineId]);
 
       useEffect(() => {
-        const es = new EventSource(`${API}/pipelines/${pipelineId}/events`);
+        const es = new EventSource(`${API}/pipelines/${pipelineId}/events${DAEMON_TOKEN ? "?token=" + DAEMON_TOKEN : ""}`);
         es.onmessage = (msg) => {
           try {
             const event = JSON.parse(msg.data);
@@ -1397,7 +1400,7 @@
         if (now - lastFetchRef.current < 1000) return;
         lastFetchRef.current = now;
         try {
-          const res = await fetch(API + "/api/v1/state");
+          const res = await fetch(API + "/api/v1/state", { headers: DAEMON_TOKEN ? { Authorization: `Bearer ${DAEMON_TOKEN}` } : {} });
           if (res.status === 503) {
             setNotConfigured(true);
             return;
@@ -1422,7 +1425,7 @@
       useEffect(() => {
         let es;
         try {
-          es = new EventSource(API + "/api/v1/events");
+          es = new EventSource(API + "/api/v1/events" + (DAEMON_TOKEN ? "?token=" + DAEMON_TOKEN : ""));
           es.onmessage = () => { loadState(); };
         } catch {}
         return () => { if (es) es.close(); };
@@ -1430,7 +1433,7 @@
 
       async function handleRefresh() {
         try {
-          await fetch(API + "/api/v1/refresh", { method: "POST" });
+          await fetch(API + "/api/v1/refresh", { method: "POST", headers: DAEMON_TOKEN ? { Authorization: `Bearer ${DAEMON_TOKEN}` } : {} });
           setRefreshFeedback(true);
           setTimeout(() => setRefreshFeedback(false), 1500);
           loadState();
