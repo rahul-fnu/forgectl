@@ -18,6 +18,7 @@ import type { Logger } from "../logging/logger.js";
 import type { ReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 import { extractAcceptanceCriteria } from "../github/pr-description.js";
+import { fetchCIErrorLog } from "../github/ci-logs.js";
 import { load as yamlLoad } from "js-yaml";
 
 const API_BASE = "https://api.github.com";
@@ -965,7 +966,7 @@ export class PRProcessor {
     const authorEmail = this.config.mergerAuthorEmail ?? "forge-merger@localhost";
 
     // Step 1: Fetch CI error logs
-    const errorLog = await this.fetchCIErrorLog(pr.number, failedSha);
+    const errorLog = await this.fetchCIErrorLogWrapped(pr.number, failedSha);
     if (!errorLog) {
       this.logger.warn("merge-daemon", `PR #${pr.number}: Could not fetch CI error logs`);
       return false;
@@ -1022,84 +1023,13 @@ export class PRProcessor {
     }
   }
 
-  /**
-   * Fetch CI error logs from GitHub Actions for a failed SHA.
-   * Downloads actual job logs (not just annotations) to get real compiler errors.
-   * Returns the combined error output, or null if unavailable.
-   */
-  private async fetchCIErrorLog(prNumber: number, sha: string): Promise<string | null> {
+  private async fetchCIErrorLogWrapped(prNumber: number, sha: string): Promise<string | null> {
     const { owner, repo } = this.config;
-    try {
-      // Find the workflow run for this SHA
-      const runsUrl = `${API_BASE}/repos/${owner}/${repo}/actions/runs?head_sha=${sha}&per_page=5`;
-      const runsResp = await fetch(runsUrl, { headers: this.headers });
-      if (!runsResp.ok) return null;
-
-      const runsData = (await runsResp.json()) as {
-        workflow_runs?: Array<{ id: number; conclusion: string }>;
-      };
-      const failedWorkflow = (runsData.workflow_runs ?? []).find((r) => r.conclusion === "failure");
-      if (!failedWorkflow) return null;
-
-      // Get jobs for the failed workflow
-      const jobsUrl = `${API_BASE}/repos/${owner}/${repo}/actions/runs/${failedWorkflow.id}/jobs`;
-      const jobsResp = await fetch(jobsUrl, { headers: this.headers });
-      if (!jobsResp.ok) return null;
-
-      const jobsData = (await jobsResp.json()) as {
-        jobs?: Array<{ id: number; name: string; conclusion: string }>;
-      };
-      const failedJobs = (jobsData.jobs ?? []).filter((j) => j.conclusion === "failure");
-      if (failedJobs.length === 0) return null;
-
-      // Download logs from the first failed job
-      const failedJob = failedJobs[0];
-      const logUrl = `${API_BASE}/repos/${owner}/${repo}/actions/jobs/${failedJob.id}/logs`;
-      const logResp = await fetch(logUrl, {
-        headers: this.headers,
-        redirect: "follow",
-      });
-      if (!logResp.ok) {
-        this.logger.warn("merge-daemon", `PR #${prNumber}: Failed to download job logs (${logResp.status})`);
-        return null;
-      }
-
-      const fullLog = await logResp.text();
-      const lines = fullLog.split("\n");
-
-      // Extract error lines with context — look for compiler errors, build failures
-      const errorPattern = /error\[E\d+\]|^error:|cannot find|not found|expected .* found|no method named|mismatched types|missing field|unresolved import|failed to compile/i;
-      const contextLines: string[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        // Strip ANSI codes and timestamps for cleaner output
-        const clean = lines[i].replace(/\x1b\[[0-9;]*m/g, "").replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*/, "");
-        if (errorPattern.test(clean)) {
-          // Include 2 lines before and 5 lines after for context
-          const start = Math.max(0, i - 2);
-          const end = Math.min(lines.length, i + 6);
-          for (let j = start; j < end; j++) {
-            const ctx = lines[j].replace(/\x1b\[[0-9;]*m/g, "").replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*/, "");
-            if (!contextLines.includes(ctx)) {
-              contextLines.push(ctx);
-            }
-          }
-        }
-      }
-
-      if (contextLines.length > 0) {
-        this.logger.info("merge-daemon", `PR #${prNumber}: Extracted ${contextLines.length} error lines from CI logs`);
-        return contextLines.slice(0, 150).join("\n");
-      }
-
-      // Fallback: last 80 lines
-      return lines.slice(-80).map((l) =>
-        l.replace(/\x1b\[[0-9;]*m/g, "").replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*/, ""),
-      ).join("\n");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn("merge-daemon", `PR #${prNumber}: Error fetching CI logs: ${msg}`);
-      return null;
+    const result = await fetchCIErrorLog(owner, repo, sha, this.headers);
+    if (result) {
+      this.logger.info("merge-daemon", `PR #${prNumber}: Extracted error lines from CI logs`);
     }
+    return result;
   }
 
   /** Fetch PR data from the API. */
