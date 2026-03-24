@@ -18,6 +18,7 @@ import type { Logger } from "../logging/logger.js";
 import type { ReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 import { extractAcceptanceCriteria } from "../github/pr-description.js";
+import { load as yamlLoad } from "js-yaml";
 
 const API_BASE = "https://api.github.com";
 
@@ -54,51 +55,69 @@ export function parseStructuredReview(raw: string): StructuredReview | undefined
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
 
-  // Try to extract JSON block from markdown fences
-  let jsonText = trimmed;
-  const fenceMatch = /```(?:json)?\s*\n([\s\S]*?)```/.exec(trimmed);
-  if (fenceMatch) {
-    jsonText = fenceMatch[1].trim();
-  } else {
-    // Try to find a raw JSON object (first { to last })
-    const firstBrace = trimmed.indexOf("{");
-    const lastBrace = trimmed.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      jsonText = trimmed.substring(firstBrace, lastBrace + 1);
-    }
+  // Step 1: Unwrap Claude --output-format json envelope if present
+  const unwrapped = unwrapClaudeEnvelope(trimmed);
+
+  // Step 2: Try to extract JSON from markdown fences
+  const candidates = extractJsonCandidates(unwrapped);
+  for (const candidate of candidates) {
+    const parsed = tryParseJson(candidate)
+      ?? tryParseJson(cleanJsonText(candidate, false))
+      ?? tryParseJson(cleanJsonText(candidate, true));
+    if (parsed) return buildReview(parsed);
   }
 
-  // Try raw first, then with incremental cleanups
-  const parsed = tryParseJson(jsonText)
-    ?? tryParseJson(cleanJsonText(jsonText, false))
-    ?? tryParseJson(cleanJsonText(jsonText, true));
-  if (parsed) return buildReview(parsed);
+  // Step 3: YAML fallback — try parsing as YAML
+  const yamlResult = tryParseYaml(unwrapped);
+  if (yamlResult) return buildReview(yamlResult);
 
-  // Fallback: regex extraction — find content between first { and last }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const extracted = trimmed.substring(firstBrace, lastBrace + 1);
-    const parsed2 = tryParseJson(extracted)
-      ?? tryParseJson(cleanJsonText(extracted, false))
-      ?? tryParseJson(cleanJsonText(extracted, true));
-    if (parsed2) return buildReview(parsed2);
-  }
-
-  // Fallback: line-by-line field extraction
-  const lineByLine = extractFieldsFromText(trimmed);
+  // Step 4: Line-by-line field extraction
+  const lineByLine = extractFieldsFromText(unwrapped);
   if (lineByLine) return lineByLine;
 
-  // Last resort: keyword-based extraction
-  const lower = trimmed.toLowerCase();
+  // Step 5: Keyword-based extraction
+  const lower = unwrapped.toLowerCase();
   if (lower.includes("request_changes") || lower.includes("must_fix")) {
-    return { summary: trimmed.slice(0, 200), approval: "request_changes", comments: [] };
+    return { summary: unwrapped.slice(0, 200), approval: "request_changes", comments: [] };
   }
   if (lower.includes("approve")) {
-    return { summary: trimmed.slice(0, 200), approval: "approve", comments: [] };
+    return { summary: unwrapped.slice(0, 200), approval: "approve", comments: [] };
   }
 
   return undefined;
+}
+
+function unwrapClaudeEnvelope(text: string): string {
+  const parsed = tryParseJson(text);
+  if (!parsed) return text;
+  // Claude --output-format json wraps in {"type":"result","result":"..."} or {"result":"..."}
+  if (typeof parsed.result === "string") {
+    return parsed.result.trim();
+  }
+  // If the envelope itself contains review fields, use it directly
+  if (parsed.summary !== undefined || parsed.approval !== undefined) {
+    return text;
+  }
+  return text;
+}
+
+function extractJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  // The full text itself
+  candidates.push(text);
+  // Extract from markdown fences (try all fence blocks)
+  const fenceRegex = /```(?:json)?\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = fenceRegex.exec(text)) !== null) {
+    candidates.push(match[1].trim());
+  }
+  // Extract JSON object from surrounding prose (first { to last })
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidates.push(text.substring(firstBrace, lastBrace + 1));
+  }
+  return candidates;
 }
 
 function cleanJsonText(text: string, replaceSingleQuotes: boolean): string {
@@ -117,6 +136,31 @@ function tryParseJson(text: string): Record<string, unknown> | undefined {
   try {
     const obj = JSON.parse(text);
     if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+function tryParseYaml(text: string): Record<string, unknown> | undefined {
+  // Strip markdown fences first
+  let yamlText = text;
+  const fenceMatch = /```(?:ya?ml)?\s*\n([\s\S]*?)```/.exec(text);
+  if (fenceMatch) {
+    yamlText = fenceMatch[1].trim();
+  } else {
+    // Remove any leading prose before YAML-like content
+    const yamlStart = /^(summary|approval|comments)\s*:/m.exec(yamlText);
+    if (yamlStart) {
+      yamlText = yamlText.substring(yamlStart.index);
+    }
+  }
+  try {
+    const obj = yamlLoad(yamlText);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      const rec = obj as Record<string, unknown>;
+      if (rec.summary !== undefined || rec.approval !== undefined) {
+        return rec;
+      }
+    }
   } catch { /* ignore */ }
   return undefined;
 }
@@ -498,48 +542,21 @@ export class PRProcessor {
       const prDescription = await this.fetchPRDescription(pr.number);
 
       const prompt = [
-        `CRITICAL: Output ONLY a JSON object. No markdown, no fences, no explanation. Start with { and end with }.`,
-        ``,
-        `You are reviewing PR #${pr.number}: "${pr.title}".`,
+        `You are a code reviewer. Review PR #${pr.number}: "${pr.title}".`,
         ``,
         ...(prDescription ? [`PR description:`, prDescription, ``] : []),
-        `Here is the full diff:`,
-        ``,
+        `<diff>`,
         diff,
+        `</diff>`,
         ``,
-        `Review this diff and check for:`,
-        `- Does the code match the PR description requirements?`,
-        `- Error handling patterns (missing try/catch, swallowed errors)`,
-        `- Test coverage (new code without tests)`,
-        `- Security issues (injection, path traversal)`,
-        `- Code patterns (consistent with codebase style)`,
-        `- Unused imports/variables`,
+        `Check for: correctness bugs, security issues (injection, path traversal), missing error handling, missing tests for new code, unused imports.`,
+        `Do NOT flag: .gitignore changes, binary files, formatting, boilerplate.`,
         ``,
-        `Output format — a JSON object with this exact schema:`,
-        `{`,
-        `  "summary": "Overall assessment of the changes",`,
-        `  "approval": "approve" or "request_changes",`,
-        `  "comments": [`,
-        `    { "file": "src/foo.ts", "line": 42, "severity": "must_fix", "body": "Description of issue", "suggested_fix": "How to fix it" }`,
-        `  ]`,
-        `}`,
+        `Severity: must_fix (blocks merge: bugs, security, data loss), should_fix (edge cases, weak error handling), nit (style).`,
+        `Set "approval" to "request_changes" ONLY if there are must_fix issues. Otherwise "approve".`,
         ``,
-        `Example 1 — clean code, no issues:`,
-        `{"summary": "Clean refactor of the config loader. Types are correct, tests cover the new paths.", "approval": "approve", "comments": []}`,
-        ``,
-        `Example 2 — issues found:`,
-        `{"summary": "SQL query uses string interpolation, creating an injection risk.", "approval": "request_changes", "comments": [{"file": "src/db/query.ts", "line": 15, "severity": "must_fix", "body": "SQL injection: user input is interpolated directly into the query string", "suggested_fix": "Use parameterized queries instead of string interpolation"}]}`,
-        ``,
-        `Severity levels:`,
-        `- must_fix: Blocks merge. Correctness bugs, security issues, data loss risks.`,
-        `- should_fix: Address if straightforward. Missing edge cases, weak error handling.`,
-        `- nit: Style/preference.`,
-        ``,
-        `Set approval to "request_changes" ONLY if there are must_fix issues (real bugs, security holes, data loss). Otherwise "approve".`,
-        `If the code is clean or only has minor issues, set approval to "approve".`,
-        `Do NOT flag: .gitignore additions, binary files (kg.db), formatting preferences, or boilerplate code.`,
-        ``,
-        `CRITICAL: Output ONLY a JSON object. No markdown, no fences, no explanation. Start with { and end with }.`,
+        `Respond with ONLY this JSON object, no other text:`,
+        `{"summary": "<one sentence>", "approval": "approve", "comments": [{"file": "src/example.ts", "line": 1, "severity": "nit", "body": "description", "suggested_fix": "optional fix"}]}`,
       ].join("\n");
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
