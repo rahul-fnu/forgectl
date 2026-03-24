@@ -594,8 +594,8 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
 
       // Roots are terminal and recently completed
       const terminalIds = new Set<string>(["A1", "C1"]);
-      state.recentlyCompleted.add("A1");
-      state.recentlyCompleted.add("C1");
+      state.recentlyCompleted.set("A1", Date.now());
+      state.recentlyCompleted.set("C1", Date.now());
 
       const eligible = filterCandidates(issues, state, terminalIds);
       const sorted = sortCandidates(eligible);
@@ -619,8 +619,8 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
       config = makeConfig({ maxAgents: 2 });
       const issues = buildIssueSet();
       const terminalIds = new Set<string>(["A1", "C1"]);
-      state.recentlyCompleted.add("A1");
-      state.recentlyCompleted.add("C1");
+      state.recentlyCompleted.set("A1", Date.now());
+      state.recentlyCompleted.set("C1", Date.now());
 
       const eligible = filterCandidates(issues, state, terminalIds);
       const sorted = sortCandidates(eligible);
@@ -718,7 +718,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
     it("falls back to main when blocker is recently completed (branch merged)", () => {
       // A1 completed and merged — branch deleted
       state.issueBranches.set("A1", "forge/a1-db-schema");
-      state.recentlyCompleted.add("A1");
+      state.recentlyCompleted.set("A1", Date.now());
 
       const a2 = buildIssueSet()[1]; // A2, blocked_by: ["A1"]
 
@@ -1098,8 +1098,8 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
 
     it("excludes recently completed issues from candidates", () => {
       const issues = buildIssueSet();
-      state.recentlyCompleted.add("A1");
-      state.recentlyCompleted.add("C1");
+      state.recentlyCompleted.set("A1", Date.now());
+      state.recentlyCompleted.set("C1", Date.now());
 
       const terminalIds = new Set<string>(["A1", "C1"]);
       const eligible = filterCandidates(issues, state, terminalIds);
