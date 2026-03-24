@@ -204,7 +204,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), slotManager);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id));
   }
 }
 
@@ -377,11 +377,10 @@ function issueToTaskSpec(issue: import("../tracker/types.js").TrackerIssue): imp
 export function startScheduler(deps: TickDeps): () => void {
   let stopped = false;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingResolve: (() => void) | null = null;
 
-  const scheduleTick = (): void => {
-    if (stopped) return;
-
-    void (async () => {
+  const loop = async (): Promise<void> => {
+    while (!stopped) {
       try {
         await tick(deps);
       } catch (err) {
@@ -389,20 +388,31 @@ export function startScheduler(deps: TickDeps): () => void {
         deps.logger.error("scheduler", `Tick error: ${msg}`);
       }
 
-      if (!stopped) {
-        pendingTimer = setTimeout(scheduleTick, deps.config.orchestrator.poll_interval_ms);
-      }
-    })();
+      if (stopped) break;
+
+      // setTimeout chain: wait poll_interval_ms before next tick
+      await new Promise<void>((resolve) => {
+        pendingResolve = resolve;
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null;
+          pendingResolve = null;
+          resolve();
+        }, deps.config.orchestrator.poll_interval_ms);
+      });
+    }
   };
 
-  // Start first tick immediately
-  scheduleTick();
+  void loop();
 
   return () => {
     stopped = true;
     if (pendingTimer !== null) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
+    }
+    if (pendingResolve !== null) {
+      pendingResolve();
+      pendingResolve = null;
     }
   };
 }

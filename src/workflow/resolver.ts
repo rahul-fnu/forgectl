@@ -18,8 +18,8 @@ export interface CLIOptions {
   workflow?: string;
   repo?: string;
   input?: string[];
-  // Commander: --context <paths...> sets string[], --no-context sets false, neither sets undefined
-  context?: string[] | false;
+  context?: string[];
+  noContext?: boolean;
   agent?: string;
   model?: string;
   review?: boolean;
@@ -214,7 +214,7 @@ export function resolveRunPlan(
       sign: config.commit.sign,
     },
     noSkills: options.skills === false,
-    noContext: options.context === false || undefined,
+    noContext: options.noContext || undefined,
     noTeam: resolvedNoTeam || undefined,
     skipCheckpoints: hasTeam || undefined,
     team: hasTeam ? { size: effectiveTeamSize!, slotWeight: effectiveTeamSize! } : undefined,

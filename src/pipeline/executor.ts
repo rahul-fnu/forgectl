@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -996,23 +996,23 @@ export class PipelineExecutor {
       return null;
     }
 
-    const originalRef = execSync("git rev-parse --abbrev-ref HEAD", { cwd: repoPath, encoding: "utf-8" }).trim();
-    const originalSha = execSync("git rev-parse HEAD", { cwd: repoPath, encoding: "utf-8" }).trim();
+    const originalRef = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoPath, encoding: "utf-8" }).trim();
+    const originalSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoPath, encoding: "utf-8" }).trim();
     const tempBranch = `forgectl-fanin-${this.pipelineRunId}-${node.id}-${Date.now()}`
       .replace(/[^a-zA-Z0-9._/-]/g, "-");
     const context: FanInContext = { repoPath, tempBranch, originalRef, originalSha };
 
     try {
-      execSync(`git checkout -B ${tempBranch} ${upstreamBranches[0]}`, { cwd: repoPath, stdio: "pipe" });
+      execFileSync("git", ["checkout", "-B", tempBranch, upstreamBranches[0]], { cwd: repoPath, stdio: "pipe" });
       console.log(chalk.gray(`    Prepared fan-in branch ${tempBranch} from ${upstreamBranches[0]}`));
 
       for (const branch of upstreamBranches.slice(1)) {
         try {
-          execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+          execFileSync("git", ["merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
           console.log(chalk.gray(`    Merged ${branch} into ${tempBranch}`));
         } catch {
           const conflicts = this.getConflictFiles(repoPath);
-          try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+          try { execFileSync("git", ["merge", "--abort"], { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
           throw new Error(
             `Fan-in merge conflict for node ${node.id} while merging ${branch}` +
             (conflicts ? `: ${conflicts}` : "")
@@ -1043,11 +1043,11 @@ export class PipelineExecutor {
     }
 
     try {
-      execSync(`git merge ${branch} --no-edit`, { cwd: repoPath, stdio: "pipe" });
+      execFileSync("git", ["merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
       console.log(chalk.gray(`    Merged ${branch} into host repo`));
     } catch {
       const conflicts = this.getConflictFiles(repoPath);
-      try { execSync("git merge --abort", { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
+      try { execFileSync("git", ["merge", "--abort"], { cwd: repoPath, stdio: "pipe" }); } catch { /* ignore */ }
       throw new Error(
         `Failed to merge output branch ${branch}` +
         (conflicts ? `: ${conflicts}` : "")
@@ -1058,7 +1058,7 @@ export class PipelineExecutor {
   private cleanupFanInBranch(context: FanInContext): void {
     this.restoreOriginalRef(context);
     try {
-      execSync(`git branch -D ${context.tempBranch}`, { cwd: context.repoPath, stdio: "pipe" });
+      execFileSync("git", ["branch", "-D", context.tempBranch], { cwd: context.repoPath, stdio: "pipe" });
     } catch {
       // Branch may already be gone.
     }
@@ -1066,12 +1066,12 @@ export class PipelineExecutor {
 
   private restoreOriginalRef(context: FanInContext): void {
     const target = context.originalRef === "HEAD" ? context.originalSha : context.originalRef;
-    execSync(`git checkout ${target}`, { cwd: context.repoPath, stdio: "pipe" });
+    execFileSync("git", ["checkout", target], { cwd: context.repoPath, stdio: "pipe" });
   }
 
   private getConflictFiles(repoPath: string): string {
     try {
-      return execSync("git diff --name-only --diff-filter=U", {
+      return execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
         cwd: repoPath,
         encoding: "utf-8",
       }).trim();
