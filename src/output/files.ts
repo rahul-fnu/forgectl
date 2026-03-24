@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { execSync } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, statSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -44,10 +43,10 @@ export async function collectFileOutput(
     const extractedDir = join(tmpDir, containerPathBase);
 
     try {
-      execSync(`cp -r --no-dereference "${extractedDir}/." "${outputDir}/"`, { stdio: "pipe" });
+      execFileSync("cp", ["-r", "--no-dereference", `${extractedDir}/.`, `${outputDir}/`], { stdio: "pipe" });
     } catch {
       // If extractedDir doesn't exist, the container path may have been a file, not dir
-      execSync(`cp -r --no-dereference "${tmpDir}/." "${outputDir}/"`, { stdio: "pipe" });
+      execFileSync("cp", ["-r", "--no-dereference", `${tmpDir}/.`, `${outputDir}/`], { stdio: "pipe" });
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -68,7 +67,7 @@ export async function collectFileOutput(
   };
 }
 
-function listFilesRecursive(dir: string, prefix = ""): string[] {
+export function listFilesRecursive(dir: string, prefix = ""): string[] {
   const files: string[] = [];
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -85,7 +84,7 @@ function listFilesRecursive(dir: string, prefix = ""): string[] {
   return files;
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;

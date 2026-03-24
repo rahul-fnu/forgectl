@@ -23,7 +23,7 @@ export async function injectContextFiles(
     // Context files are inlined into the prompt by buildPrompt.
     // This creates a marker file so agents know what context is available.
     await execInContainer(container, [
-      "sh", "-c", `echo "context: ${name}" >> /input/context/.manifest`,
+      "sh", "-c", "printf 'context: %s\\n' \"$1\" >> /input/context/.manifest", "sh", name,
     ]);
   }
 }

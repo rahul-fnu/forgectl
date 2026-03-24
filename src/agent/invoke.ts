@@ -37,7 +37,7 @@ export async function invokeAgent(
     const chunk = b64.slice(i, i + CHUNK_SIZE);
     const op = i === 0 ? ">" : ">>";
     await execInContainer(container, [
-      "sh", "-c", `printf '%s' '${chunk}' ${op} "${promptFile}.b64"`,
+      "sh", "-c", `printf '%s' "$1" ${op} "${promptFile}.b64"`, "sh", chunk,
     ], { workingDir: options.workingDir });
   }
 

@@ -347,7 +347,7 @@ export class Orchestrator {
       this.validationConfig,
       undefined,
       undefined,
-      this.slotManager,
+      this.promotedFindings,
     );
   }
 

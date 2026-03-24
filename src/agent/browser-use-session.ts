@@ -110,13 +110,17 @@ export class BrowserUseSession implements AgentSession {
     const { provider, model } = this.resolveProviderModel();
 
     const body = JSON.stringify({ task, provider, model });
-    // Escape single quotes in the JSON body for shell safety
-    const escapedBody = body.replace(/'/g, "'\\''");
 
     try {
+      // Write JSON body to a temp file inside the container, then use curl -d @file
+      // to avoid shell injection through the JSON payload.
+      await execInContainer(this.container, [
+        "sh", "-c", "printf '%s' \"$1\" > /tmp/browser-use-task.json", "sh", body,
+      ], { env: this.env });
+
       const result = await execInContainer(this.container, [
         "sh", "-c",
-        `curl -s -X POST -H "Content-Type: application/json" -d '${escapedBody}' http://localhost:${this.sidecarPort}/task`,
+        `curl -s -X POST -H "Content-Type: application/json" -d @/tmp/browser-use-task.json http://localhost:${this.sidecarPort}/task`,
       ], { env: this.env, timeout });
 
       const durationMs = Date.now() - start;

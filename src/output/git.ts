@@ -111,10 +111,11 @@ export async function collectGitOutput(
   // Merge user excludes with hard excludes (deduped)
   const allExcludes = [...new Set([...excludePatterns, ...HARD_EXCLUDE_PATTERNS])];
   if (allExcludes.length > 0) {
-    // Ensure .gitignore contains exclude patterns before staging
+    // Ensure .gitignore contains exclude patterns before staging.
+    // Use printf with %s to avoid shell injection via exclude patterns.
     const ignoreLines = allExcludes.join("\n");
     await execInContainer(container, [
-      "sh", "-c", `echo '${ignoreLines}' >> /workspace/.gitignore`,
+      "sh", "-c", "printf '%s\\n' \"$1\" >> /workspace/.gitignore", "sh", ignoreLines,
     ], { workingDir: "/workspace" });
   }
   await execInContainer(container, ["git", "add", "-A"], {
