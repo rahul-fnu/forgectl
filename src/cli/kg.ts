@@ -260,7 +260,7 @@ export async function kgConventionsCommand(options: { db?: string; workspace?: s
       const pct = (conv.confidence * 100).toFixed(0);
       console.log(`  ${chalk.bold.white(conv.pattern)}`);
       console.log(`    ${chalk.dim("Module:")} ${conv.module}  ${chalk.dim("Confidence:")} ${chalk.cyan(`${pct}%`)}`);
-      for (const ex of conv.examples) {
+      for (const ex of conv.examples ?? []) {
         console.log(`    ${chalk.dim("•")} ${ex}`);
       }
       console.log();

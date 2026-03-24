@@ -304,7 +304,7 @@ export async function buildContext(
         const trimmed: Convention[] = [];
         let accum = 0;
         for (const c of sorted) {
-          const lineTokens = estimateTokenCount(c.description);
+          const lineTokens = estimateTokenCount(c.description ?? c.pattern);
           if (accum + lineTokens + 40 > CONVENTION_BUDGET) break;
           trimmed.push(c);
           accum += lineTokens + 10;

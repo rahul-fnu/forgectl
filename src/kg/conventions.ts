@@ -4,10 +4,17 @@ import type { KGDatabase } from "./storage.js";
 import type { ModuleInfo, ExportEntry, ImportEntry } from "./types.js";
 
 export interface Convention {
+  id?: number;
   pattern: string;
   module: string;
+  description?: string;
+  category?: string;
   confidence: number;
-  examples: string[];
+  source?: "mined" | "review" | "merged";
+  occurrences?: number;
+  lastSeen?: string;
+  examples?: string[];
+  ignored?: boolean;
 }
 
 interface ModuleRow {
@@ -390,8 +397,11 @@ export function loadConventions(db: KGDatabase): Convention[] {
 export function extractModulePrefixes(paths: string[]): string[] {
   const prefixes = new Set<string>();
   for (const p of paths) {
-    const dir = dirname(p);
-    if (dir && dir !== ".") prefixes.add(dir);
+    let dir = dirname(p);
+    while (dir && dir !== ".") {
+      prefixes.add(dir);
+      dir = dirname(dir);
+    }
   }
   return [...prefixes];
 }
@@ -417,8 +427,194 @@ export function getConventionsForModules(
  */
 export function formatConventionsForContext(conventions: Convention[]): string {
   if (!conventions || conventions.length === 0) return "";
-  const lines = conventions.map(c =>
-    `- [${c.module}] ${c.pattern} (confidence: ${(c.confidence * 100).toFixed(0)}%)`
+
+  const grouped = new Map<string, Convention[]>();
+  for (const c of conventions) {
+    const key = c.module;
+    const list = grouped.get(key) ?? [];
+    list.push(c);
+    grouped.set(key, list);
+  }
+
+  const sections: string[] = [];
+  for (const [mod, convs] of grouped) {
+    const label = mod === "*"
+      ? "Global:"
+      : `When working in ${mod}/:`;
+    const lines = convs.map(c => {
+      const desc = c.description ?? c.pattern;
+      return `- ${desc} (confidence: ${(c.confidence * 100).toFixed(0)}%)`;
+    });
+    sections.push(`${label}\n${lines.join("\n")}`);
+  }
+
+  return `## Conventions\n\n${sections.join("\n\n")}`;
+}
+
+/**
+ * Save a single convention to the KG database (stored conventions table in kg_meta).
+ * Upserts: if module+pattern already exists, bumps occurrences and updates confidence/description.
+ */
+export function saveConvention(db: KGDatabase, conv: Omit<Convention, "id" | "examples">): void {
+  const all = loadStoredConventions(db);
+  const existing = all.find(c => c.module === conv.module && c.pattern === conv.pattern);
+  if (existing) {
+    existing.confidence = conv.confidence;
+    existing.occurrences = (existing.occurrences ?? 0) + (conv.occurrences ?? 1);
+    existing.lastSeen = conv.lastSeen;
+    if (conv.description) existing.description = conv.description;
+    if (conv.source) existing.source = conv.source;
+  } else {
+    all.push({
+      id: all.length > 0 ? Math.max(...all.map(c => c.id ?? 0)) + 1 : 1,
+      ...conv,
+      occurrences: conv.occurrences ?? 1,
+    });
+  }
+  db.prepare("INSERT OR REPLACE INTO kg_meta (key, value) VALUES (?, ?)").run(
+    "stored_conventions", JSON.stringify(all),
   );
-  return `## Codebase Conventions\n\n${lines.join("\n")}`;
+}
+
+/**
+ * Get all stored conventions (individual convention records with id/source/description).
+ */
+export function getAllConventions(db: KGDatabase): Convention[] {
+  return loadStoredConventions(db);
+}
+
+function loadStoredConventions(db: KGDatabase): Convention[] {
+  const row = db.prepare(
+    "SELECT value FROM kg_meta WHERE key = 'stored_conventions'",
+  ).get() as { value: string } | undefined;
+  if (!row) return [];
+  return JSON.parse(row.value) as Convention[];
+}
+
+/**
+ * Merge promoted review findings into conventions.
+ * Only processes findings where promotedToConvention is true.
+ * Returns count of conventions created or updated.
+ */
+export function mergeReviewFindingsWithConventions(
+  db: KGDatabase,
+  findings: Array<{
+    category: string;
+    pattern: string;
+    module: string;
+    occurrenceCount: number;
+    firstSeen: string;
+    lastSeen: string;
+    promotedToConvention: boolean;
+    exampleComment: string | null;
+  }>,
+): number {
+  let count = 0;
+  for (const f of findings) {
+    if (!f.promotedToConvention) continue;
+
+    const all = loadStoredConventions(db);
+    const existing = all.find(c => c.module === f.module && c.pattern === f.pattern);
+    if (existing) {
+      existing.confidence = Math.min(1.0, existing.confidence + 0.1);
+      existing.occurrences = (existing.occurrences ?? 0) + f.occurrenceCount;
+      existing.lastSeen = f.lastSeen;
+      existing.source = "merged";
+      db.prepare("INSERT OR REPLACE INTO kg_meta (key, value) VALUES (?, ?)").run(
+        "stored_conventions", JSON.stringify(all),
+      );
+    } else {
+      saveConvention(db, {
+        module: f.module,
+        pattern: f.pattern,
+        description: f.exampleComment ?? undefined,
+        confidence: 0.7,
+        source: "review",
+        occurrences: f.occurrenceCount,
+        lastSeen: f.lastSeen,
+      });
+    }
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Record whether a convention was followed or not in a given run.
+ */
+export function recordConventionCompliance(
+  db: KGDatabase,
+  conventionId: number,
+  followed: boolean,
+  runId: string,
+): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS kg_convention_compliance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    convention_id INTEGER NOT NULL,
+    followed INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+  db.prepare(
+    "INSERT INTO kg_convention_compliance (convention_id, followed, run_id) VALUES (?, ?, ?)",
+  ).run(conventionId, followed ? 1 : 0, runId);
+}
+
+/**
+ * List all stored conventions (alias for getAllConventions).
+ */
+export function listConventions(db: KGDatabase): Convention[] {
+  return getAllConventions(db);
+}
+
+/**
+ * Get conventions for a single module prefix.
+ */
+export function getConventionsForModule(db: KGDatabase, module: string): Convention[] {
+  const all = loadStoredConventions(db);
+  return all.filter(c =>
+    !c.ignored &&
+    (c.module === module || c.module.startsWith(module) || module.startsWith(c.module)),
+  );
+}
+
+/**
+ * Mark conventions matching a pattern as ignored.
+ * Returns count of conventions ignored.
+ */
+export function ignoreConvention(db: KGDatabase, pattern: string): number {
+  const all = loadStoredConventions(db);
+  let count = 0;
+  for (const c of all) {
+    if (c.pattern.includes(pattern) || c.module.includes(pattern)) {
+      c.ignored = true;
+      count++;
+    }
+  }
+  if (count > 0) {
+    db.prepare("INSERT OR REPLACE INTO kg_meta (key, value) VALUES (?, ?)").run(
+      "stored_conventions", JSON.stringify(all),
+    );
+  }
+  return count;
+}
+
+/**
+ * Refresh conventions from review findings.
+ * Returns count of conventions synced.
+ */
+export function refreshConventionsFromFindings(
+  db: KGDatabase,
+  findings: Array<{
+    category: string;
+    pattern: string;
+    module: string;
+    occurrenceCount: number;
+    firstSeen: string;
+    lastSeen: string;
+    promotedToConvention: boolean;
+    exampleComment: string | null;
+  }>,
+): number {
+  return mergeReviewFindingsWithConventions(db, findings);
 }
