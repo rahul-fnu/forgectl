@@ -88,6 +88,14 @@ export const WorkflowSchema = z.object({
 });
 export type WorkflowDefinition = z.infer<typeof WorkflowSchema>;
 
+export const ScheduleEntrySchema = z.object({
+  name: z.string(),
+  cron: z.string(),
+  task: z.string(),
+  repo: z.string().optional(),
+});
+export type ScheduleEntry = z.infer<typeof ScheduleEntrySchema>;
+
 export const OrchestratorConfigSchema = z.object({
   enabled: z.boolean().default(false),
   max_concurrent_agents: z.number().int().positive().default(3),
@@ -180,6 +188,8 @@ export const ConfigSchema = z.object({
   github_app: GitHubAppConfigSchema.optional(),
 
   merger_app: GitHubAppConfigSchema.optional(),
+
+  schedules: z.array(ScheduleEntrySchema).default([]),
 
   merge_daemon: z.object({
     ci_timeout_ms: z.number().int().positive().default(2_700_000), // 45 min
