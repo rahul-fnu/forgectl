@@ -321,80 +321,102 @@ describe("tick", () => {
 });
 
 describe("startScheduler", () => {
+  let stopFn: (() => void) | null = null;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Stop any running scheduler and drain lingering microtasks
+    // to prevent async bleed between tests
+    if (stopFn) { stopFn(); stopFn = null; }
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
   });
 
+  /** Flush microtasks so async tick() fully completes and schedules its setTimeout.
+   *  50 iterations is empirically sufficient to drain the microtask queue for tick() + setTimeout promise chain. */
+  async function flushTick(): Promise<void> {
+    for (let i = 0; i < 50; i++) await vi.advanceTimersByTimeAsync(0);
+  }
+
   it("returns a stop function", () => {
     const deps = makeDeps();
-    const stop = startScheduler(deps);
-    expect(typeof stop).toBe("function");
-    stop();
+    stopFn = startScheduler(deps);
+    expect(typeof stopFn).toBe("function");
   });
 
   it("runs first tick immediately", async () => {
     const deps = makeDeps();
-    const stop = startScheduler(deps);
+    stopFn = startScheduler(deps);
 
-    // Flush the promise microtask queue
-    await vi.advanceTimersByTimeAsync(0);
-
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(1);
-    stop();
   });
 
   it("schedules next tick after poll_interval_ms", async () => {
     const deps = makeDeps();
-    const stop = startScheduler(deps);
+    stopFn = startScheduler(deps);
 
     // First tick
-    await vi.advanceTimersByTimeAsync(0);
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(1);
 
-    // Advance to second tick
+    // Advance past poll_interval_ms (100ms) and flush second tick
     await vi.advanceTimersByTimeAsync(100);
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(2);
-
-    stop();
   });
 
   it("stops further ticks when stop is called", async () => {
     const deps = makeDeps();
-    const stop = startScheduler(deps);
+    stopFn = startScheduler(deps);
 
-    await vi.advanceTimersByTimeAsync(0);
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(1);
 
-    stop();
+    stopFn();
+    stopFn = null;
 
     await vi.advanceTimersByTimeAsync(200);
+    await flushTick();
     // Should not have run more ticks
     expect(reconcile).toHaveBeenCalledTimes(1);
   });
 
   it("uses setTimeout chain (not setInterval)", async () => {
-    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
-    const setIntervalSpy = vi.spyOn(global, "setInterval");
-
+    const setIntervalSpy = vi.spyOn(global, 'setInterval');
     const deps = makeDeps();
-    const stop = startScheduler(deps);
+    stopFn = startScheduler(deps);
 
-    await vi.advanceTimersByTimeAsync(0);
+    // First tick completes
+    await flushTick();
+    expect(reconcile).toHaveBeenCalledTimes(1);
 
-    expect(setTimeoutSpy).toHaveBeenCalled();
-    // setInterval should NOT be used (other than vitest internal calls)
-    const setIntervalCallCount = setIntervalSpy.mock.calls.filter(
-      (call) => call[1] === 100, // our poll interval
-    ).length;
-    expect(setIntervalCallCount).toBe(0);
+    // Advance to second tick
+    await vi.advanceTimersByTimeAsync(100);
+    await flushTick();
+    expect(reconcile).toHaveBeenCalledTimes(2);
 
-    stop();
-    setTimeoutSpy.mockRestore();
+    // Advance to third tick — proves the chain continues
+    await vi.advanceTimersByTimeAsync(100);
+    await flushTick();
+    expect(reconcile).toHaveBeenCalledTimes(3);
+
+    // Verify setInterval was never used with the poll interval
+    expect(setIntervalSpy.mock.calls.filter(c => c[1] === 100)).toHaveLength(0);
+
+    // With setInterval, ticks would still fire after stop.
+    // With setTimeout chain, stop prevents the next tick from scheduling.
+    stopFn();
+    stopFn = null;
+    const countAfterStop = vi.mocked(reconcile).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(200);
+    await flushTick();
+    expect(reconcile).toHaveBeenCalledTimes(countAfterStop);
+
     setIntervalSpy.mockRestore();
   });
 
@@ -404,17 +426,16 @@ describe("startScheduler", () => {
       .mockRejectedValueOnce(new Error("tick 1 error"))
       .mockResolvedValue(undefined);
 
-    const stop = startScheduler(deps);
+    stopFn = startScheduler(deps);
 
     // First tick (error)
-    await vi.advanceTimersByTimeAsync(0);
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(1);
 
-    // Second tick (should still schedule)
+    // Second tick — should still be scheduled despite previous error
     await vi.advanceTimersByTimeAsync(100);
+    await flushTick();
     expect(reconcile).toHaveBeenCalledTimes(2);
-
-    stop();
   });
 });
 

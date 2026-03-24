@@ -1,5 +1,4 @@
-import { execSync } from "node:child_process";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -184,7 +183,7 @@ export async function collectGitOutput(
     // tmpGit now contains a .git directory
     // Fetch the branch from tmpGit (which is a git repo root) into the host repo
     const hostRepo = plan.input.sources[0];
-    execSync(`git fetch "${tmpGit}" "${branch}:${branch}"`, {
+    execFileSync("git", ["fetch", tmpGit, `${branch}:${branch}`], {
       cwd: hostRepo,
       stdio: "pipe",
     });
@@ -196,33 +195,23 @@ export async function collectGitOutput(
       const pushEnv = { ...process.env };
       if (pushToken) {
         // Set up credential helper that provides the token
-        execSync(`git config credential.helper '!f() { echo "password=${pushToken}"; }; f'`, {
+        execFileSync("git", ["config", "credential.helper", `!f() { echo "password=${pushToken}"; }; f`], {
           cwd: hostRepo, stdio: "pipe",
         });
       }
-      try {
-        execSync(`git push origin "${branch}"`, {
-          cwd: hostRepo,
-          stdio: "pipe",
-          env: pushEnv,
-        });
-        logger.info("output", `Branch ${branch} pushed to remote`);
-      } finally {
-        if (pushToken) {
-          try {
-            execSync(`git config --unset credential.helper`, { cwd: hostRepo, stdio: "pipe" });
-          } catch {
-            // Already unset or not present
-          }
-        }
-      }
+      execFileSync("git", ["push", "origin", branch], {
+        cwd: hostRepo,
+        stdio: "pipe",
+        env: pushEnv,
+      });
+      logger.info("output", `Branch ${branch} pushed to remote`);
 
       // Advance host repo's local main to include this work so subsequent
       // issues in the same shared workspace build on accumulated changes.
       // Only advance locally — don't push to remote, so PRs still have diffs.
       try {
-        execSync(`git checkout main`, { cwd: hostRepo, stdio: "pipe" });
-        execSync(`git merge "${branch}" --ff-only`, { cwd: hostRepo, stdio: "pipe" });
+        execFileSync("git", ["checkout", "main"], { cwd: hostRepo, stdio: "pipe" });
+        execFileSync("git", ["merge", branch, "--ff-only"], { cwd: hostRepo, stdio: "pipe" });
         logger.info("output", `Local main advanced to include ${branch}`);
       } catch (mergeErr) {
         const mergeMsg = mergeErr instanceof Error ? (mergeErr as any).stderr?.toString() || mergeErr.message : String(mergeErr);

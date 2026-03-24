@@ -4,8 +4,8 @@
  * rebase → resolve conflicts → validate → fix build → enrich PR description → review (approve/request changes) → wait CI → merge.
  */
 
-import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { resolveToken } from "../tracker/token.js";
 import {
   cloneAndRebase,
@@ -356,7 +356,7 @@ export class PRProcessor {
               return this.recordResult(pr, "failed", "Validation failed and build fix unsuccessful");
             }
             // Push fixed branch
-            execSync(`git push origin "${pr.branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+            execFileSync("git", ["push", "origin", pr.branch, "--force"], { cwd: tmpDir, stdio: "pipe" });
           } else {
             return this.recordResult(pr, "failed", "Validation failed");
           }
@@ -595,7 +595,7 @@ export class PRProcessor {
   async runValidation(tmpDir: string, commands: string[], pr: PRInfo): Promise<boolean> {
     for (const cmd of commands) {
       try {
-        execSync(cmd, { cwd: tmpDir, stdio: "pipe", timeout: 300_000 });
+        execFileSync("sh", ["-c", cmd], { cwd: tmpDir, stdio: "pipe", timeout: 300_000 });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn("merge-daemon", `PR #${pr.number}: Validation '${cmd}' failed: ${msg}`);
@@ -615,14 +615,16 @@ export class PRProcessor {
         const prompt = `The build is failing. Run the validation commands, read the errors, and fix them. Do not change test expectations or disable checks.`;
         const promptFile = `${tmpDir}/.forgectl-fix-prompt.txt`;
         ws(promptFile, prompt);
-        execSync(
-          `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 10`,
-          { cwd: tmpDir, encoding: "utf-8", timeout: 180_000 },
+        execFileSync(
+          "claude",
+          ["-p", "-", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "10"],
+          { cwd: tmpDir, encoding: "utf-8", timeout: 180_000, input: readFileSync(promptFile, "utf-8") },
         );
 
         // Re-run validation
         if (await this.runValidation(tmpDir, this.config.validationCommands, pr)) {
-          execSync(`git add -A && git commit -m "fix: build fixes by forgectl merge-daemon"`, { cwd: tmpDir, stdio: "pipe" });
+          execFileSync("git", ["add", "-A"], { cwd: tmpDir, stdio: "pipe" });
+          execFileSync("git", ["commit", "-m", "fix: build fixes by forgectl merge-daemon"], { cwd: tmpDir, stdio: "pipe" });
           this.logger.info("merge-daemon", `PR #${pr.number}: Build fixed on attempt ${attempt}`);
           return true;
         }
@@ -663,22 +665,23 @@ export class PRProcessor {
       const promptFile = `${tmpDir}/.forgectl-address-review.txt`;
       ws(promptFile, prompt);
 
-      execSync(
-        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 15`,
-        { cwd: tmpDir, encoding: "utf-8", timeout: 300_000 },
+      execFileSync(
+        "claude",
+        ["-p", "-", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "15"],
+        { cwd: tmpDir, encoding: "utf-8", timeout: 300_000, input: readFileSync(promptFile, "utf-8") },
       );
 
       // Check if Claude made changes
-      const status = execSync(`git status --porcelain`, { cwd: tmpDir, encoding: "utf-8" }).trim();
+      const status = execFileSync("git", ["status", "--porcelain"], { cwd: tmpDir, encoding: "utf-8" }).trim();
       if (!status) {
         this.logger.warn("merge-daemon", `PR #${pr.number}: Claude made no changes when addressing review`);
         return false;
       }
 
       // Commit and push
-      execSync(`git add -A`, { cwd: tmpDir, stdio: "pipe" });
-      execSync(`git commit -m "fix: address review comments (forgectl review daemon)"`, { cwd: tmpDir, stdio: "pipe" });
-      execSync(`git push origin "${pr.branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+      execFileSync("git", ["add", "-A"], { cwd: tmpDir, stdio: "pipe" });
+      execFileSync("git", ["commit", "-m", "fix: address review comments (forgectl review daemon)"], { cwd: tmpDir, stdio: "pipe" });
+      execFileSync("git", ["push", "origin", pr.branch, "--force"], { cwd: tmpDir, stdio: "pipe" });
 
       await this.postComment(pr.number,
         `**forgectl review daemon:** Addressed ${review.comments.length} review comment(s). Pushed fixes — awaiting re-review.`
@@ -701,7 +704,7 @@ export class PRProcessor {
       const { writeFileSync: ws } = await import("node:fs");
 
       // Get full diff against main
-      const diff = execSync(`git diff origin/main...HEAD`, {
+      const diff = execFileSync("git", ["diff", "origin/main...HEAD"], {
         cwd: tmpDir,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
@@ -735,9 +738,10 @@ export class PRProcessor {
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
       ws(promptFile, prompt);
-      const output = execSync(
-        `cat "${promptFile}" | claude -p - --output-format json --dangerously-skip-permissions --max-turns 1`,
-        { cwd: tmpDir, encoding: "utf-8", timeout: 120_000 },
+      const output = execFileSync(
+        "claude",
+        ["-p", "-", "--output-format", "json", "--dangerously-skip-permissions", "--max-turns", "1"],
+        { cwd: tmpDir, encoding: "utf-8", timeout: 120_000, input: readFileSync(promptFile, "utf-8") },
       );
 
       const review = parseStructuredReview(output);
@@ -908,7 +912,7 @@ export class PRProcessor {
       // Get diff stat
       let diffStat = "";
       try {
-        diffStat = execSync("git diff --stat origin/main...HEAD", {
+        diffStat = execFileSync("git", ["diff", "--stat", "origin/main...HEAD"], {
           cwd: tmpDir,
           encoding: "utf-8",
           timeout: 30_000,
@@ -918,7 +922,7 @@ export class PRProcessor {
       // Get changed file list
       let changedFiles: string[] = [];
       try {
-        changedFiles = execSync("git diff --name-only origin/main...HEAD", {
+        changedFiles = execFileSync("git", ["diff", "--name-only", "origin/main...HEAD"], {
           cwd: tmpDir,
           encoding: "utf-8",
           timeout: 30_000,
@@ -1029,22 +1033,23 @@ export class PRProcessor {
 
       const promptFile = `${fixDir}/.forgectl-ci-fix-prompt.txt`;
       ws(promptFile, prompt);
-      execSync(
-        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 15`,
-        { cwd: fixDir, encoding: "utf-8", timeout: 300_000 },
+      execFileSync(
+        "claude",
+        ["-p", "-", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "15"],
+        { cwd: fixDir, encoding: "utf-8", timeout: 300_000, input: readFileSync(promptFile, "utf-8") },
       );
 
       // Step 4: Check if Claude made changes
-      const status = execSync(`git status --porcelain`, { cwd: fixDir, encoding: "utf-8" }).trim();
+      const status = execFileSync("git", ["status", "--porcelain"], { cwd: fixDir, encoding: "utf-8" }).trim();
       if (!status) {
         this.logger.warn("merge-daemon", `PR #${pr.number}: Claude made no changes`);
         return false;
       }
 
       // Step 5: Commit and push
-      execSync(`git add -A`, { cwd: fixDir, stdio: "pipe" });
-      execSync(`git commit -m "fix: CI build errors (forgectl merge-daemon)"`, { cwd: fixDir, stdio: "pipe" });
-      execSync(`git push origin "${pr.branch}" --force`, { cwd: fixDir, stdio: "pipe" });
+      execFileSync("git", ["add", "-A"], { cwd: fixDir, stdio: "pipe" });
+      execFileSync("git", ["commit", "-m", "fix: CI build errors (forgectl merge-daemon)"], { cwd: fixDir, stdio: "pipe" });
+      execFileSync("git", ["push", "origin", pr.branch, "--force"], { cwd: fixDir, stdio: "pipe" });
 
       this.logger.info("merge-daemon", `PR #${pr.number}: Build fix pushed`);
       await this.postComment(pr.number, `**forgectl merge-daemon:** Pushed build fix based on CI error logs. Waiting for CI to re-run.`);
@@ -1243,7 +1248,7 @@ export class PRProcessor {
   async postMergeAnalysis(pr: PRInfo, tmpDir?: string): Promise<void> {
     try {
       const workDir = tmpDir ?? ".";
-      const diffOutput = execSync("git diff --name-only HEAD~1", {
+      const diffOutput = execFileSync("git", ["diff", "--name-only", "HEAD~1"], {
         cwd: workDir,
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
