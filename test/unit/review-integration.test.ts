@@ -112,7 +112,7 @@ function makePlan(overrides: Partial<RunPlan> = {}): RunPlan {
     },
     input: { mode: "repo", sources: ["/tmp/repo"], mountPath: "/workspace", exclude: [] },
     context: { system: "", files: [], inject: [] },
-    validation: { steps: [], onFailure: "abandon" },
+    validation: { steps: [], lintSteps: [], onFailure: "abandon" },
     output: { mode: "git", path: "/workspace", collect: [], hostDir: "/tmp/out" },
     orchestration: {
       mode: "review",
@@ -231,6 +231,7 @@ describe("executeReviewMode", () => {
     const plan = makePlan({
       validation: {
         steps: [{ name: "test", command: "npm test", retries: 2, description: "Tests" }],
+        lintSteps: [],
         onFailure: "abandon",
       },
     });
@@ -255,6 +256,7 @@ describe("executeReviewMode", () => {
     const plan = makePlan({
       validation: {
         steps: [{ name: "lint", command: "npm run lint", retries: 3, description: "Lint" }],
+        lintSteps: [],
         onFailure: "abandon",
       },
     });
