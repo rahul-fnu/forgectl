@@ -348,6 +348,7 @@ export class Orchestrator {
       undefined,
       undefined,
       this.promotedFindings,
+      this.slotManager,
     );
   }
 
