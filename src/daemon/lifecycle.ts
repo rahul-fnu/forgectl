@@ -1,8 +1,10 @@
 import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 const FORGECTL_DIR = join(process.env.HOME || "/tmp", ".forgectl");
 const PID_FILE = join(FORGECTL_DIR, "daemon.pid");
+const TOKEN_FILE = join(FORGECTL_DIR, "daemon.token");
 
 export function savePid(pid: number): void {
   mkdirSync(FORGECTL_DIR, { recursive: true });
@@ -30,4 +32,20 @@ export function removePid(): void {
 
 export function isDaemonRunning(): boolean {
   return readPid() !== null;
+}
+
+export function generateAndSaveToken(): string {
+  mkdirSync(FORGECTL_DIR, { recursive: true });
+  const token = randomBytes(32).toString("hex");
+  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  return token;
+}
+
+export function readDaemonToken(): string | null {
+  if (!existsSync(TOKEN_FILE)) return null;
+  return readFileSync(TOKEN_FILE, "utf-8").trim();
+}
+
+export function removeToken(): void {
+  try { unlinkSync(TOKEN_FILE); } catch { /* ignore */ }
 }
