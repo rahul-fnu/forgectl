@@ -220,6 +220,24 @@ describe("tick", () => {
     expect(deps.logger.error).toHaveBeenCalled();
   });
 
+  it("passes promotedFindings to dispatchIssue", async () => {
+    const findings = [
+      { id: 1, run_id: "r1", file: "src/foo.ts", line: 10, severity: "MUST_FIX", category: "bug", message: "fix this", sha: "abc", created_at: "2026-01-01", promoted: 1 },
+    ];
+    const deps = makeDeps({ promotedFindings: findings as any });
+    const issues = [makeIssue("1")];
+    vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
+    vi.mocked(filterCandidates).mockReturnValue(issues);
+    vi.mocked(sortCandidates).mockReturnValue(issues);
+
+    await tick(deps);
+
+    expect(dispatchIssue).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(dispatchIssue).mock.calls[0];
+    // promotedFindings is the 17th positional arg (index 16)
+    expect(callArgs[16]).toBe(findings);
+  });
+
   describe("subIssueCache integration (SUBISSUE-03)", () => {
     it("populates terminalIssueIds from subIssueCache entries with terminal states", async () => {
       const { SubIssueCache } = await import("../../src/tracker/sub-issue-cache.js");
