@@ -4,8 +4,8 @@ import { SubIssueCache } from "./sub-issue-cache.js";
 import { detectIssueCycles } from "./sub-issue-dag.js";
 import { MergeQueue } from "../orchestrator/merge-queue.js";
 
-import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -172,18 +172,18 @@ async function resolveAndMerge(
 
   try {
     // Clone and checkout the PR branch
-    execSync(`git clone --depth=50 "${repoUrl}" .`, { cwd: tmpDir, stdio: "pipe" });
-    execSync(`git config user.name forgectl`, { cwd: tmpDir, stdio: "pipe" });
-    execSync(`git config user.email forge@localhost`, { cwd: tmpDir, stdio: "pipe" });
-    execSync(`git checkout "${branch}"`, { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["clone", "--depth=50", repoUrl, "."], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "forgectl"], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "forge@localhost"], { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["checkout", branch], { cwd: tmpDir, stdio: "pipe" });
 
     // Try merging main into the branch
     try {
-      execSync(`git merge origin/main --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+      execFileSync("git", ["merge", "origin/main", "--no-edit"], { cwd: tmpDir, stdio: "pipe" });
       // No conflicts — just push
     } catch {
       // Get conflicted files
-      const conflictOutput = execSync(`git diff --name-only --diff-filter=U`, {
+      const conflictOutput = execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
         cwd: tmpDir,
         encoding: "utf-8",
       }).trim();
@@ -195,9 +195,9 @@ async function resolveAndMerge(
       for (const file of conflicts) {
         // Extract three-way versions
         let base = "", ours = "", theirs = "";
-        try { base = execSync(`git show :1:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* new file */ }
-        try { ours = execSync(`git show :2:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
-        try { theirs = execSync(`git show :3:"${file}"`, { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+        try { base = execFileSync("git", ["show", `:1:${file}`], { cwd: tmpDir, encoding: "utf-8" }); } catch { /* new file */ }
+        try { ours = execFileSync("git", ["show", `:2:${file}`], { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
+        try { theirs = execFileSync("git", ["show", `:3:${file}`], { cwd: tmpDir, encoding: "utf-8" }); } catch { /* deleted */ }
 
         // Use Claude to resolve
         const prompt = [
@@ -212,30 +212,29 @@ async function resolveAndMerge(
         ].join("\n");
 
         try {
-          const { writeFileSync } = await import("node:fs");
           const promptFile = join(tmpDir, ".forgectl-merge-prompt.txt");
           writeFileSync(promptFile, prompt);
-          const resolved = execSync(
-            `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 1`,
-            { cwd: tmpDir, encoding: "utf-8", timeout: 60000 },
+          const resolved = execFileSync(
+            "claude",
+            ["-p", "-", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "1"],
+            { cwd: tmpDir, encoding: "utf-8", timeout: 60000, input: readFileSync(promptFile, "utf-8") },
           );
           // Sanitize Claude output before writing to file
           const cleaned = sanitizeMergeOutput(resolved, file);
           if (cleaned) {
             writeFileSync(join(tmpDir, file), cleaned);
           } else {
-            execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+            execFileSync("git", ["checkout", "--theirs", file], { cwd: tmpDir, stdio: "pipe" });
           }
         } catch {
-          execSync(`git checkout --theirs "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+          execFileSync("git", ["checkout", "--theirs", file], { cwd: tmpDir, stdio: "pipe" });
         }
-        execSync(`git add "${file}"`, { cwd: tmpDir, stdio: "pipe" });
+        execFileSync("git", ["add", file], { cwd: tmpDir, stdio: "pipe" });
       }
 
       // Post-resolve verification: ask Claude to review the merge result
       try {
-        const { writeFileSync: writeSyncVerify } = await import("node:fs");
-        const diffOutput = execSync(`git diff --cached --stat`, { cwd: tmpDir, encoding: "utf-8" });
+        const diffOutput = execFileSync("git", ["diff", "--cached", "--stat"], { cwd: tmpDir, encoding: "utf-8" });
         const changedFiles = conflicts.join(", ");
         const verifyPrompt = [
           `You just resolved merge conflicts in: ${changedFiles}`,
@@ -252,20 +251,21 @@ async function resolveAndMerge(
           `If everything looks clean, just say "LGTM".`,
         ].join("\n");
         const verifyFile = join(tmpDir, ".forgectl-verify-prompt.txt");
-        writeSyncVerify(verifyFile, verifyPrompt);
-        execSync(
-          `cat "${verifyFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 5`,
-          { cwd: tmpDir, encoding: "utf-8", timeout: 120000 },
+        writeFileSync(verifyFile, verifyPrompt);
+        execFileSync(
+          "claude",
+          ["-p", "-", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "5"],
+          { cwd: tmpDir, encoding: "utf-8", timeout: 120000, input: readFileSync(verifyFile, "utf-8") },
         );
       } catch {
         // Verification is best-effort — don't block the merge
       }
 
-      execSync(`git commit --no-edit`, { cwd: tmpDir, stdio: "pipe" });
+      execFileSync("git", ["commit", "--no-edit"], { cwd: tmpDir, stdio: "pipe" });
     }
 
     // Push the resolved branch
-    execSync(`git push origin "${branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+    execFileSync("git", ["push", "origin", branch, "--force"], { cwd: tmpDir, stdio: "pipe" });
 
     // Retry the merge via API
     const mergeUrl = `${API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/merge`;
