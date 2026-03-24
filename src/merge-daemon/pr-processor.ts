@@ -340,8 +340,24 @@ export class PRProcessor {
 
         if (review) {
           if (review.approval === "request_changes") {
-            this.logger.info("merge-daemon", `PR #${pr.number}: Review requested changes (${review.comments.length} comments) — blocking merge`);
-            return this.recordResult(pr, "request_changes", review.summary);
+            const reviewRound = this.reviewRounds.get(pr.number) ?? 0;
+            if (reviewRound >= 3) {
+              this.logger.info("merge-daemon", `PR #${pr.number}: Review requested changes after ${reviewRound} rounds — escalating`);
+              await this.postComment(pr.number, `**forgectl review:** Changes requested after ${reviewRound} review rounds. Escalating for manual review.`);
+              return this.recordResult(pr, "request_changes", `Escalated after ${reviewRound} rounds: ${review.summary}`);
+            }
+
+            // Self-address: use Claude to fix the review comments on the branch
+            this.logger.info("merge-daemon", `PR #${pr.number}: Review requested changes (${review.comments.length} comments, round ${reviewRound + 1}/3) — auto-addressing`);
+            const fixed = await this.addressReviewComments(tmpDir, pr, review);
+            if (fixed) {
+              this.logger.info("merge-daemon", `PR #${pr.number}: Review comments addressed, pushed fixes`);
+              // Re-review will happen on next poll cycle (new SHA triggers re-review)
+              return this.recordResult(pr, "request_changes", `Self-addressed round ${reviewRound + 1}, awaiting re-review`);
+            } else {
+              this.logger.warn("merge-daemon", `PR #${pr.number}: Could not auto-address review comments — leaving for manual review`);
+              return this.recordResult(pr, "request_changes", review.summary);
+            }
           }
           // Approved — log non-blocking comments if any
           if (review.comments.length > 0) {
@@ -521,6 +537,65 @@ export class PRProcessor {
       }
     }
     return false;
+  }
+
+  /**
+   * Address review comments by invoking Claude to fix the flagged issues.
+   * Returns true if fixes were committed and pushed.
+   */
+  async addressReviewComments(tmpDir: string, pr: PRInfo, review: StructuredReview): Promise<boolean> {
+    try {
+      const { writeFileSync: ws } = await import("node:fs");
+
+      // Build a prompt with all review comments
+      const commentList = review.comments.map((c, i) =>
+        `${i + 1}. [${c.severity.toUpperCase()}] ${c.file}:${c.line} — ${c.body}${c.suggested_fix ? `\n   Suggested fix: ${c.suggested_fix}` : ""}`
+      ).join("\n\n");
+
+      const prompt = [
+        `A code review has requested changes on this branch. Address ALL of the following review comments:`,
+        ``,
+        commentList,
+        ``,
+        `Rules:`,
+        `- Read each flagged file before making changes`,
+        `- Address EVERY comment listed above — do not skip any`,
+        `- Follow the suggested fixes when provided`,
+        `- Make minimal changes — only fix what the review flagged`,
+        `- Run the build and tests after making changes to verify nothing breaks`,
+        `- Stage all changes with git add`,
+      ].join("\n");
+
+      const promptFile = `${tmpDir}/.forgectl-address-review.txt`;
+      ws(promptFile, prompt);
+
+      execSync(
+        `cat "${promptFile}" | claude -p - --output-format text --dangerously-skip-permissions --max-turns 15`,
+        { cwd: tmpDir, encoding: "utf-8", timeout: 300_000 },
+      );
+
+      // Check if Claude made changes
+      const status = execSync(`git status --porcelain`, { cwd: tmpDir, encoding: "utf-8" }).trim();
+      if (!status) {
+        this.logger.warn("merge-daemon", `PR #${pr.number}: Claude made no changes when addressing review`);
+        return false;
+      }
+
+      // Commit and push
+      execSync(`git add -A`, { cwd: tmpDir, stdio: "pipe" });
+      execSync(`git commit -m "fix: address review comments (forgectl review daemon)"`, { cwd: tmpDir, stdio: "pipe" });
+      execSync(`git push origin "${pr.branch}" --force`, { cwd: tmpDir, stdio: "pipe" });
+
+      await this.postComment(pr.number,
+        `**forgectl review daemon:** Addressed ${review.comments.length} review comment(s). Pushed fixes — awaiting re-review.`
+      );
+
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn("merge-daemon", `PR #${pr.number}: Failed to address review comments: ${msg}`);
+      return false;
+    }
   }
 
   /**
