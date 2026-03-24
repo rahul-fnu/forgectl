@@ -1008,7 +1008,7 @@ export class PipelineExecutor {
 
       for (const branch of upstreamBranches.slice(1)) {
         try {
-          execFileSync("git", ["merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
+          execFileSync("git", ["-c", "user.name=forgectl", "-c", "user.email=forgectl@localhost", "merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
           console.log(chalk.gray(`    Merged ${branch} into ${tempBranch}`));
         } catch {
           const conflicts = this.getConflictFiles(repoPath);
@@ -1043,7 +1043,7 @@ export class PipelineExecutor {
     }
 
     try {
-      execFileSync("git", ["merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
+      execFileSync("git", ["-c", "user.name=forgectl", "-c", "user.email=forgectl@localhost", "merge", branch, "--no-edit"], { cwd: repoPath, stdio: "pipe" });
       console.log(chalk.gray(`    Merged ${branch} into host repo`));
     } catch {
       const conflicts = this.getConflictFiles(repoPath);

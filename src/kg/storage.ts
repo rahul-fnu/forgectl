@@ -474,7 +474,7 @@ export function recordOutcomeFiles(
 /**
  * Get outcome file records for a set of file paths.
  */
-function getOutcomeFiles(
+export function getOutcomeFiles(
   db: KGDatabase,
   filePaths: string[],
   taskType?: string,

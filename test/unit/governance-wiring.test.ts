@@ -49,7 +49,7 @@ describe("Governance wiring", () => {
       vi.mocked(sortCandidates).mockReturnValue([mockIssue as any]);
 
       const deps: TickDeps = {
-        state: { claimed: new Set(), running: new Map(), retryTimers: new Map(), retryAttempts: new Map() } as OrchestratorState,
+        state: { claimed: new Set(), running: new Map(), retryTimers: new Map(), retryAttempts: new Map(), issueBranches: new Map(), recentlyCompleted: new Map() } as OrchestratorState,
         tracker: {
           fetchCandidateIssues: vi.fn().mockResolvedValue([mockIssue]),
           fetchIssuesByStates: vi.fn().mockResolvedValue([]),
@@ -87,7 +87,7 @@ describe("Governance wiring", () => {
       vi.mocked(sortCandidates).mockReturnValue([mockIssue as any]);
 
       const deps: TickDeps = {
-        state: { claimed: new Set(), running: new Map(), retryTimers: new Map(), retryAttempts: new Map() } as OrchestratorState,
+        state: { claimed: new Set(), running: new Map(), retryTimers: new Map(), retryAttempts: new Map(), issueBranches: new Map(), recentlyCompleted: new Map() } as OrchestratorState,
         tracker: {
           fetchCandidateIssues: vi.fn().mockResolvedValue([mockIssue]),
           fetchIssuesByStates: vi.fn().mockResolvedValue([]),

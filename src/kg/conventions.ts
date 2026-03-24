@@ -382,7 +382,7 @@ export function saveConventions(db: KGDatabase, conventions: Convention[]): void
   ).run("conventions_updated_at", new Date().toISOString());
 }
 
-function loadConventions(db: KGDatabase): Convention[] {
+export function loadConventions(db: KGDatabase): Convention[] {
   const row = db.prepare(
     "SELECT value FROM kg_meta WHERE key = 'conventions'",
   ).get() as { value: string } | undefined;
@@ -543,7 +543,7 @@ function mergeReviewFindingsWithConventions(
 /**
  * Record whether a convention was followed or not in a given run.
  */
-function recordConventionCompliance(
+export function recordConventionCompliance(
   db: KGDatabase,
   conventionId: number,
   followed: boolean,
