@@ -44,10 +44,10 @@ export async function collectFileOutput(
     const extractedDir = join(tmpDir, containerPathBase);
 
     try {
-      execSync(`cp -r "${extractedDir}/." "${outputDir}/"`, { stdio: "pipe" });
+      execSync(`cp -r --no-dereference "${extractedDir}/." "${outputDir}/"`, { stdio: "pipe" });
     } catch {
       // If extractedDir doesn't exist, the container path may have been a file, not dir
-      execSync(`cp -r "${tmpDir}/." "${outputDir}/"`, { stdio: "pipe" });
+      execSync(`cp -r --no-dereference "${tmpDir}/." "${outputDir}/"`, { stdio: "pipe" });
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });

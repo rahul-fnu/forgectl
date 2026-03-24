@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { assertContainment } from "../workspace/safety.js";
 
 /**
  * Sanitize Claude's merge output before writing it to a file.
@@ -108,7 +109,9 @@ export async function resolveConflicts(tmpDir: string, conflicts: string[], clau
       );
       const cleaned = sanitizeMergeOutput(resolved, file);
       if (cleaned) {
-        writeFileSync(join(tmpDir, file), cleaned);
+        const resolvedPath = join(tmpDir, file);
+        assertContainment(tmpDir, resolvedPath);
+        writeFileSync(resolvedPath, cleaned);
       } else {
         execFileSync("git", ["checkout", "--theirs", file], { cwd: tmpDir, stdio: "pipe" });
       }

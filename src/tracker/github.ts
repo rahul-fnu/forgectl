@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { assertContainment } from "../workspace/safety.js";
 
 const API_BASE = "https://api.github.com";
 const RATE_LIMIT_WARNING_THRESHOLD = 100;
@@ -222,7 +223,9 @@ async function resolveAndMerge(
           // Sanitize Claude output before writing to file
           const cleaned = sanitizeMergeOutput(resolved, file);
           if (cleaned) {
-            writeFileSync(join(tmpDir, file), cleaned);
+            const resolvedPath = join(tmpDir, file);
+            assertContainment(tmpDir, resolvedPath);
+            writeFileSync(resolvedPath, cleaned);
           } else {
             execFileSync("git", ["checkout", "--theirs", file], { cwd: tmpDir, stdio: "pipe" });
           }
