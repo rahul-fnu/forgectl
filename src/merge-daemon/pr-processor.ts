@@ -299,7 +299,8 @@ export class PRProcessor {
   async processPR(pr: PRInfo): Promise<ProcessResult> {
     const { owner, repo, rawToken } = this.config;
     const token = this.config.token;
-    const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+    const resolvedToken = resolveToken(rawToken);
+    const repoUrl = `https://github.com/${owner}/${repo}.git`;
     const authorName = this.config.mergerAuthorName ?? "forgectl-merger[bot]";
     const authorEmail = this.config.mergerAuthorEmail ?? "forge-merger@localhost";
 
@@ -309,7 +310,7 @@ export class PRProcessor {
 
     try {
       // Step 1: Clone and rebase
-      const clone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
+      const clone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail, resolvedToken);
       tmpDir = clone.tmpDir;
 
       // Step 2: Merge main — resolve conflicts if any
@@ -982,7 +983,8 @@ export class PRProcessor {
    */
   async fixCIFailure(pr: PRInfo, failedSha: string): Promise<boolean> {
     const { owner, repo, rawToken } = this.config;
-    const repoUrl = `https://x-access-token:${resolveToken(rawToken)}@github.com/${owner}/${repo}.git`;
+    const resolvedTokenForCI = resolveToken(rawToken);
+    const repoUrl = `https://github.com/${owner}/${repo}.git`;
     const authorName = this.config.mergerAuthorName ?? "forgectl-merger[bot]";
     const authorEmail = this.config.mergerAuthorEmail ?? "forge-merger@localhost";
 
@@ -996,7 +998,7 @@ export class PRProcessor {
     // Step 2: Clone the branch
     let fixDir: string | undefined;
     try {
-      const clone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail);
+      const clone = cloneAndRebase(repoUrl, pr.branch, authorName, authorEmail, resolvedTokenForCI);
       fixDir = clone.tmpDir;
 
       // Step 3: Write error context and invoke Claude

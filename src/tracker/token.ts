@@ -40,9 +40,8 @@ export function resolveToken(token: string): string {
         throw new Error("gh auth token returned empty output");
       }
       return resolved;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`'gh auth token' failed. Run 'gh auth login' first. (${msg})`);
+    } catch {
+      throw new Error("'gh auth token' failed. Run 'gh auth login' first.");
     }
   }
 

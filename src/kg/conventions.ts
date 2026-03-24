@@ -429,7 +429,11 @@ export function getConventionsForModules(
   return all.filter(c =>
     c.confidence >= minConfidence &&
     !c.ignored &&
-    (c.module === "*" || modulePrefixes.some(prefix => c.module.startsWith(prefix) || prefix.startsWith(c.module)))
+    (c.module === "*" || modulePrefixes.some(prefix =>
+      c.module === prefix ||
+      c.module.startsWith(prefix + "/") ||
+      prefix.startsWith(c.module + "/")
+    ))
   );
 }
 
@@ -585,7 +589,7 @@ export function getConventionsForModule(db: KGDatabase, module: string): Convent
   const all = loadStoredConventions(db);
   return all.filter(c =>
     !c.ignored &&
-    (c.module === module || c.module.startsWith(module) || module.startsWith(c.module)),
+    (c.module === module || c.module.startsWith(module + "/") || module.startsWith(c.module + "/")),
   );
 }
 
