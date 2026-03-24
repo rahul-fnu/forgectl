@@ -213,10 +213,17 @@ export interface PRProcessorConfig {
   mergerAuthorEmail?: string;
 }
 
+export interface ReviewFailureState {
+  attempts: number;
+  lastFailure: string;
+  lastAttemptAt: number;
+}
+
 export class PRProcessor {
   private headers: Record<string, string>;
   private readonly history: ProcessResult[] = [];
   private readonly reviewRounds = new Map<number, number>();
+  private readonly reviewFailures = new Map<number, ReviewFailureState>();
   /** Tracks the last SHA we reviewed for each PR — only re-review if SHA changed */
   private readonly lastReviewedSha = new Map<number, string>();
   /** Tracks the last review verdict per PR — persists across poll cycles */
@@ -332,6 +339,13 @@ export class PRProcessor {
 
       // Step 5: Review diff (optional) — post review, block on request_changes
       if (this.config.enableReview) {
+        // Check if PR already has needs-manual-review label (e.g. from a previous daemon run)
+        const hasManualLabel = await this.hasLabel(pr.number, "needs-manual-review");
+        if (hasManualLabel) {
+          this.logger.info("merge-daemon", `PR #${pr.number}: Skipping review — already labeled needs-manual-review`);
+          return this.recordResult(pr, "skipped", "Escalated for manual review");
+        }
+
         // Check if we already reviewed this exact SHA and requested changes.
         // If SHA hasn't changed since last review, the old verdict still stands — don't re-review.
         const previousSha = this.lastReviewedSha.get(pr.number);
@@ -369,6 +383,8 @@ export class PRProcessor {
 
         if (review) {
           this.lastReviewVerdict.set(pr.number, review.approval);
+          this.reviewFailures.delete(pr.number);
+          this.recordParseResult(pr, true);
 
           if (review.approval === "request_changes") {
             const reviewRound = this.reviewRounds.get(pr.number) ?? 0;
@@ -395,9 +411,26 @@ export class PRProcessor {
             this.logger.info("merge-daemon", `PR #${pr.number}: Approved with ${review.comments.length} comment(s), proceeding to merge`);
           }
         } else {
-          // Review failed completely — do NOT merge, skip this PR
-          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries — skipping (will retry next poll)`);
+          // Record parse failure
+          this.recordParseResult(pr, false);
+          const current = this.reviewFailures.get(pr.number) ?? { attempts: 0, lastFailure: "", lastAttemptAt: 0 };
+          current.attempts++;
+          current.lastFailure = "Review output parsing failed";
+          current.lastAttemptAt = Date.now();
+          this.reviewFailures.set(pr.number, current);
+
+          if (current.attempts >= 3) {
+            // Escalate: comment + label + skip on future polls
+            this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed ${current.attempts} times — escalating for manual review`);
+            await this.postComment(pr.number, `**forgectl review:** Review daemon unable to review this PR after ${current.attempts} attempts. Escalating for manual review.`);
+            await this.addLabel(pr.number, "needs-manual-review");
+            return this.recordResult(pr, "skipped", "Escalated for manual review after persistent parse failures");
+          }
+
+          // Not yet at threshold — skip this cycle, retry next poll
+          this.logger.warn("merge-daemon", `PR #${pr.number}: Review failed after retries (${current.attempts}/3) — skipping (will retry next poll)`);
           await this.postComment(pr.number, `**forgectl review:** Automated review could not be completed (output parsing failed). Will retry on next poll cycle.`);
+          this.checkParseFailureRate();
           return this.recordResult(pr, "skipped", "Review failed after retries");
         }
       }
@@ -1074,6 +1107,63 @@ export class PRProcessor {
     return this.fetchPRFull(prNumber);
   }
 
+  /** Add a label to a PR. */
+  private async addLabel(prNumber: number, label: string): Promise<void> {
+    const { owner, repo } = this.config;
+    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/labels`;
+    await fetch(url, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({ labels: [label] }),
+    }).catch((err) => {
+      this.logger.warn("merge-daemon", `PR #${prNumber}: Failed to add label '${label}': ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  /** Check if a PR has a specific label. */
+  private async hasLabel(prNumber: number, label: string): Promise<boolean> {
+    const { owner, repo } = this.config;
+    const url = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/labels`;
+    try {
+      const resp = await fetch(url, { headers: this.headers });
+      if (!resp.ok) return false;
+      const labels = (await resp.json()) as Array<{ name?: string }>;
+      return labels.some((l) => l.name === label);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Record a parse success/failure in metrics. */
+  private recordParseResult(pr: PRInfo, success: boolean): void {
+    if (this.metricsRepo) {
+      const { owner, repo } = this.config;
+      try {
+        this.metricsRepo.recordParseResult(`${owner}/${repo}`, pr.number, success);
+      } catch (err) {
+        this.logger.warn("merge-daemon", `PR #${pr.number}: Failed to record parse result: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
+   * Check recent parse failure rate across all tracked PRs.
+   * If >50% of the last 10 results are failures, log a warning.
+   */
+  private checkParseFailureRate(): void {
+    if (this.metricsRepo) {
+      const { owner, repo } = this.config;
+      const stats = this.metricsRepo.computeStats(`${owner}/${repo}`);
+      const total = stats.parseFailureCount + stats.parseSuccessCount;
+      if (total >= 10 && stats.parseSuccessRate < 0.5) {
+        this.logger.warn(
+          "merge-daemon",
+          `Parse failure rate is ${((1 - stats.parseSuccessRate) * 100).toFixed(0)}% over ${total} reviews — consider tuning the review prompt`,
+        );
+      }
+    }
+  }
+
   /** Post a comment on a PR. */
   private async postComment(prNumber: number, body: string): Promise<void> {
     const { owner, repo } = this.config;
@@ -1082,7 +1172,9 @@ export class PRProcessor {
       method: "POST",
       headers: this.headers,
       body: JSON.stringify({ body }),
-    }).catch(() => {});
+    }).catch((err) => {
+      this.logger.warn("merge-daemon", `PR #${prNumber}: Failed to post comment: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   private recordReviewMetrics(pr: PRInfo, review: StructuredReview): void {
@@ -1186,5 +1278,10 @@ export class PRProcessor {
   /** Get processing history. */
   getHistory(): readonly ProcessResult[] {
     return this.history;
+  }
+
+  /** Get review failure states for all PRs. */
+  getReviewFailures(): ReadonlyMap<number, ReviewFailureState> {
+    return this.reviewFailures;
   }
 }
