@@ -9,6 +9,7 @@ export const NetworkMode = z.enum(["open", "allowlist", "airgapped"]);
 export type NetworkMode = z.infer<typeof NetworkMode>;
 
 export const FailureAction = z.enum(["abandon", "output-wip", "pause"]);
+export const RepeatedFailureAction = z.enum(["abort", "change_strategy", "escalate"]);
 export const OrchestrationMode = z.enum(["single", "review", "parallel"]);
 export const InputMode = z.enum(["repo", "files", "both"]);
 export const OutputMode = z.enum(["git", "files"]);
@@ -61,6 +62,8 @@ export const WorkflowSchema = z.object({
     steps: z.array(ValidationStepSchema).default([]),
     lint_steps: z.array(ValidationStepSchema).default([]),
     on_failure: FailureAction.default("abandon"),
+    max_same_failures: z.number().int().min(1).default(2),
+    on_repeated_failure: RepeatedFailureAction.default("abort"),
   }).default({}),
   output: z.object({
     mode: OutputMode.default("git"),

@@ -12,7 +12,7 @@ export const generalWorkflow: WorkflowDefinition = {
   system: `You are an AI assistant working in an isolated container.
 Input files (if any) are in /input. Write output to /output.
 Complete the task as instructed.`,
-  validation: { steps: [], lint_steps: [], on_failure: "output-wip" },
+  validation: { steps: [], lint_steps: [], on_failure: "output-wip", max_same_failures: 2, on_repeated_failure: "abort" },
   output: { mode: "files", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },
   cache: { enabled: true, ttl: "7d" },

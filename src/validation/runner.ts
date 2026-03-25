@@ -14,6 +14,13 @@ import {
   type LoopPattern,
 } from "../agent/loop-detector.js";
 import { execInContainer } from "../container/runner.js";
+import { emitRunEvent } from "../logging/events.js";
+
+export interface FailureSignature {
+  key: string;
+  count: number;
+  stepName: string;
+}
 
 export interface ValidationResult {
   passed: boolean;
@@ -27,6 +34,22 @@ export interface ValidationResult {
   lastOutput?: string;
   /** Set when a loop pattern is detected during validation retries. */
   loopDetected?: LoopPattern;
+  /** Set when escalation is triggered due to repeated identical failures. */
+  repeatedFailure?: FailureSignature;
+}
+
+/**
+ * Compute a normalized failure signature from a step result.
+ * Used to detect repeated identical failures for escalation.
+ */
+function computeFailureSignature(stepName: string, result: StepResult): string {
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  const normalized = output
+    .trim()
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*/g, "<TS>")
+    .replace(/\s+/g, " ")
+    .slice(0, 500);
+  return `${stepName}:${normalized}`;
 }
 
 /**
@@ -55,6 +78,12 @@ export async function runValidationLoop(
     stepLastPassed[step.name] = false;
   }
 
+  // Escalation tracking
+  const maxSameFailures = plan.validation.maxSameFailures ?? 2;
+  const onRepeatedFailure = plan.validation.onRepeatedFailure ?? "abort";
+  const failureSignatureCounts = new Map<string, { count: number; stepName: string }>();
+  let strategyChangeUsed = false;
+
   let attempt = 0;
   let lastResults: StepResult[] = [];
   const loopState = createLoopDetectorState();
@@ -81,7 +110,13 @@ export async function runValidationLoop(
         logger.warn("validation", `✗ ${step.name} failed (exit ${result.exitCode})`);
         allPassed = false;
 
-        // Check for repeated validation errors
+        // Track failure signature for escalation
+        const sigKey = computeFailureSignature(step.name, result);
+        const existing = failureSignatureCounts.get(sigKey);
+        const newCount = (existing?.count ?? 0) + 1;
+        failureSignatureCounts.set(sigKey, { count: newCount, stepName: step.name });
+
+        // Check for repeated validation errors (loop detector)
         const errorOutput = [result.stdout, result.stderr].filter(Boolean).join("\n");
         const loopCheck = recordValidationError(loopState, errorOutput);
         if (loopCheck) {
@@ -107,6 +142,58 @@ export async function runValidationLoop(
         })),
         lastOutput: lastOutput || undefined,
         loopDetected: detectedLoop,
+      };
+    }
+
+    // Check escalation threshold
+    let escalationTriggered: FailureSignature | null = null;
+    for (const [key, { count, stepName }] of failureSignatureCounts) {
+      if (count >= maxSameFailures) {
+        escalationTriggered = { key, count, stepName };
+        break;
+      }
+    }
+
+    if (escalationTriggered) {
+      const action = (strategyChangeUsed && onRepeatedFailure === "change_strategy")
+        ? "abort"
+        : onRepeatedFailure;
+
+      emitRunEvent({
+        runId: plan.runId,
+        type: "escalation",
+        timestamp: new Date().toISOString(),
+        data: {
+          signature: escalationTriggered.key,
+          count: escalationTriggered.count,
+          stepName: escalationTriggered.stepName,
+          action,
+        },
+      });
+
+      if (action === "change_strategy" && !strategyChangeUsed) {
+        strategyChangeUsed = true;
+        // Reset the counter for this signature so the agent gets one more chance
+        failureSignatureCounts.delete(escalationTriggered.key);
+        const metaPrompt = `Your previous approach is not working. The same error has occurred ${escalationTriggered.count} times: ${escalationTriggered.key}. Try a fundamentally different approach — do not repeat the same fix.`;
+        logger.warn("validation", `Escalation: injecting strategy change meta-prompt`);
+        await invokeAgent(container, adapter, metaPrompt, agentOptions, agentEnv, `strategy-change-${attempt}`);
+        continue;
+      }
+
+      // abort or escalate: stop the run
+      logger.error("validation", `Escalation (${action}): repeated failure — ${escalationTriggered.key}`);
+      const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+      return {
+        passed: false,
+        totalAttempts: attempt,
+        stepResults: steps.map(s => ({
+          name: s.name,
+          passed: stepLastPassed[s.name],
+          attempts: stepAttemptCounts[s.name],
+        })),
+        lastOutput: lastOutput || undefined,
+        repeatedFailure: escalationTriggered,
       };
     }
 

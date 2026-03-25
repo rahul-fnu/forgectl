@@ -133,6 +133,8 @@ export interface RunPlan {
     steps: ValidationStep[];
     lintSteps: ValidationStep[];
     onFailure: "abandon" | "output-wip" | "pause";
+    maxSameFailures: number;
+    onRepeatedFailure: "abort" | "change_strategy" | "escalate";
   };
   output: {
     mode: "git" | "files";
