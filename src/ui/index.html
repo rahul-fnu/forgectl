@@ -599,6 +599,12 @@
                       <span>{run.workflow || "code"}</span>
                       <span>{formatTime(run.submittedAt)}</span>
                     </div>
+                    {run.summary && (
+                      <div className="mt-3 pt-2 border-t border-line text-xs text-muted space-y-1">
+                        <p><span className="text-slate-300">Approach:</span> {run.summary.approach}</p>
+                        <p><span className="text-slate-300">Outcome:</span> {run.summary.outcome}</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

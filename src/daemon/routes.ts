@@ -107,6 +107,18 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
 
   // List runs
   app.get("/runs", async () => {
+    if (runRepo) {
+      return runRepo.list().map((row) => ({
+        id: row.id,
+        status: row.status,
+        workflow: row.workflow,
+        task: row.task,
+        submittedAt: row.submittedAt,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        summary: row.summary,
+      }));
+    }
     return queue.list().map((run) => ({
       id: run.id,
       status: run.status,
