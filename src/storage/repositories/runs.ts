@@ -24,6 +24,8 @@ export interface RunRow {
   depth: number;
   maxChildren: number | null;
   childrenDispatched: number;
+  complexityScore: number | null;
+  complexityAssessment: unknown;
 }
 
 export interface RunInsertParams {
@@ -67,6 +69,7 @@ export interface RunRepository {
   clearPauseContext(id: string): void;
   findByGithubCommentId(commentId: number): RunRow | undefined;
   setGithubCommentId(runId: string, commentId: number): void;
+  setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -91,6 +94,8 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     depth: raw.depth ?? 0,
     maxChildren: raw.maxChildren ?? null,
     childrenDispatched: raw.childrenDispatched ?? 0,
+    complexityScore: raw.complexityScore ?? null,
+    complexityAssessment: raw.complexityAssessment ? JSON.parse(raw.complexityAssessment) : null,
   };
 }
 
@@ -171,6 +176,16 @@ export function createRunRepository(db: AppDatabase): RunRepository {
     setGithubCommentId(runId: string, commentId: number): void {
       db.update(runs)
         .set({ githubCommentId: commentId })
+        .where(eq(runs.id, runId))
+        .run();
+    },
+
+    setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void {
+      db.update(runs)
+        .set({
+          complexityScore: assessment.complexityScore,
+          complexityAssessment: JSON.stringify(assessment),
+        })
         .where(eq(runs.id, runId))
         .run();
     },
