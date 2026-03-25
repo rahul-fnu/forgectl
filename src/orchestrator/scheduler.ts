@@ -142,8 +142,11 @@ export async function tick(deps: TickDeps): Promise<void> {
     return scoreB - scoreA;
   });
 
-  // Step 6: Get available top-level slots (children have their own pool)
-  const available = slotManager.availableTopLevelSlots();
+  // Step 6: Get available slots — use state.running.size as ground truth
+  // (TwoTierSlotManager.registerTopLevel/releaseTopLevel are not wired up yet,
+  // so slotManager always reports full availability. Use state.running instead.)
+  const maxSlots = config.orchestrator?.max_concurrent_agents ?? 3;
+  const available = Math.max(0, maxSlots - state.running.size);
 
   // Step 7: Build governance opts if runRepo available
   const governance: GovernanceOpts | undefined = deps.runRepo
@@ -208,7 +211,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings);
+    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager);
   }
 }
 

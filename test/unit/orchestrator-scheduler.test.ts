@@ -201,6 +201,11 @@ describe("tick", () => {
     const deps = makeDeps({
       slotManager: new TwoTierSlotManager(0, 0),
     });
+    // Fill state.running to max so available = 0
+    const max = deps.config.orchestrator?.max_concurrent_agents ?? 3;
+    for (let i = 0; i < max; i++) {
+      deps.state.running.set(`fill-${i}`, {} as any);
+    }
     const issues = [makeIssue("1")];
     vi.mocked(deps.tracker.fetchCandidateIssues).mockResolvedValue(issues);
     vi.mocked(filterCandidates).mockReturnValue(issues);
