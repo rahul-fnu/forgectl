@@ -118,6 +118,8 @@ export const ConfigSchema = z.object({
     max_turns: z.number().int().default(50),
     timeout: duration.default("30m"),
     flags: z.array(z.string()).default([]),
+    max_cost_usd: z.number().positive().optional(),
+    max_tokens: z.number().int().positive().optional(),
   }).default({}),
 
   container: z.object({
