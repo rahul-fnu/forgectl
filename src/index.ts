@@ -588,12 +588,29 @@ cacheCmd
   .description("Build and cache the image for a workflow without running anything")
   .action(cachePrebuildCommand);
 
+// forgectl images
+const imagesCmd = program
+  .command("images")
+  .description("Manage Docker images for workflows");
+
+imagesCmd
+  .command("build [workflow]")
+  .description("Build Docker image for a workflow (default: code)")
+  .option("--all", "Build all images")
+  .action(imagesBuildCommand);
+
+imagesCmd
+  .command("list")
+  .description("Show available images and their build status")
+  .action(imagesListCommand);
+
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand, kgConventionsCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
+import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 
 const repoCmd = program
   .command("repo")
