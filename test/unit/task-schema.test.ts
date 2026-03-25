@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TaskSpecSchema, AcceptanceCriterionSchema, DecompositionConfigSchema, EffortConfigSchema } from "../../src/task/schema.js";
+import { TaskSpecSchema, TaskBudgetSchema, AcceptanceCriterionSchema, DecompositionConfigSchema, EffortConfigSchema } from "../../src/task/schema.js";
 
 const validSpec = {
   id: "fix-auth-bug",
@@ -86,6 +86,66 @@ describe("TaskSpecSchema", () => {
     expect(result.constraints).toEqual([]);
     expect(result.decomposition).toEqual({ strategy: "auto" });
     expect(result.effort).toEqual({});
+  });
+
+  it("parses spec with budget", () => {
+    const result = TaskSpecSchema.parse({
+      ...validSpec,
+      budget: { max_cost_usd: 5.0, max_tokens: 100000 },
+    });
+    expect(result.budget?.max_cost_usd).toBe(5.0);
+    expect(result.budget?.max_tokens).toBe(100000);
+  });
+
+  it("parses spec with partial budget", () => {
+    const result = TaskSpecSchema.parse({
+      ...validSpec,
+      budget: { max_cost_usd: 2.5 },
+    });
+    expect(result.budget?.max_cost_usd).toBe(2.5);
+    expect(result.budget?.max_tokens).toBeUndefined();
+  });
+
+  it("allows omitting budget entirely", () => {
+    const result = TaskSpecSchema.parse(validSpec);
+    expect(result.budget).toBeUndefined();
+  });
+
+  it("rejects non-positive budget values", () => {
+    expect(() => TaskSpecSchema.parse({ ...validSpec, budget: { max_cost_usd: 0 } })).toThrow();
+    expect(() => TaskSpecSchema.parse({ ...validSpec, budget: { max_cost_usd: -1 } })).toThrow();
+    expect(() => TaskSpecSchema.parse({ ...validSpec, budget: { max_tokens: 0 } })).toThrow();
+    expect(() => TaskSpecSchema.parse({ ...validSpec, budget: { max_tokens: -5 } })).toThrow();
+  });
+
+  it("rejects non-integer max_tokens", () => {
+    expect(() => TaskSpecSchema.parse({ ...validSpec, budget: { max_tokens: 1.5 } })).toThrow();
+  });
+});
+
+describe("TaskBudgetSchema", () => {
+  it("parses valid budget", () => {
+    const result = TaskBudgetSchema.parse({ max_cost_usd: 10, max_tokens: 50000 });
+    expect(result?.max_cost_usd).toBe(10);
+    expect(result?.max_tokens).toBe(50000);
+  });
+
+  it("parses undefined as optional", () => {
+    expect(TaskBudgetSchema.parse(undefined)).toBeUndefined();
+  });
+
+  it("per-task budget takes precedence over workflow budget", () => {
+    const taskBudget = TaskBudgetSchema.parse({ max_cost_usd: 3.0 });
+    const workflowMaxCost = 10.0;
+    const effective = taskBudget?.max_cost_usd ?? workflowMaxCost;
+    expect(effective).toBe(3.0);
+  });
+
+  it("falls back to workflow budget when task budget is undefined", () => {
+    const taskBudget = TaskBudgetSchema.parse(undefined);
+    const workflowMaxCost = 10.0;
+    const effective = taskBudget?.max_cost_usd ?? workflowMaxCost;
+    expect(effective).toBe(10.0);
   });
 });
 

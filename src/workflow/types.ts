@@ -153,4 +153,8 @@ export interface RunPlan {
     size: number;
     slotWeight: number;
   };
+  taskBudget?: {
+    max_cost_usd?: number;
+    max_tokens?: number;
+  };
 }

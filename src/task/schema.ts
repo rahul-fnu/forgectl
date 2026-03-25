@@ -27,6 +27,11 @@ export const EffortConfigSchema = z.object({
   timeout: z.string().regex(/^\d+(s|m|h|d)$/, "Invalid duration format").optional(),
 });
 
+export const TaskBudgetSchema = z.object({
+  max_cost_usd: z.number().positive().optional(),
+  max_tokens: z.number().int().positive().optional(),
+}).optional();
+
 export const TaskSpecSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "ID must be lowercase alphanumeric with hyphens"),
   title: z.string().min(1).max(200),
@@ -37,6 +42,7 @@ export const TaskSpecSchema = z.object({
   decomposition: DecompositionConfigSchema.default({ strategy: "auto" }),
   effort: EffortConfigSchema.default({}),
   metadata: z.record(z.string()).optional(),
+  budget: TaskBudgetSchema,
 });
 
 export type ValidatedTaskSpec = z.infer<typeof TaskSpecSchema>;
