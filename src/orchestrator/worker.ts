@@ -773,6 +773,20 @@ export async function executeWorker(
         costUsd = (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000;
       }
 
+      // For failed runs, generate summary before posting comment so it can be included
+      let runSummaryForComment: import("../storage/repositories/runs.js").RunSummary | undefined;
+      const summaryRunId = githubDeps?.runId ?? plan.runId;
+      if (commentStatus !== "success" && eventRepo && costRepo && runRepo) {
+        try {
+          runSummaryForComment = await generateRunSummary(summaryRunId, eventRepo, costRepo);
+          runRepo.setSummary(summaryRunId, runSummaryForComment);
+          logger.info("worker", `Run summary stored for ${summaryRunId}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("worker", `Failed to generate run summary for ${summaryRunId}: ${msg}`);
+        }
+      }
+
       const runCommentData: RunCommentData = {
         runId: githubDeps?.runId ?? "unknown",
         issueIdentifier: issue.identifier,
@@ -791,6 +805,7 @@ export async function executeWorker(
           ? agentResult.stderr
           : undefined,
         branch,
+        runSummary: runSummaryForComment,
       };
 
       const formattedComment = formatRunComment(runCommentData);
@@ -819,9 +834,9 @@ export async function executeWorker(
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
   }
 
-  // Fire-and-forget: generate LLM summary for the completed run
+  // Fire-and-forget: generate LLM summary for successful runs (failed runs already generated above)
   const summaryRunId = githubDeps?.runId ?? plan.runId;
-  if (eventRepo && costRepo && runRepo) {
+  if (eventRepo && costRepo && runRepo && agentResult.status === "completed") {
     generateRunSummary(summaryRunId, eventRepo, costRepo)
       .then((summary) => {
         runRepo.setSummary(summaryRunId, summary);

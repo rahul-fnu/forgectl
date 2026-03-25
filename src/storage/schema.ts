@@ -23,6 +23,7 @@ export const runs = sqliteTable("runs", {
   childrenDispatched: integer("children_dispatched").default(0),
   complexityScore: integer("complexity_score"),
   complexityAssessment: text("complexity_assessment"), // JSON-serialized ComplexityAssessment
+  summary: text("summary"), // JSON-serialized RunSummary
 });
 
 export const delegations = sqliteTable("delegations", {

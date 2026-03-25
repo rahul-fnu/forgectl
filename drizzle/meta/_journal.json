@@ -113,6 +113,13 @@
       "when": 1773901200000,
       "tag": "0015_complexity_assessment_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1773987600000,
+      "tag": "0015_run_summary_column",
+      "breakpoints": true
     }
   ]
 }

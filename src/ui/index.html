@@ -504,6 +504,24 @@
       const [runs, setRuns] = useState([]);
       const [pipelines, setPipelines] = useState([]);
       const [submitOpen, setSubmitOpen] = useState(false);
+      const [expandedRunId, setExpandedRunId] = useState(null);
+      const [runSummaries, setRunSummaries] = useState({});
+
+      async function toggleRunSummary(runId) {
+        if (expandedRunId === runId) {
+          setExpandedRunId(null);
+          return;
+        }
+        setExpandedRunId(runId);
+        if (!runSummaries[runId]) {
+          try {
+            const data = await fetchJson("/api/v1/runs/" + encodeURIComponent(runId) + "/summary");
+            setRunSummaries((prev) => ({ ...prev, [runId]: data }));
+          } catch {
+            setRunSummaries((prev) => ({ ...prev, [runId]: null }));
+          }
+        }
+      }
 
       useEffect(() => {
         let stopped = false;
@@ -588,19 +606,45 @@
               </div>
               <div className="space-y-3 max-h-[480px] overflow-auto pr-1">
                 {activeRuns.length === 0 && <p className="text-sm text-muted">No active single runs.</p>}
-                {activeRuns.map((run) => (
-                  <div key={run.id} className="rounded-xl border border-line bg-panel2 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="mono text-xs text-slate-300">{run.id}</span>
-                      <StatusPill status={run.status || "pending"} />
+                {activeRuns.map((run) => {
+                  const expanded = expandedRunId === run.id;
+                  const summary = runSummaries[run.id];
+                  return (
+                    <div key={run.id}>
+                      <button
+                        onClick={() => toggleRunSummary(run.id)}
+                        className="w-full text-left rounded-xl border border-line bg-panel2 p-3 hover:border-code/60 transition"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="mono text-xs text-slate-300">{run.id}</span>
+                          <StatusPill status={run.status || "pending"} />
+                        </div>
+                        <p className="text-sm mt-2 line-clamp-2">{run.task}</p>
+                        <div className="mono text-[11px] text-muted mt-2 flex gap-3">
+                          <span>{run.workflow || "code"}</span>
+                          <span>{formatTime(run.submittedAt)}</span>
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="rounded-b-xl border border-t-0 border-line bg-shell p-4 space-y-2 text-sm">
+                          <h4 className="font-semibold text-xs text-muted uppercase tracking-wider">Summary</h4>
+                          {summary ? (
+                            <div className="space-y-1">
+                              <div><span className="text-muted">Approach:</span> <span>{summary.approach}</span></div>
+                              <div><span className="text-muted">Key Actions:</span> <span>{summary.keyActions}</span></div>
+                              <div><span className="text-muted">Obstacles:</span> <span>{summary.obstacles}</span></div>
+                              <div><span className="text-muted">Retries:</span> <span>{summary.retries}</span></div>
+                              <div><span className="text-muted">Outcome:</span> <span>{summary.outcome}</span></div>
+                              <div><span className="text-muted">Token Efficiency:</span> <span>{summary.tokenEfficiency}</span></div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted">Summary not yet generated. Run may still be in progress.</p>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <p className="text-sm mt-2 line-clamp-2">{run.task}</p>
-                    <div className="mono text-[11px] text-muted mt-2 flex gap-3">
-                      <span>{run.workflow || "code"}</span>
-                      <span>{formatTime(run.submittedAt)}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           </div>

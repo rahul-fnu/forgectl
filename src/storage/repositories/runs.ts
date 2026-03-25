@@ -2,6 +2,15 @@ import { eq } from "drizzle-orm";
 import { runs } from "../schema.js";
 import type { AppDatabase } from "../database.js";
 
+export interface RunSummary {
+  approach: string;
+  keyActions: string;
+  obstacles: string;
+  retries: string;
+  outcome: string;
+  tokenEfficiency: string;
+}
+
 /** A row from the runs table with JSON fields deserialized. */
 export interface RunRow {
   id: string;
@@ -70,6 +79,8 @@ export interface RunRepository {
   findByGithubCommentId(commentId: number): RunRow | undefined;
   setGithubCommentId(runId: string, commentId: number): void;
   setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void;
+  setSummary(runId: string, summary: RunSummary): void;
+  getSummary(runId: string): RunSummary | null;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -188,6 +199,19 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         })
         .where(eq(runs.id, runId))
         .run();
+    },
+
+    setSummary(runId: string, summary: RunSummary): void {
+      db.update(runs)
+        .set({ summary: JSON.stringify(summary) })
+        .where(eq(runs.id, runId))
+        .run();
+    },
+
+    getSummary(runId: string): RunSummary | null {
+      const row = db.select({ summary: runs.summary }).from(runs).where(eq(runs.id, runId)).get();
+      if (!row?.summary) return null;
+      return JSON.parse(row.summary) as RunSummary;
     },
   };
 }

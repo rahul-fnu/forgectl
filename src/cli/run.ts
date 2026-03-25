@@ -7,6 +7,7 @@ import { Logger } from "../logging/logger.js";
 import { saveRunLog, type RunLog } from "../logging/run-log.js";
 import { emitRunEvent } from "../logging/events.js";
 import { formatDuration } from "../utils/duration.js";
+import type { RunSummary } from "../storage/repositories/runs.js";
 
 export async function runCommand(options: CLIOptions): Promise<void> {
   const config = loadConfig(options.config);
@@ -171,4 +172,39 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+export function formatRunSummary(runId: string, summary: RunSummary): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold(`=== Run Summary: ${runId} ===`));
+  lines.push(`${chalk.cyan("Approach:")} ${summary.approach}`);
+  lines.push(`${chalk.cyan("Key Actions:")} ${summary.keyActions}`);
+  lines.push(`${chalk.cyan("Obstacles:")} ${summary.obstacles}`);
+  lines.push(`${chalk.cyan("Retries:")} ${summary.retries}`);
+  lines.push(`${chalk.cyan("Outcome:")} ${summary.outcome}`);
+  lines.push(`${chalk.cyan("Token Efficiency:")} ${summary.tokenEfficiency}`);
+  return lines.join("\n");
+}
+
+export async function runSummaryCommand(runId: string): Promise<void> {
+  const { join } = await import("node:path");
+  const { homedir } = await import("node:os");
+  const { createDatabase, closeDatabase } = await import("../storage/database.js");
+  const { runMigrations } = await import("../storage/migrator.js");
+  const { createRunRepository } = await import("../storage/repositories/runs.js");
+
+  const dbPath = join(homedir(), ".forgectl", "daemon.db");
+  const db = createDatabase(dbPath);
+  try {
+    runMigrations(db);
+    const runRepo = createRunRepository(db);
+    const summary = runRepo.getSummary(runId);
+    if (!summary) {
+      console.log("Summary not yet generated. Run may still be in progress.");
+      return;
+    }
+    console.log(formatRunSummary(runId, summary));
+  } finally {
+    closeDatabase(db);
+  }
 }
