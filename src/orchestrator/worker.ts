@@ -35,6 +35,10 @@ import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
 import { saveCheckpoint } from "../durability/checkpoint.js";
 import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
+import type { TrackerAdapter } from "../tracker/types.js";
+import type { CostRepository } from "../storage/repositories/costs.js";
+import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.js";
+import type { RunCommentData } from "../tracker/linear-comments.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -244,6 +248,8 @@ export async function executeWorker(
   kgContext?: ContextResult,
   snapshotRepo?: SnapshotRepository,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
+  tracker?: TrackerAdapter,
+  costRepo?: CostRepository,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -696,6 +702,59 @@ export async function executeWorker(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Failed to update final progress comment: ${msg}`);
+    }
+  }
+
+  // 11.5. Post Linear comment if tracker is available and comments are enabled
+  if (tracker && config.tracker?.comments_enabled !== false) {
+    const commentEvents = config.tracker?.comment_events ?? ["completed", "failed", "timeout", "aborted"];
+    const statusMap: Record<string, RunCommentData["status"]> = {
+      completed: "success",
+      failed: "failure",
+      timeout: "timeout",
+      aborted: "aborted",
+    };
+    const commentStatus: RunCommentData["status"] = statusMap[agentResult.status] ?? "failure";
+
+    if (shouldPostComment(commentStatus, commentEvents)) {
+      let costUsd: number | undefined;
+      if (costRepo && githubDeps?.runId) {
+        try {
+          const summary = costRepo.sumByRunId(githubDeps.runId);
+          if (summary.totalCostUsd > 0) costUsd = summary.totalCostUsd;
+        } catch { /* best-effort */ }
+      }
+      if (costUsd == null && agentResult.tokenUsage) {
+        costUsd = (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000;
+      }
+
+      const runCommentData: RunCommentData = {
+        runId: githubDeps?.runId ?? "unknown",
+        issueIdentifier: issue.identifier,
+        status: commentStatus,
+        durationMs: agentResult.durationMs,
+        tokenUsage: agentResult.tokenUsage
+          ? { input: agentResult.tokenUsage.input, output: agentResult.tokenUsage.output }
+          : undefined,
+        costUsd,
+        validationResults: validationResult?.stepResults?.map((sr) => ({
+          name: sr.name,
+          passed: sr.passed,
+          attempts: sr.attempts ?? 1,
+        })),
+        errorSummary: agentResult.status !== "completed"
+          ? agentResult.stderr
+          : undefined,
+        branch,
+      };
+
+      const formattedComment = formatRunComment(runCommentData);
+      try {
+        await tracker.postComment(issue.id, formattedComment);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to post Linear comment for ${issue.identifier}: ${msg}`);
+      }
     }
   }
 
