@@ -39,6 +39,7 @@ import type { TrackerAdapter } from "../tracker/types.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.js";
 import type { RunCommentData } from "../tracker/linear-comments.js";
+import { BudgetExceededError, checkCostCeiling } from "../agent/budget.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -405,6 +406,29 @@ export async function executeWorker(
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(fullPrompt);
 
+    // --- Cost ceiling check ---
+    const ceilingConfig = {
+      maxCostUsd: config.agent.max_cost_usd,
+      maxTokens: config.agent.max_tokens,
+    };
+    if (ceilingConfig.maxCostUsd !== undefined || ceilingConfig.maxTokens !== undefined) {
+      const costUsd = agentResult.tokenUsage
+        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
+        : 0;
+      const cumulative = {
+        inputTokens: agentResult.tokenUsage?.input ?? 0,
+        outputTokens: agentResult.tokenUsage?.output ?? 0,
+        costUsd,
+      };
+      const ceilingResult = checkCostCeiling(cumulative, ceilingConfig);
+      if (ceilingResult.percentUsed >= 80 && !ceilingResult.exceeded) {
+        logger.warn("budget", `Run ${plan.runId} at 80% of cost ceiling (${ceilingResult.percentUsed.toFixed(1)}% used)`);
+      }
+      if (ceilingResult.exceeded) {
+        throw new BudgetExceededError("per_run", cumulative.costUsd, ceilingConfig.maxCostUsd ?? 0);
+      }
+    }
+
     // Save execute checkpoint with workspace metadata
     if (snapshotRepo) {
       saveCheckpoint(snapshotRepo, plan.runId, "execute", {
@@ -614,18 +638,30 @@ export async function executeWorker(
       logger.warn("worker", `Agent stderr: ${agentResult.stderr.slice(0, 1000)}`);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? err.stack : undefined;
-    logger.error("worker", `Agent execution failed for ${issue.identifier}: ${message}`);
-    if (stack) logger.debug("worker", `Stack trace: ${stack}`);
-    agentResult = {
-      stdout: "",
-      stderr: `Infrastructure error (not agent): ${message}`,
-      status: "failed",
-      tokenUsage: { input: 0, output: 0, total: 0 },
-      durationMs: 0,
-      turnCount: 0,
-    };
+    if (err instanceof BudgetExceededError) {
+      logger.error("worker", `Cost ceiling exceeded for ${issue.identifier}: ${err.message}`);
+      agentResult = {
+        stdout: "",
+        stderr: `cost_ceiling_exceeded: ${err.message}`,
+        status: "failed",
+        tokenUsage: agentResult?.tokenUsage ?? { input: 0, output: 0, total: 0 },
+        durationMs: agentResult?.durationMs ?? 0,
+        turnCount: agentResult?.turnCount ?? 0,
+      };
+    } else {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      logger.error("worker", `Agent execution failed for ${issue.identifier}: ${message}`);
+      if (stack) logger.debug("worker", `Stack trace: ${stack}`);
+      agentResult = {
+        stdout: "",
+        stderr: `Infrastructure error (not agent): ${message}`,
+        status: "failed",
+        tokenUsage: { input: 0, output: 0, total: 0 },
+        durationMs: 0,
+        turnCount: 0,
+      };
+    }
   }
 
   // 11. Build structured result comment using github/comments.ts

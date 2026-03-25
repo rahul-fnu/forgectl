@@ -31,7 +31,7 @@ import type { RunRepository } from "../storage/repositories/runs.js";
 import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
-import { formatCostCeilingAbortComment } from "../tracker/linear-comments.js";
+import { checkCostCeiling, BudgetExceededError } from "../agent/budget.js";
 
 /** Optional durability dependencies for checkpoint/lock support. */
 export interface DurabilityDeps {
@@ -58,7 +58,6 @@ export interface ExecutionResult {
   error?: string;
   review?: ReviewSummary;
   reviewCommentsJson?: string;
-  costCeilingAbortComment?: string;
 }
 
 /**
@@ -231,12 +230,6 @@ export async function executeSingleAgent(
     }
   }
 
-  // Resolve effective budget ceiling: task budget > workflow budget
-  const effectiveBudget = {
-    maxCostUsd: plan.taskBudget?.max_cost_usd ?? plan.workflow.budget?.max_cost_per_run,
-    maxTokens: plan.taskBudget?.max_tokens,
-  };
-
   try {
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
@@ -253,6 +246,29 @@ export async function executeSingleAgent(
     const agentResult = await session.invoke(prompt);
     await session.close();
 
+    // --- Cost ceiling check ---
+    const ceilingConfig = {
+      maxCostUsd: plan.costCeiling?.maxCostUsd,
+      maxTokens: plan.costCeiling?.maxTokens,
+    };
+    if (ceilingConfig.maxCostUsd !== undefined || ceilingConfig.maxTokens !== undefined) {
+      const costUsd = agentResult.tokenUsage
+        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
+        : 0;
+      const cumulative = {
+        inputTokens: agentResult.tokenUsage?.input ?? 0,
+        outputTokens: agentResult.tokenUsage?.output ?? 0,
+        costUsd,
+      };
+      const ceilingResult = checkCostCeiling(cumulative, ceilingConfig);
+      if (ceilingResult.percentUsed >= 80 && !ceilingResult.exceeded) {
+        logger.warn("budget", `Run ${plan.runId} at 80% of cost ceiling (${ceilingResult.percentUsed.toFixed(1)}% used)`);
+      }
+      if (ceilingResult.exceeded) {
+        throw new BudgetExceededError("per_run", cumulative.costUsd, ceilingConfig.maxCostUsd ?? 0);
+      }
+    }
+
     logger.info("agent", `Agent finished (status=${agentResult.status}, ${agentResult.durationMs}ms)`);
     if (agentResult.stdout) logger.info("agent", `STDOUT: ${agentResult.stdout.slice(0, 2000)}`);
     if (agentResult.stderr) logger.info("agent", `STDERR: ${agentResult.stderr.slice(0, 2000)}`);
@@ -263,42 +279,6 @@ export async function executeSingleAgent(
       }
     }
     if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
-
-    // --- Cost ceiling check ---
-    const actualCostForCeiling = agentResult.tokenUsage
-      ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
-      : undefined;
-    const totalTokens = agentResult.tokenUsage
-      ? agentResult.tokenUsage.input + agentResult.tokenUsage.output
-      : undefined;
-    const costExceeded = effectiveBudget.maxCostUsd != null && actualCostForCeiling != null && actualCostForCeiling >= effectiveBudget.maxCostUsd;
-    const tokensExceeded = effectiveBudget.maxTokens != null && totalTokens != null && totalTokens >= effectiveBudget.maxTokens;
-
-    if (costExceeded || tokensExceeded) {
-      const reason = costExceeded
-        ? `Cost $${actualCostForCeiling!.toFixed(2)} exceeded ceiling $${effectiveBudget.maxCostUsd!.toFixed(2)}`
-        : `Tokens ${totalTokens!.toLocaleString()} exceeded ceiling ${effectiveBudget.maxTokens!.toLocaleString()}`;
-      logger.error("budget", `Run aborted: ${reason}`);
-      emitRunEvent({ runId: plan.runId, type: "failed", timestamp: new Date().toISOString(), data: { reason: "cost_ceiling_exceeded" } });
-
-      const abortComment = formatCostCeilingAbortComment({
-        runId: plan.runId,
-        reason,
-        costUsd: actualCostForCeiling,
-        task: plan.task,
-        maxCostUsd: effectiveBudget.maxCostUsd,
-        maxTokens: effectiveBudget.maxTokens,
-      });
-      logger.info("budget", abortComment);
-
-      return {
-        success: false,
-        validation: { passed: false, totalAttempts: 0, stepResults: [] },
-        durationMs: timer.elapsed(),
-        error: reason,
-        costCeilingAbortComment: abortComment,
-      };
-    }
 
     // --- Phase: Lint Gate ---
     let lintGateResult: LintGateResult | undefined;

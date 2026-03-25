@@ -145,6 +145,10 @@ export interface RunPlan {
     review: ReviewConfig;
   };
   commit: CommitConfig;
+  costCeiling?: {
+    maxCostUsd?: number;
+    maxTokens?: number;
+  };
   noSkills?: boolean;
   noTeam?: boolean;
   noContext?: boolean;
