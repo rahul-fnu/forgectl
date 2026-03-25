@@ -1,4 +1,5 @@
 import { formatDuration } from "../utils/duration.js";
+import type { RunSummary } from "../storage/repositories/runs.js";
 
 export interface RunCommentData {
   runId: string;
@@ -11,6 +12,7 @@ export interface RunCommentData {
   validationResults?: Array<{ name: string; passed: boolean; attempts: number }>;
   errorSummary?: string;
   branch?: string;
+  runSummary?: RunSummary;
 }
 
 const STATUS_EMOJI: Record<RunCommentData["status"], string> = {
@@ -74,6 +76,17 @@ export function formatRunComment(result: RunCommentData): string {
         : result.errorSummary;
     lines.push("");
     lines.push(`**Error:** ${truncated}`);
+  }
+
+  if (result.runSummary) {
+    lines.push("");
+    lines.push("**Run Summary:**");
+    lines.push(`- **Approach:** ${result.runSummary.approach}`);
+    lines.push(`- **Key Actions:** ${result.runSummary.keyActions}`);
+    lines.push(`- **Obstacles:** ${result.runSummary.obstacles}`);
+    lines.push(`- **Retries:** ${result.runSummary.retries}`);
+    lines.push(`- **Outcome:** ${result.runSummary.outcome}`);
+    lines.push(`- **Token Efficiency:** ${result.runSummary.tokenEfficiency}`);
   }
 
   return lines.join("\n");

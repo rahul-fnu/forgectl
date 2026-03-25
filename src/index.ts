@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { runCommand } from "./cli/run.js";
+import { runCommand, runSummaryCommand } from "./cli/run.js";
 import { authCommand } from "./cli/auth.js";
 import { initCommand } from "./cli/init.js";
 import { workflowsCommand } from "./cli/workflows.js";
@@ -66,6 +66,15 @@ program
       rawOpts.context = undefined;
     }
     return runCommand(rawOpts as any);
+  });
+
+// forgectl run summary <run-id>
+program
+  .command("run-summary")
+  .description("Show AI-generated summary of a completed run")
+  .argument("<run-id>", "Run ID to summarize")
+  .action(async (runId: string) => {
+    await runSummaryCommand(runId);
   });
 
 // forgectl auth
