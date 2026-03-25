@@ -111,6 +111,7 @@ export const OrchestratorConfigSchema = z.object({
   in_progress_label: z.string().default("in-progress"),
   child_slots: z.number().int().min(0).default(0),
   enable_triage: z.boolean().default(false),
+  triage_max_complexity: z.number().int().min(1).max(10).default(7),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

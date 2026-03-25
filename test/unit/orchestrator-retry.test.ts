@@ -158,6 +158,7 @@ describe("OrchestratorConfigSchema", () => {
       in_progress_label: "in-progress",
       child_slots: 0,
       enable_triage: false,
+      triage_max_complexity: 7,
     });
   });
 
