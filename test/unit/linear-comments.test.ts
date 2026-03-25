@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   formatRunComment,
+  formatCostCeilingAbortComment,
   shouldPostComment,
   type RunCommentData,
+  type CostCeilingAbortData,
 } from "../../src/tracker/linear-comments.js";
 
 describe("formatRunComment", () => {
@@ -105,6 +107,43 @@ describe("formatRunComment", () => {
     const out = formatRunComment(data);
     expect(out).toContain("**Cost:** $1.50");
     expect(out).not.toContain("Tokens");
+  });
+});
+
+describe("formatCostCeilingAbortComment", () => {
+  it("formats abort comment with all fields", () => {
+    const data: CostCeilingAbortData = {
+      runId: "run-456",
+      reason: "Cost $5.25 exceeded ceiling $5.00",
+      costUsd: 5.25,
+      task: "Refactor auth module",
+      maxCostUsd: 5.0,
+      maxTokens: 200000,
+    };
+    const out = formatCostCeilingAbortComment(data);
+    expect(out).toContain("💰");
+    expect(out).toContain("run-456");
+    expect(out).toContain("Cost Ceiling Exceeded");
+    expect(out).toContain("Cost $5.25 exceeded ceiling $5.00");
+    expect(out).toContain("$5.25");
+    expect(out).toContain("Refactor auth module");
+    expect(out).toContain("Increase the budget");
+    expect(out).toContain("$5.00");
+    expect(out).toContain("200,000");
+  });
+
+  it("formats abort comment without optional fields", () => {
+    const data: CostCeilingAbortData = {
+      runId: "run-789",
+      reason: "Tokens 150000 exceeded ceiling 100000",
+      task: "Add tests",
+    };
+    const out = formatCostCeilingAbortComment(data);
+    expect(out).toContain("run-789");
+    expect(out).not.toContain("Cumulative cost");
+    expect(out).not.toContain("max_cost_usd");
+    expect(out).not.toContain("max_tokens");
+    expect(out).toContain("Add tests");
   });
 });
 

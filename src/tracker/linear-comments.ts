@@ -79,6 +79,35 @@ export function formatRunComment(result: RunCommentData): string {
   return lines.join("\n");
 }
 
+export interface CostCeilingAbortData {
+  runId: string;
+  reason: string;
+  costUsd?: number;
+  task: string;
+  maxCostUsd?: number;
+  maxTokens?: number;
+}
+
+export function formatCostCeilingAbortComment(data: CostCeilingAbortData): string {
+  const lines: string[] = [];
+  lines.push(`💰 **forgectl run \`${data.runId}\`** — Cost Ceiling Exceeded`);
+  lines.push("");
+  lines.push(`**Reason:** ${data.reason}`);
+  if (data.costUsd != null) {
+    lines.push(`**Cumulative cost:** $${data.costUsd.toFixed(2)}`);
+  }
+  lines.push(`**Task:** ${data.task}`);
+  lines.push("");
+  lines.push("**Suggestion:** Increase the budget in the task spec or simplify the task to reduce cost.");
+  if (data.maxCostUsd != null) {
+    lines.push(`Current max_cost_usd: $${data.maxCostUsd.toFixed(2)}`);
+  }
+  if (data.maxTokens != null) {
+    lines.push(`Current max_tokens: ${data.maxTokens.toLocaleString()}`);
+  }
+  return lines.join("\n");
+}
+
 export function shouldPostComment(
   status: RunCommentData["status"],
   commentEvents: string[],
