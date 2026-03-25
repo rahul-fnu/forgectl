@@ -150,4 +150,25 @@ describe("storage/repositories/runs", () => {
     const row = repo.insert({ id: "r-def", task: "t", submittedAt: "2026-01-01T00:00:00Z" });
     expect(row.status).toBe("queued");
   });
+
+  it("setComplexityAssessment() stores score and JSON assessment", () => {
+    repo.insert({ id: "r-cx", task: "complex task", submittedAt: "2026-01-01T00:00:00Z" });
+    const assessment = {
+      complexityScore: 8,
+      estimatedFiles: 15,
+      estimatedEffort: "complex",
+      riskFactors: ["cross-cutting", "migration"],
+      recommendation: "split",
+    };
+    repo.setComplexityAssessment("r-cx", assessment);
+    const found = repo.findById("r-cx");
+    expect(found!.complexityScore).toBe(8);
+    expect(found!.complexityAssessment).toEqual(assessment);
+  });
+
+  it("complexityScore and complexityAssessment default to null", () => {
+    const row = repo.insert({ id: "r-nocx", task: "simple task", submittedAt: "2026-01-01T00:00:00Z" });
+    expect(row.complexityScore).toBeNull();
+    expect(row.complexityAssessment).toBeNull();
+  });
 });

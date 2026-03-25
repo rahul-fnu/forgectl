@@ -21,6 +21,11 @@ vi.mock("../../src/orchestrator/retry.js", () => ({
   cleanupRetryRecords: vi.fn(),
 }));
 
+// Mock triage module
+vi.mock("../../src/orchestrator/triage.js", () => ({
+  triageIssue: vi.fn().mockResolvedValue({ shouldDispatch: true, reason: "triage disabled" }),
+}));
+
 // Import the module under test (after mocks are set up)
 import {
   filterCandidates,
@@ -32,6 +37,7 @@ import {
 // Import mocked modules for assertions
 import { executeWorker } from "../../src/orchestrator/worker.js";
 import { classifyFailure, calculateBackoff, scheduleRetry } from "../../src/orchestrator/retry.js";
+import { triageIssue } from "../../src/orchestrator/triage.js";
 
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
@@ -438,5 +444,119 @@ describe("dispatchIssue", () => {
     // Give time for any async calls to complete
     await new Promise(r => setTimeout(r, 50));
     expect(tracker.updateState).not.toHaveBeenCalledWith("a", "closed");
+  });
+
+  it("blocks dispatch when complexity exceeds threshold and posts comment", async () => {
+    const assessment = {
+      complexityScore: 9,
+      estimatedFiles: 20,
+      estimatedEffort: "epic" as const,
+      riskFactors: ["cross-cutting concern", "migration needed"],
+      recommendation: "split" as const,
+    };
+    vi.mocked(triageIssue).mockResolvedValue({
+      shouldDispatch: false,
+      reason: "complexity score 9 exceeds max 7",
+      complexity: "high",
+      assessment,
+    });
+
+    const configWithTriage = makeConfig({ enable_triage: true, triage_max_complexity: 7 });
+
+    const issue = makeIssue({ id: "a" });
+    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
+
+    await vi.waitFor(() => {
+      expect(logger.info).toHaveBeenCalledWith(
+        "dispatcher",
+        expect.stringContaining("Triage skipped"),
+      );
+    });
+
+    // Should post a complexity comment
+    expect(tracker.postComment).toHaveBeenCalledWith(
+      "a",
+      expect.stringContaining("complexity too high"),
+    );
+
+    // Should add needs-decomposition label (recommendation is "split")
+    expect(tracker.updateLabels).toHaveBeenCalledWith(
+      "a",
+      ["needs-decomposition"],
+      [],
+    );
+
+    // Issue should be released
+    expect(state.claimed.has("a")).toBe(false);
+
+    // Worker should NOT be called
+    expect(executeWorker).not.toHaveBeenCalled();
+  });
+
+  it("adds too-complex label when recommendation is human_review", async () => {
+    const assessment = {
+      complexityScore: 9,
+      estimatedFiles: 20,
+      estimatedEffort: "epic" as const,
+      riskFactors: [],
+      recommendation: "human_review" as const,
+    };
+    vi.mocked(triageIssue).mockResolvedValue({
+      shouldDispatch: false,
+      reason: "complexity score 9 exceeds max 7",
+      complexity: "high",
+      assessment,
+    });
+
+    const configWithTriage = makeConfig({ enable_triage: true, triage_max_complexity: 7 });
+    const issue = makeIssue({ id: "a" });
+    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
+
+    await vi.waitFor(() => {
+      expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["too-complex"], []);
+    });
+  });
+
+  it("stores complexity assessment in run record when governance runRepo is available", async () => {
+    const assessment = {
+      complexityScore: 5,
+      estimatedFiles: 3,
+      estimatedEffort: "moderate" as const,
+      riskFactors: [],
+      recommendation: "dispatch" as const,
+    };
+    vi.mocked(triageIssue).mockResolvedValue({
+      shouldDispatch: true,
+      reason: "passed triage",
+      complexity: "medium",
+      assessment,
+    });
+    vi.mocked(executeWorker).mockResolvedValue({
+      agentResult: { status: "completed", tokenUsage: { input: 0, output: 0, total: 0 }, durationMs: 100, turnCount: 1, stdout: "", stderr: "" },
+      comment: "done",
+    });
+    vi.mocked(classifyFailure).mockReturnValue("continuation");
+
+    const mockRunRepo = {
+      insert: vi.fn().mockReturnValue({ id: "#1" }),
+      findById: vi.fn(),
+      updateStatus: vi.fn(),
+      findByStatus: vi.fn(),
+      list: vi.fn(),
+      clearPauseContext: vi.fn(),
+      findByGithubCommentId: vi.fn(),
+      setGithubCommentId: vi.fn(),
+      setComplexityAssessment: vi.fn(),
+    };
+
+    const configWithTriage = makeConfig({ enable_triage: true });
+    const issue = makeIssue({ id: "a", identifier: "#1" });
+    const governance = { runRepo: mockRunRepo };
+
+    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics, governance);
+
+    await vi.waitFor(() => {
+      expect(mockRunRepo.setComplexityAssessment).toHaveBeenCalledWith("#1", assessment);
+    });
   });
 });
