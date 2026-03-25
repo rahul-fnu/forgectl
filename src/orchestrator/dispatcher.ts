@@ -36,6 +36,8 @@ import {
   recordContextFeedback,
 } from "../context/learning.js";
 import { buildRichPRBody } from "../github/pr-description.js";
+import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.js";
+import type { RunCommentData } from "../tracker/linear-comments.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -566,6 +568,8 @@ async function executeWorkerAndHandle(
       kgContext,
       outcomeDeps?.snapshotRepo,
       promotedFindings,
+      tracker,
+      governanceWithRunId?.costRepo,
     );
 
     // Remove from running
@@ -914,6 +918,45 @@ async function executeWorkerAndHandle(
       cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
       releaseIssue(state, issue.id);
       logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
+
+      // Dispatcher-level Linear comment fallback (scheduler-dispatched runs without webhook context)
+      if (!githubContext && config.tracker?.comments_enabled !== false) {
+        const commentEvents = config.tracker?.comment_events ?? ["completed", "failed", "timeout", "aborted"];
+        const commentStatus: RunCommentData["status"] = "success";
+        if (shouldPostComment(commentStatus, commentEvents)) {
+          let costUsd: number | undefined;
+          if (governanceWithRunId?.costRepo) {
+            try {
+              const runId = governanceWithRunId.runId ?? issue.identifier;
+              const summary = governanceWithRunId.costRepo.sumByRunId(runId);
+              if (summary.totalCostUsd > 0) costUsd = summary.totalCostUsd;
+            } catch { /* best-effort */ }
+          }
+          if (costUsd == null && tokenUsage.input > 0) {
+            costUsd = (tokenUsage.input * 3 + tokenUsage.output * 15) / 1_000_000;
+          }
+          const runCommentData: RunCommentData = {
+            runId: issue.identifier,
+            issueIdentifier: issue.identifier,
+            status: commentStatus,
+            durationMs: runtimeMs,
+            tokenUsage: tokenUsage.input > 0 ? { input: tokenUsage.input, output: tokenUsage.output } : undefined,
+            costUsd,
+            prUrl,
+            validationResults: result.validationResult?.stepResults?.map((sr) => ({
+              name: sr.name,
+              passed: sr.passed,
+              attempts: sr.attempts ?? 1,
+            })),
+            branch: result.branch,
+          };
+          const formattedComment = formatRunComment(runCommentData);
+          tracker.postComment(issue.id, formattedComment).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn("dispatcher", `Failed to post Linear run comment for ${issue.identifier}: ${msg}`);
+          });
+        }
+      }
     } else {
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
@@ -946,6 +989,28 @@ async function executeWorkerAndHandle(
 
         cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
         releaseIssue(state, issue.id);
+
+        // Dispatcher-level Linear comment fallback for failed runs (scheduler-dispatched)
+        if (!githubContext && config.tracker?.comments_enabled !== false) {
+          const failCommentEvents = config.tracker?.comment_events ?? ["completed", "failed", "timeout", "aborted"];
+          const failStatus: RunCommentData["status"] = result.agentResult.status === "timeout" ? "timeout" : "failure";
+          if (shouldPostComment(failStatus, failCommentEvents)) {
+            const failCommentData: RunCommentData = {
+              runId: issue.identifier,
+              issueIdentifier: issue.identifier,
+              status: failStatus,
+              durationMs: runtimeMs,
+              tokenUsage: tokenUsage.input > 0 ? { input: tokenUsage.input, output: tokenUsage.output } : undefined,
+              errorSummary: result.agentResult.stderr,
+              branch: result.branch,
+            };
+            const formattedFailComment = formatRunComment(failCommentData);
+            tracker.postComment(issue.id, formattedFailComment).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              logger.warn("dispatcher", `Failed to post Linear fail comment for ${issue.identifier}: ${msg}`);
+            });
+          }
+        }
       } else {
         // Schedule error retry with backoff
         const delay = calculateBackoff(
