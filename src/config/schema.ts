@@ -245,6 +245,8 @@ export const TrackerConfigSchema = z.object({
   team_ids: z.array(z.string()).optional(),
   project_id: z.string().optional(),
   webhook_secret: z.string().optional(),
+  comments_enabled: z.boolean().default(true),
+  comment_events: z.array(z.string()).default(["completed", "failed", "timeout", "aborted"]),
 }).superRefine((data, ctx) => {
   if (data.kind === "github" && !data.repo) {
     ctx.addIssue({
