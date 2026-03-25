@@ -263,9 +263,11 @@ export async function triggerParentRollup(
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("dispatcher", `Failed to auto-close parent ${parentEntry.parentId}: ${msg}`);
       });
-    tracker
-      .postComment(parentEntry.parentId, `All sub-issues completed. Auto-closing.`)
-      .catch(() => { /* best-effort */ });
+    if (config.tracker?.comments_enabled !== false) {
+      tracker
+        .postComment(parentEntry.parentId, `All sub-issues completed. Auto-closing.`)
+        .catch(() => { /* best-effort */ });
+    }
   }
 }
 
@@ -282,6 +284,7 @@ export function handleSynthesizerOutcome(
   outcome: "success" | "failure",
   tracker: TrackerAdapter,
   logger: Logger,
+  commentsEnabled = true,
 ): void {
   if (outcome === "success") {
     tracker.updateState(issue.id, "closed").catch((err: unknown) => {
@@ -292,7 +295,7 @@ export function handleSynthesizerOutcome(
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("dispatcher", `Failed to remove forge:synthesize label for ${issue.identifier}: ${msg}`);
     });
-  } else {
+  } else if (commentsEnabled) {
     tracker
       .postComment(
         issue.id,
@@ -454,6 +457,7 @@ async function executeWorkerAndHandle(
   }
 
   const orchestratorConfig = effectiveConfig.orchestrator;
+  const commentsEnabled = effectiveConfig.tracker?.comments_enabled !== false;
   const attempt = (state.retryAttempts.get(issue.id) ?? 0) + 1;
   const startedAt = state.running.get(issue.id)?.startedAt ?? Date.now();
 
@@ -608,7 +612,7 @@ async function executeWorkerAndHandle(
     }
 
     // Post loop-specific comment if loop was detected
-    if (result.validationResult?.loopDetected) {
+    if (commentsEnabled && result.validationResult?.loopDetected) {
       const loop = result.validationResult.loopDetected;
       const loopComment = `**forgectl:** Agent halted — loop detected.\n\n**Pattern:** ${loop.type}\n**Detail:** ${loop.detail}`;
       tracker.postComment(issue.id, loopComment).catch((err: unknown) => {
@@ -618,10 +622,12 @@ async function executeWorkerAndHandle(
     }
 
     // Post comment (best-effort)
-    tracker.postComment(issue.id, result.comment).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn("dispatcher", `Failed to post comment for ${issue.identifier}: ${msg}`);
-    });
+    if (commentsEnabled) {
+      tracker.postComment(issue.id, result.comment).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to post comment for ${issue.identifier}: ${msg}`);
+      });
+    }
 
     // Classify failure and handle retry
     const failureType = classifyFailure(result.agentResult.status);
@@ -866,7 +872,7 @@ async function executeWorkerAndHandle(
       }
 
       // Post PR link as comment on the tracker issue
-      if (prUrl) {
+      if (prUrl && commentsEnabled) {
         tracker.postComment(issue.id, `**forgectl:** PR created → ${prUrl}`).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn("dispatcher", `Failed to post PR comment for ${issue.identifier}: ${msg}`);
@@ -888,7 +894,7 @@ async function executeWorkerAndHandle(
       const isSynthesizerRun = issue.labels.includes("forge:synthesize");
 
       if (isSynthesizerRun) {
-        handleSynthesizerOutcome(issue, "success", tracker, logger);
+        handleSynthesizerOutcome(issue, "success", tracker, logger, commentsEnabled);
       } else if (prCreated || !result.branch) {
         // Mark as recently completed IMMEDIATELY to prevent re-dispatch before tracker API reflects Done
         state.recentlyCompleted.set(issue.id, Date.now());
@@ -961,7 +967,7 @@ async function executeWorkerAndHandle(
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
       if (isSynthesizerFailure) {
-        handleSynthesizerOutcome(issue, "failure", tracker, logger);
+        handleSynthesizerOutcome(issue, "failure", tracker, logger, commentsEnabled);
       }
       // Error — check retry budget
       const currentAttempts = (state.retryAttempts.get(issue.id) ?? 0) + 1;
@@ -975,12 +981,14 @@ async function executeWorkerAndHandle(
         );
 
         // Post failure comment (best-effort)
-        tracker
-          .postComment(
-            issue.id,
-            `Max retries (${orchestratorConfig.max_retries}) exhausted. Releasing issue.`,
-          )
-          .catch(() => {});
+        if (commentsEnabled) {
+          tracker
+            .postComment(
+              issue.id,
+              `Max retries (${orchestratorConfig.max_retries}) exhausted. Releasing issue.`,
+            )
+            .catch(() => {});
+        }
 
         // Remove in_progress label (best-effort)
         tracker
