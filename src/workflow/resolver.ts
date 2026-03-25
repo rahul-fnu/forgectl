@@ -187,6 +187,8 @@ export function resolveRunPlan(
       steps: workflow.validation.steps,
       lintSteps: workflow.validation.lint_steps ?? [],
       onFailure: workflow.validation.on_failure,
+      maxSameFailures: workflow.validation.max_same_failures ?? 2,
+      onRepeatedFailure: workflow.validation.on_repeated_failure ?? "abort",
     },
     output: {
       mode: workflow.output.mode,

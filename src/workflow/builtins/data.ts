@@ -42,6 +42,8 @@ for f in glob.glob('/output/data/*'):
     ],
     lint_steps: [],
     on_failure: "abandon",
+    max_same_failures: 2,
+    on_repeated_failure: "abort",
   },
   output: { mode: "files", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },

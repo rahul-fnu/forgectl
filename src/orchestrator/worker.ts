@@ -123,7 +123,7 @@ export function buildOrchestratedRunPlan(
   workspacePath: string,
   promptTemplate: string,
   attempt: number,
-  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string },
+  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string; max_same_failures?: number; on_repeated_failure?: string },
   skills?: string[],
 ): RunPlan {
   const runId = crypto.randomUUID();
@@ -154,6 +154,8 @@ export function buildOrchestratedRunPlan(
         steps: validationConfig?.steps ?? [],
         lint_steps: validationConfig?.lint_steps ?? [],
         on_failure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
+        max_same_failures: validationConfig?.max_same_failures ?? 2,
+        on_repeated_failure: (validationConfig?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
       },
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
@@ -194,6 +196,8 @@ export function buildOrchestratedRunPlan(
       steps: validationConfig?.steps ?? [],
       lintSteps: validationConfig?.lint_steps ?? [],
       onFailure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
+      maxSameFailures: validationConfig?.max_same_failures ?? 2,
+      onRepeatedFailure: (validationConfig?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
     },
     output: {
       mode: "git",
@@ -242,7 +246,7 @@ export async function executeWorker(
   attempt: number,
   logger: Logger,
   onActivity?: () => void,
-  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string },
+  validationConfig?: { steps: ValidationStep[]; lint_steps?: ValidationStep[]; on_failure: string; max_same_failures?: number; on_repeated_failure?: string },
   githubDeps?: GitHubDeps,
   governance?: GovernanceOpts,
   skills?: string[],

@@ -29,6 +29,8 @@ Rules:
     ],
     lint_steps: [],
     on_failure: "abandon",
+    max_same_failures: 2,
+    on_repeated_failure: "abort",
   },
   output: { mode: "git", path: "/workspace", collect: [] },
   review: {
