@@ -8,6 +8,10 @@ export interface TaskSpec {
   decomposition: DecompositionConfig;
   effort: EffortConfig;
   metadata?: Record<string, string>;
+  budget?: {
+    max_cost_usd?: number;
+    max_tokens?: number;
+  };
 }
 
 export interface TaskContext {
