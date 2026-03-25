@@ -14,7 +14,7 @@ export async function runCommand(options: CLIOptions): Promise<void> {
 
   // --- Dry run ---
   if (options.dryRun) {
-    printDryRun(plan);
+    await printDryRun(plan);
     return;
   }
 
@@ -128,7 +128,7 @@ export async function runCommand(options: CLIOptions): Promise<void> {
   if (!result.success) process.exit(1);
 }
 
-function printDryRun(plan: ReturnType<typeof resolveRunPlan>): void {
+async function printDryRun(plan: ReturnType<typeof resolveRunPlan>): Promise<void> {
   console.log(chalk.bold("\n📋 Run Plan (dry run)\n"));
   console.log(`  Run ID:     ${plan.runId}`);
   console.log(`  Task:       ${plan.task}`);
@@ -143,7 +143,27 @@ function printDryRun(plan: ReturnType<typeof resolveRunPlan>): void {
     console.log(`    - ${step.name}: \`${step.command}\` (${step.retries} retries)`);
   }
   console.log(`  Review:     ${plan.orchestration.review.enabled ? `enabled (max ${plan.orchestration.review.maxRounds} rounds)` : "disabled"}`);
-  console.log(`  Timeout:    ${plan.agent.timeout}ms`);
+  console.log(`  Timeout:    ${formatDuration(plan.agent.timeout)}`);
+
+  // Check credentials so the user knows if they'll hit a wall at run time
+  let credStatus: string;
+  if (plan.agent.type === "claude-code") {
+    const { getClaudeAuth } = await import("../auth/claude.js");
+    const auth = await getClaudeAuth();
+    credStatus = auth
+      ? chalk.green(`✔ ${auth.type === "oauth_session" ? "OAuth session" : "API key"}`)
+      : chalk.red("✗ not configured — run: forgectl auth add claude-code");
+  } else if (plan.agent.type === "codex") {
+    const { getCodexAuth } = await import("../auth/codex.js");
+    const auth = await getCodexAuth();
+    credStatus = auth
+      ? chalk.green(`✔ ${auth.type === "oauth_session" ? "OAuth session" : "API key"}`)
+      : chalk.red("✗ not configured — run: forgectl auth add codex");
+  } else {
+    credStatus = chalk.yellow("unknown agent type");
+  }
+  console.log(`  Credentials: ${credStatus}`);
+
   console.log();
 }
 

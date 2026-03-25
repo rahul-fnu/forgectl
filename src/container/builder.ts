@@ -17,9 +17,21 @@ export async function imageExists(imageName: string): Promise<boolean> {
 export async function pullImage(imageName: string): Promise<void> {
   return new Promise((resolve, reject) => {
     docker.pull(imageName, (err: Error | null, stream: NodeJS.ReadableStream) => {
-      if (err) return reject(err);
+      if (err) {
+        return reject(new Error(
+          `Failed to pull image "${imageName}": ${err.message}. ` +
+          `Verify the image name is correct, or build it first with: forgectl cache prebuild <workflow>`
+        ));
+      }
+      process.stderr.write(`Pulling image ${imageName}...`);
       docker.modem.followProgress(stream, (err: Error | null) => {
-        if (err) return reject(err);
+        if (err) {
+          process.stderr.write(" failed\n");
+          return reject(new Error(
+            `Failed to pull image "${imageName}": ${err.message}`
+          ));
+        }
+        process.stderr.write(" done\n");
         resolve();
       });
     });
@@ -100,7 +112,14 @@ export async function ensureImage(
 
   const name = opts.imageName || "forgectl/code-node20";
   if (!(await imageExists(name))) {
-    await pullImage(name);
+    try {
+      await pullImage(name);
+    } catch (err) {
+      throw new Error(
+        `Image "${name}" not found locally and could not be pulled. ` +
+        `Run "forgectl doctor" to verify Docker is working, or use "forgectl cache prebuild <workflow>" to build images.`
+      );
+    }
   }
   return name;
 }

@@ -24,6 +24,7 @@ import {
 import { inspectCommand } from "./cli/inspect.js";
 import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
+import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 import { costsCommand } from "./cli/costs.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
@@ -581,6 +582,7 @@ cacheCmd
   .description("Prune cached images")
   .option("-w, --workflow <name>", "Only clear cache for this workflow")
   .option("--older-than <duration>", "Only clear images older than duration (e.g. 7d, 24h)")
+  .option("--dangling", "Remove dangling/phantom forgectl images from failed builds")
   .action(cacheClearCommand);
 
 cacheCmd
@@ -610,7 +612,6 @@ import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStat
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
-import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 
 const repoCmd = program
   .command("repo")

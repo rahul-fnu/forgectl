@@ -39,8 +39,20 @@ export async function cacheListCommand(): Promise<void> {
 export async function cacheClearCommand(opts: {
   workflow?: string;
   olderThan?: string;
+  dangling?: boolean;
 }): Promise<void> {
   const cache = new ImageCache();
+
+  if (opts.dangling) {
+    const removed = await cache.pruneDangling();
+    if (removed === 0) {
+      console.log("No dangling forgectl images found.");
+    } else {
+      console.log(`Removed ${removed} dangling image${removed === 1 ? "" : "s"}.`);
+    }
+    return;
+  }
+
   const removed = await cache.pruneCache({
     workflowName: opts.workflow,
     olderThan: opts.olderThan,

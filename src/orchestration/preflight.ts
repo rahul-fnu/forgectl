@@ -22,7 +22,7 @@ export async function runPreflightChecks(plan: RunPlan, logger: Logger): Promise
     const docker = new Docker();
     await docker.ping();
   } catch {
-    errors.push("Docker is not running. Start Docker Desktop or the Docker daemon.");
+    errors.push("Docker is not running. Start Docker Desktop or the Docker daemon. Check status with: forgectl doctor");
   }
 
   // 2. Credentials configured?
@@ -43,7 +43,7 @@ export async function runPreflightChecks(plan: RunPlan, logger: Logger): Promise
   logger.debug("preflight", "Checking inputs...");
   for (const source of plan.input.sources) {
     if (!existsSync(source)) {
-      errors.push(`Input not found: ${source}`);
+      errors.push(`Input not found: ${source} — verify the path exists or pass --repo / --input with valid paths`);
     }
   }
 
@@ -54,7 +54,7 @@ export async function runPreflightChecks(plan: RunPlan, logger: Logger): Promise
       try {
         execSync("git rev-parse --is-inside-work-tree", { cwd: repoPath, stdio: "ignore" });
       } catch {
-        errors.push(`Git output mode requires a git repository. ${repoPath} is not a git repo.`);
+        errors.push(`Git output mode requires a git repository. ${repoPath} is not a git repo. Run: git init`);
       }
 
       // Check for uncommitted changes
