@@ -1,9 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { triageIssue, type TriageResult } from "../../src/orchestrator/triage.js";
 import { createState } from "../../src/orchestrator/state.js";
 import { ConfigSchema } from "../../src/config/schema.js";
 import type { TrackerIssue } from "../../src/tracker/types.js";
 import type { OrchestratorState, WorkerInfo } from "../../src/orchestrator/state.js";
+import * as childProcess from "node:child_process";
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, execFileSync: vi.fn() };
+});
+
+const mockedExecFileSync = vi.mocked(childProcess.execFileSync);
 
 function makeIssue(overrides: Partial<TrackerIssue> = {}): TrackerIssue {
   return {
@@ -37,6 +45,18 @@ function makeWorkerInfo(issue: TrackerIssue): WorkerInfo {
     slotWeight: 1,
   };
 }
+
+beforeEach(() => {
+  mockedExecFileSync.mockReset();
+  // Default: LLM call fails, so heuristic fallback is used
+  mockedExecFileSync.mockImplementation(() => {
+    throw new Error("not available");
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("triageIssue", () => {
   it("returns shouldDispatch=true when triage is disabled", async () => {
