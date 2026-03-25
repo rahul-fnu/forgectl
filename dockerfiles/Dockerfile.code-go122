@@ -1,0 +1,25 @@
+FROM golang:1.22-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LO https://github.com/sharkdp/fd/releases/download/v10.1.0/fd_10.1.0_amd64.deb \
+    && dpkg -i fd_10.1.0_amd64.deb && rm fd_10.1.0_amd64.deb
+
+RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest \
+    && go install golang.org/x/tools/gopls@latest \
+    && go install github.com/go-delve/delve/cmd/dlv@latest
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output
+WORKDIR /workspace

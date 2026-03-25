@@ -1,0 +1,26 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl jq iptables dnsutils ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LO https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep_14.1.0-1_amd64.deb \
+    && dpkg -i ripgrep_14.1.0-1_amd64.deb && rm ripgrep_14.1.0-1_amd64.deb
+RUN curl -LO https://github.com/sharkdp/fd/releases/download/v10.1.0/fd_10.1.0_amd64.deb \
+    && dpkg -i fd_10.1.0_amd64.deb && rm fd_10.1.0_amd64.deb
+
+RUN pip install --no-cache-dir poetry pytest ruff mypy pyright \
+    requests pydantic fastapi uvicorn sqlalchemy httpx
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex
+
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh
+
+RUN mkdir -p /input /output
+WORKDIR /workspace
