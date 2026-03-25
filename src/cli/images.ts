@@ -16,6 +16,12 @@ interface ImageInfo {
   workflows: string[];
 }
 
+const POLYGLOT_IMAGES: ImageInfo[] = [
+  { image: "forgectl/code-python312", dockerfile: "Dockerfile.code-python312", workflows: ["code (python)"] },
+  { image: "forgectl/code-go122", dockerfile: "Dockerfile.code-go122", workflows: ["code (go)"] },
+  { image: "forgectl/code-rust", dockerfile: "Dockerfile.code-rust", workflows: ["code (rust)"] },
+];
+
 function getAllImages(): ImageInfo[] {
   const workflows = listWorkflows();
   const imageMap = new Map<string, ImageInfo>();
@@ -38,11 +44,27 @@ function getAllImages(): ImageInfo[] {
     }
   }
 
+  for (const poly of POLYGLOT_IMAGES) {
+    if (!imageMap.has(poly.image) && existsSync(join(DOCKERFILES_DIR, poly.dockerfile))) {
+      imageMap.set(poly.image, poly);
+    }
+  }
+
   return Array.from(imageMap.values());
 }
 
+const LANGUAGE_IMAGE_MAP: Record<string, string> = {
+  python: "forgectl/code-python312",
+  go: "forgectl/code-go122",
+  rust: "forgectl/code-rust",
+};
+
 function resolveImageForWorkflow(workflowName: string): ImageInfo | undefined {
   const allImages = getAllImages();
+  const langImage = LANGUAGE_IMAGE_MAP[workflowName];
+  if (langImage) {
+    return allImages.find((info) => info.image === langImage);
+  }
   return allImages.find((info) => info.workflows.includes(workflowName));
 }
 

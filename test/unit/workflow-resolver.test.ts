@@ -7,6 +7,18 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => { throw new Error("not a git repo"); }),
 }));
 
+// Mock fs.existsSync for language detection
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: vi.fn(actual.existsSync),
+  };
+});
+
+import { existsSync } from "node:fs";
+const mockExistsSync = vi.mocked(existsSync);
+
 const defaultConfig = ConfigSchema.parse({});
 
 function makeOptions(overrides: Partial<CLIOptions> = {}): CLIOptions {
@@ -277,6 +289,98 @@ describe("workflow resolver", () => {
       const plan = resolveRunPlan(configWith2g, makeOptions({ workflow: "code", teamSize: 5 }));
       // 2g + 4 teammates * 1GB = 6g
       expect(plan.container.resources.memory).toBe("6g");
+    });
+  });
+
+  describe("language auto-detection", () => {
+    beforeEach(() => {
+      mockExistsSync.mockReset();
+      mockExistsSync.mockReturnValue(false);
+    });
+
+    it("detects Python from pyproject.toml", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("pyproject.toml")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("forgectl/code-python312");
+    });
+
+    it("detects Python from requirements.txt", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("requirements.txt")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("forgectl/code-python312");
+    });
+
+    it("detects Go from go.mod", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("go.mod")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("forgectl/code-go122");
+    });
+
+    it("detects Rust from Cargo.toml", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("Cargo.toml")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("forgectl/code-rust");
+    });
+
+    it("falls back to Node image when no language marker found", () => {
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("forgectl/code-node20");
+    });
+
+    it("config image overrides language auto-detection", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("pyproject.toml")
+      );
+      const configWithImage = ConfigSchema.parse({ container: { image: "custom:latest" } });
+      const plan = resolveRunPlan(configWithImage, makeOptions({ workflow: "code" }));
+      expect(plan.container.image).toBe("custom:latest");
+    });
+
+    it("sets Python validation defaults when Python detected", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("pyproject.toml")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      const cmds = plan.validation.steps.map(s => s.command);
+      expect(cmds).toContain("pytest");
+      expect(cmds).toContain("ruff check .");
+      expect(cmds).toContain("mypy .");
+    });
+
+    it("sets Go validation defaults when Go detected", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("go.mod")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      const cmds = plan.validation.steps.map(s => s.command);
+      expect(cmds).toContain("go test ./...");
+      expect(cmds).toContain("golangci-lint run");
+    });
+
+    it("sets Rust validation defaults when Rust detected", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("Cargo.toml")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "code" }));
+      const cmds = plan.validation.steps.map(s => s.command);
+      expect(cmds).toContain("cargo test");
+      expect(cmds).toContain("cargo clippy -- -D warnings");
+    });
+
+    it("does not auto-detect for non-code workflows", () => {
+      mockExistsSync.mockImplementation((p: any) =>
+        String(p).endsWith("pyproject.toml")
+      );
+      const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "research" }));
+      expect(plan.container.image).toBe("forgectl/research-browser");
     });
   });
 });

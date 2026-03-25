@@ -124,6 +124,22 @@ describe("ValidationStepSchema", () => {
   });
 });
 
+describe("container.image validation", () => {
+  it("accepts known forgectl image names", () => {
+    const config = ConfigSchema.parse({ container: { image: "forgectl/code-python312" } });
+    expect(config.container.image).toBe("forgectl/code-python312");
+  });
+
+  it("accepts standard Docker image references with tag", () => {
+    const config = ConfigSchema.parse({ container: { image: "registry.io/org/image:v1.0" } });
+    expect(config.container.image).toBe("registry.io/org/image:v1.0");
+  });
+
+  it("rejects invalid image references", () => {
+    expect(() => ConfigSchema.parse({ container: { image: "invalid image!" } })).toThrow();
+  });
+});
+
 describe("deepMerge", () => {
   it("merges nested objects", () => {
     const base = { a: { b: 1, c: 2 }, d: 3 };

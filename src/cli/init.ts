@@ -29,44 +29,60 @@ agent:
   type: claude-code
 
 container:
-  image: forgectl/code-node20 # custom Python image recommended
+  image: forgectl/code-python312
   resources:
     memory: 4g
     cpus: 2
 
 validation:
   steps:
+    - name: test
+      command: pytest
+      retries: 3
     - name: lint
       command: ruff check .
       retries: 3
     - name: typecheck
       command: mypy .
       retries: 2
-    - name: test
-      command: pytest
-      retries: 3
 `,
   go: `# forgectl config — Go project
 agent:
   type: claude-code
 
 container:
-  image: forgectl/code-node20 # custom Go image recommended
+  image: forgectl/code-go122
   resources:
     memory: 4g
     cpus: 2
 
 validation:
   steps:
-    - name: lint
-      command: golangci-lint run
-      retries: 3
     - name: test
       command: go test ./...
       retries: 3
-    - name: build
-      command: go build ./...
-      retries: 1
+    - name: lint
+      command: golangci-lint run
+      retries: 3
+`,
+  rust: `# forgectl config — Rust project
+agent:
+  type: claude-code
+
+container:
+  image: forgectl/code-rust
+  resources:
+    memory: 4g
+    cpus: 2
+
+validation:
+  steps:
+    - name: test
+      command: cargo test
+      retries: 3
+    - name: lint
+      command: cargo clippy -- -D warnings
+      retries: 3
 `,
   research: `# forgectl config — Research workflow
 agent:
