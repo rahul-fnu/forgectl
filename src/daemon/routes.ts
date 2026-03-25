@@ -460,6 +460,21 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     return card.runHistory;
   });
 
+  // --- Run Summary API ---
+  app.get<{ Params: { id: string } }>("/api/v1/runs/:id/summary", async (request, reply) => {
+    if (!runRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Run repository not available" } };
+    }
+
+    const summary = runRepo.getSummary(request.params.id);
+    if (!summary) {
+      reply.code(404);
+      return { error: { code: "NOT_FOUND", message: "Summary not found" } };
+    }
+    return summary;
+  });
+
   // --- Orchestrator Observability API ---
 
   const orchError503 = { error: { code: "NOT_CONFIGURED", message: "Orchestrator not running" } };

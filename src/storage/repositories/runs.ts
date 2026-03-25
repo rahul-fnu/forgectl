@@ -35,7 +35,6 @@ export interface RunRow {
   childrenDispatched: number;
   complexityScore: number | null;
   complexityAssessment: unknown;
-  summary: RunSummary | null;
 }
 
 export interface RunInsertParams {
@@ -108,7 +107,6 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     childrenDispatched: raw.childrenDispatched ?? 0,
     complexityScore: raw.complexityScore ?? null,
     complexityAssessment: raw.complexityAssessment ? JSON.parse(raw.complexityAssessment) : null,
-    summary: raw.summary ? JSON.parse(raw.summary) : null,
   };
 }
 
@@ -212,8 +210,8 @@ export function createRunRepository(db: AppDatabase): RunRepository {
 
     getSummary(runId: string): RunSummary | null {
       const row = db.select({ summary: runs.summary }).from(runs).where(eq(runs.id, runId)).get();
-      if (!row || !row.summary) return null;
-      return JSON.parse(row.summary);
+      if (!row?.summary) return null;
+      return JSON.parse(row.summary) as RunSummary;
     },
   };
 }
