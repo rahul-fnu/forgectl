@@ -67,17 +67,21 @@ export async function checkDocker(): Promise<CheckResult> {
 
 export async function checkCredentials(): Promise<CheckResult> {
   try {
-    const { listCredentials } = await import("../auth/store.js");
+    const { listCredentials, getStorageBackend } = await import("../auth/store.js");
     const creds = await listCredentials();
+    const backend = await getStorageBackend();
+    const backendLabel = backend === "keychain"
+      ? "OS keychain"
+      : "file (~/.forgectl/credentials.json)";
     if (creds.length === 0) {
       return {
         status: "warn",
-        message: "No agent credentials configured",
+        message: `No agent credentials configured (storage: ${backendLabel})`,
         fix: "Add credentials with: forgectl auth add claude-code",
       };
     }
     const providers = [...new Set(creds.map(c => c.provider))];
-    return { status: "pass", message: `Credentials configured for: ${providers.join(", ")}` };
+    return { status: "pass", message: `Credentials configured for: ${providers.join(", ")} (storage: ${backendLabel})` };
   } catch (err) {
     return {
       status: "warn",
