@@ -29,7 +29,7 @@ agent:
   type: claude-code
 
 container:
-  image: forgectl/code-python312
+  image: forgectl/code-node20 # custom Python image recommended
   resources:
     memory: 4g
     cpus: 2
@@ -51,7 +51,7 @@ agent:
   type: claude-code
 
 container:
-  image: forgectl/code-go122
+  image: forgectl/code-node20 # custom Go image recommended
   resources:
     memory: 4g
     cpus: 2
@@ -117,7 +117,9 @@ export async function initCommand(options: { stack?: string }): Promise<void> {
   writeFileSync(configPath, content);
   console.log(chalk.green(`✔ Created ${configPath} (stack: ${stack})`));
   console.log(`\nNext steps:`);
-  console.log(`  1. Edit .forgectl/config.yaml to match your project`);
-  console.log(`  2. Run: forgectl auth add claude-code`);
-  console.log(`  3. Run: forgectl run --task "your task" --dry-run`);
+  console.log(`  0. Run: forgectl doctor              (verify your setup)`);
+  console.log(`  1. Build the Docker image: docker build -t forgectl/code-node20 -f dockerfiles/Dockerfile.code-node20 dockerfiles/`);
+  console.log(`  2. Edit .forgectl/config.yaml to match your project`);
+  console.log(`  3. Run: forgectl auth add claude-code`);
+  console.log(`  4. Run: forgectl run --task "your task" --dry-run`);
 }
