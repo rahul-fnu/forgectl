@@ -61,6 +61,10 @@ class FileStore implements KeytarLike {
   }
 }
 
+export type StorageBackend = "keychain" | "file";
+
+let resolvedBackend: StorageBackend;
+
 async function loadStore(): Promise<KeytarLike> {
   try {
     const keytar = await import("keytar");
@@ -68,13 +72,20 @@ async function loadStore(): Promise<KeytarLike> {
     // On systems without a secrets service (e.g., Docker, headless Linux),
     // keytar imports fine but throws at runtime.
     await keytar.default.getPassword("forgectl-probe", "test");
+    resolvedBackend = "keychain";
     return keytar.default;
   } catch {
+    resolvedBackend = "file";
     return new FileStore();
   }
 }
 
 const storePromise = loadStore();
+
+export async function getStorageBackend(): Promise<StorageBackend> {
+  await storePromise;
+  return resolvedBackend;
+}
 
 export async function setCredential(provider: string, key: string, value: string): Promise<void> {
   const store = await storePromise;
