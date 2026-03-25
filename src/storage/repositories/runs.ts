@@ -24,6 +24,8 @@ export interface RunRow {
   depth: number;
   maxChildren: number | null;
   childrenDispatched: number;
+  complexityScore: number | null;
+  complexityAssessment: unknown;
 }
 
 export interface RunInsertParams {
@@ -67,17 +69,7 @@ export interface RunRepository {
   clearPauseContext(id: string): void;
   findByGithubCommentId(commentId: number): RunRow | undefined;
   setGithubCommentId(runId: string, commentId: number): void;
-  setSummary(runId: string, summary: RunSummary): void;
-  getSummary(runId: string): RunSummary | null;
-}
-
-export interface RunSummary {
-  approach: string;
-  keyActions: string;
-  obstacles: string;
-  retries: string;
-  outcome: string;
-  tokenEfficiency: string;
+  setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -102,6 +94,8 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     depth: raw.depth ?? 0,
     maxChildren: raw.maxChildren ?? null,
     childrenDispatched: raw.childrenDispatched ?? 0,
+    complexityScore: raw.complexityScore ?? null,
+    complexityAssessment: raw.complexityAssessment ? JSON.parse(raw.complexityAssessment) : null,
   };
 }
 
@@ -186,17 +180,14 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         .run();
     },
 
-    setSummary(runId: string, summary: RunSummary): void {
+    setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void {
       db.update(runs)
-        .set({ summary: JSON.stringify(summary) })
+        .set({
+          complexityScore: assessment.complexityScore,
+          complexityAssessment: JSON.stringify(assessment),
+        })
         .where(eq(runs.id, runId))
         .run();
-    },
-
-    getSummary(runId: string): RunSummary | null {
-      const row = db.select({ summary: runs.summary }).from(runs).where(eq(runs.id, runId)).get();
-      if (!row?.summary) return null;
-      return JSON.parse(row.summary) as RunSummary;
     },
   };
 }
