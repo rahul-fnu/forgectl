@@ -31,6 +31,7 @@ import type { RunRepository } from "../storage/repositories/runs.js";
 import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
+import { checkCostCeiling, BudgetExceededError } from "../agent/budget.js";
 
 /** Optional durability dependencies for checkpoint/lock support. */
 export interface DurabilityDeps {
@@ -244,6 +245,29 @@ export async function executeSingleAgent(
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
     const agentResult = await session.invoke(prompt);
     await session.close();
+
+    // --- Cost ceiling check ---
+    const ceilingConfig = {
+      maxCostUsd: plan.costCeiling?.maxCostUsd,
+      maxTokens: plan.costCeiling?.maxTokens,
+    };
+    if (ceilingConfig.maxCostUsd !== undefined || ceilingConfig.maxTokens !== undefined) {
+      const costUsd = agentResult.tokenUsage
+        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
+        : 0;
+      const cumulative = {
+        inputTokens: agentResult.tokenUsage?.input ?? 0,
+        outputTokens: agentResult.tokenUsage?.output ?? 0,
+        costUsd,
+      };
+      const ceilingResult = checkCostCeiling(cumulative, ceilingConfig);
+      if (ceilingResult.percentUsed >= 80 && !ceilingResult.exceeded) {
+        logger.warn("budget", `Run ${plan.runId} at 80% of cost ceiling (${ceilingResult.percentUsed.toFixed(1)}% used)`);
+      }
+      if (ceilingResult.exceeded) {
+        throw new BudgetExceededError("per_run", cumulative.costUsd, ceilingConfig.maxCostUsd ?? 0);
+      }
+    }
 
     logger.info("agent", `Agent finished (status=${agentResult.status}, ${agentResult.durationMs}ms)`);
     if (agentResult.stdout) logger.info("agent", `STDOUT: ${agentResult.stdout.slice(0, 2000)}`);

@@ -213,6 +213,9 @@ export function resolveRunPlan(
       author: config.commit.author,
       sign: config.commit.sign,
     },
+    costCeiling: (config.agent.max_cost_usd !== undefined || config.agent.max_tokens !== undefined)
+      ? { maxCostUsd: config.agent.max_cost_usd, maxTokens: config.agent.max_tokens }
+      : undefined,
     noSkills: options.skills === false,
     noContext: options.noContext || undefined,
     noTeam: resolvedNoTeam || undefined,
