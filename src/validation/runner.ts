@@ -14,6 +14,8 @@ import {
   type LoopPattern,
 } from "../agent/loop-detector.js";
 import { execInContainer } from "../container/runner.js";
+import { extractFailureSignature, type FailureSignature } from "./failure-signature.js";
+import { emitRunEvent } from "../logging/events.js";
 
 export interface ValidationResult {
   passed: boolean;
@@ -60,6 +62,7 @@ export async function runValidationLoop(
   const loopState = createLoopDetectorState();
   let detectedLoop: LoopPattern | null = null;
   const maxAttempts = maxRetries + 1;
+  const failureSignatures = new Map<string, FailureSignature[]>();
 
   while (attempt < maxAttempts) {
     attempt++;
@@ -81,8 +84,28 @@ export async function runValidationLoop(
         logger.warn("validation", `✗ ${step.name} failed (exit ${result.exitCode})`);
         allPassed = false;
 
-        // Check for repeated validation errors
+        // Extract failure signature and track repeats
         const errorOutput = [result.stdout, result.stderr].filter(Boolean).join("\n");
+        const signature = extractFailureSignature(step.name, errorOutput);
+        const prev = failureSignatures.get(step.name) ?? [];
+        const isRepeat = prev.some(s => s.key === signature.key);
+        prev.push(signature);
+        failureSignatures.set(step.name, prev);
+
+        emitRunEvent({
+          runId: plan.runId,
+          type: "validation_step",
+          timestamp: new Date().toISOString(),
+          data: {
+            step: step.name,
+            attempt,
+            passed: false,
+            signature,
+            isRepeat,
+          },
+        });
+
+        // Check for repeated validation errors
         const loopCheck = recordValidationError(loopState, errorOutput);
         if (loopCheck) {
           detectedLoop = loopCheck;
