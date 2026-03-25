@@ -21,6 +21,7 @@ export const runs = sqliteTable("runs", {
   depth: integer("depth").default(0),
   maxChildren: integer("max_children"),
   childrenDispatched: integer("children_dispatched").default(0),
+  summary: text("summary"),
 });
 
 export const delegations = sqliteTable("delegations", {

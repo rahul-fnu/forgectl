@@ -67,6 +67,17 @@ export interface RunRepository {
   clearPauseContext(id: string): void;
   findByGithubCommentId(commentId: number): RunRow | undefined;
   setGithubCommentId(runId: string, commentId: number): void;
+  setSummary(runId: string, summary: RunSummary): void;
+  getSummary(runId: string): RunSummary | null;
+}
+
+export interface RunSummary {
+  approach: string;
+  keyActions: string;
+  obstacles: string;
+  retries: string;
+  outcome: string;
+  tokenEfficiency: string;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -173,6 +184,19 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         .set({ githubCommentId: commentId })
         .where(eq(runs.id, runId))
         .run();
+    },
+
+    setSummary(runId: string, summary: RunSummary): void {
+      db.update(runs)
+        .set({ summary: JSON.stringify(summary) })
+        .where(eq(runs.id, runId))
+        .run();
+    },
+
+    getSummary(runId: string): RunSummary | null {
+      const row = db.select({ summary: runs.summary }).from(runs).where(eq(runs.id, runId)).get();
+      if (!row?.summary) return null;
+      return JSON.parse(row.summary) as RunSummary;
     },
   };
 }
