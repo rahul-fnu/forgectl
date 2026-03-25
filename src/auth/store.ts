@@ -74,7 +74,20 @@ async function loadStore(): Promise<KeytarLike> {
   }
 }
 
-const storePromise = loadStore();
+let _usingKeychain = false;
+
+async function loadStoreAndTrack(): Promise<KeytarLike> {
+  const store = await loadStore();
+  _usingKeychain = !(store instanceof FileStore);
+  return store;
+}
+
+const storePromise = loadStoreAndTrack();
+
+export async function getStorageBackend(): Promise<"keychain" | "file"> {
+  await storePromise;
+  return _usingKeychain ? "keychain" : "file";
+}
 
 export async function setCredential(provider: string, key: string, value: string): Promise<void> {
   const store = await storePromise;
