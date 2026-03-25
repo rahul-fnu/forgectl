@@ -29,7 +29,7 @@ agent:
   type: claude-code
 
 container:
-  image: forgectl/code-node20 # custom Python image recommended
+  image: forgectl/code-python312
   resources:
     memory: 4g
     cpus: 2
@@ -51,7 +51,7 @@ agent:
   type: claude-code
 
 container:
-  image: forgectl/code-node20 # custom Go image recommended
+  image: forgectl/code-go122
   resources:
     memory: 4g
     cpus: 2

@@ -365,7 +365,7 @@ export async function executeWorker(
   // 4. Create CleanupContext with empty tempDirs (workspace persists)
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
 
-  let agentResult: AgentResult;
+  let agentResult: AgentResult | undefined;
   let validationResult: ValidationResult | undefined;
   let lintIterations: number | undefined;
   let branch: string | undefined;
@@ -642,9 +642,9 @@ export async function executeWorker(
     // 10. Now close session
     await session.close();
 
-    logger.info("worker", `Agent finished: status=${agentResult.status}, duration=${agentResult.durationMs}ms`);
-    if (agentResult.status === "failed" && agentResult.stderr) {
-      logger.warn("worker", `Agent stderr: ${agentResult.stderr.slice(0, 1000)}`);
+    logger.info("worker", `Agent finished: status=${agentResult!.status}, duration=${agentResult!.durationMs}ms`);
+    if (agentResult!.status === "failed" && agentResult!.stderr) {
+      logger.warn("worker", `Agent stderr: ${agentResult!.stderr.slice(0, 1000)}`);
     }
   } catch (err) {
     if (err instanceof BudgetExceededError) {

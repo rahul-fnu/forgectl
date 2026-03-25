@@ -5,7 +5,7 @@ import { detectIssueCycles } from "./sub-issue-dag.js";
 import { MergeQueue } from "../orchestrator/merge-queue.js";
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertContainment } from "../workspace/safety.js";

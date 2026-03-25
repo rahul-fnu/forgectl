@@ -17,6 +17,12 @@ import { execInContainer } from "../container/runner.js";
 import { extractFailureSignature, type FailureSignature } from "./failure-signature.js";
 import { emitRunEvent } from "../logging/events.js";
 
+export interface RepeatedFailureInfo {
+  count: number;
+  stepName: string;
+  signature: string;
+}
+
 export interface ValidationResult {
   passed: boolean;
   totalAttempts: number;
@@ -29,6 +35,8 @@ export interface ValidationResult {
   lastOutput?: string;
   /** Set when a loop pattern is detected during validation retries. */
   loopDetected?: LoopPattern;
+  /** Set when the same failure signature repeats beyond maxSameFailures threshold. */
+  repeatedFailure?: RepeatedFailureInfo;
 }
 
 /**
@@ -63,6 +71,9 @@ export async function runValidationLoop(
   let detectedLoop: LoopPattern | null = null;
   const maxAttempts = maxRetries + 1;
   const failureSignatures = new Map<string, FailureSignature[]>();
+  const maxSameFailures = plan.validation.maxSameFailures ?? 2;
+  const onRepeatedFailure = plan.validation.onRepeatedFailure ?? "abort";
+  let strategyChanged = false;
 
   while (attempt < maxAttempts) {
     attempt++;
@@ -104,6 +115,52 @@ export async function runValidationLoop(
             isRepeat,
           },
         });
+
+        // Check for repeated failure signatures (escalation)
+        const sameKeyCount = prev.filter(s => s.key === signature.key).length;
+        if (sameKeyCount >= maxSameFailures) {
+          const repeatedFailure: RepeatedFailureInfo = {
+            count: sameKeyCount,
+            stepName: step.name,
+            signature: signature.key,
+          };
+
+          if (onRepeatedFailure === "change_strategy" && !strategyChanged) {
+            // First repeated failure in change_strategy mode: inject meta-prompt and continue
+            strategyChanged = true;
+            emitRunEvent({
+              runId: plan.runId,
+              type: "escalation",
+              timestamp: new Date().toISOString(),
+              data: { action: "change_strategy", count: sameKeyCount, stepName: step.name },
+            });
+            logger.warn("validation", `Repeated failure detected for ${step.name}, requesting strategy change`);
+            // Reset signatures for this step so a second repeat can be detected
+            failureSignatures.set(step.name, [signature]);
+          } else {
+            // Abort (or second repeat in change_strategy mode)
+            const action = onRepeatedFailure === "change_strategy" ? "abort" : onRepeatedFailure;
+            emitRunEvent({
+              runId: plan.runId,
+              type: "escalation",
+              timestamp: new Date().toISOString(),
+              data: { action, count: sameKeyCount, stepName: step.name },
+            });
+            logger.error("validation", `Repeated failure escalation (${action}) for ${step.name}`);
+            const lastOutput = results.map(r => [r.stdout, r.stderr].filter(Boolean).join("\n")).join("\n");
+            return {
+              passed: false,
+              totalAttempts: attempt,
+              stepResults: steps.map(s => ({
+                name: s.name,
+                passed: stepLastPassed[s.name],
+                attempts: stepAttemptCounts[s.name],
+              })),
+              lastOutput: lastOutput || undefined,
+              repeatedFailure,
+            };
+          }
+        }
 
         // Check for repeated validation errors
         const loopCheck = recordValidationError(loopState, errorOutput);
@@ -154,8 +211,13 @@ export async function runValidationLoop(
 
     // Feed errors back to agent
     const failedSteps = results.filter(r => !r.passed);
-    const feedback = formatFeedback(failedSteps, plan.workflow.name);
+    let feedback = formatFeedback(failedSteps, plan.workflow.name);
     logger.info("validation", `${failedSteps.length} step(s) failed, sending feedback to agent`);
+
+    // Inject strategy change meta-prompt if triggered this round
+    if (strategyChanged) {
+      feedback = `The previous approach is not working. You must try a fundamentally different approach to fix this issue.\n\n${feedback}`;
+    }
 
     // Re-invoke agent with feedback
     logger.info("agent", "Agent fixing validation failures...");

@@ -82,7 +82,7 @@ export async function checkDockerImages(): Promise<CheckResult[]> {
     await docker.version();
 
     const { listWorkflows } = await import("../workflow/registry.js");
-    let workflows;
+    let workflows: ReturnType<typeof listWorkflows> = [];
     try {
       workflows = listWorkflows();
     } catch {
@@ -91,8 +91,8 @@ export async function checkDockerImages(): Promise<CheckResult[]> {
 
     const images = new Set<string>();
     for (const wf of workflows) {
-      if (wf.sandbox?.image) {
-        images.add(wf.sandbox.image);
+      if (wf.container?.image) {
+        images.add(wf.container.image);
       }
     }
     // Always check the default image
