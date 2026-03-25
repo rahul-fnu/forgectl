@@ -82,4 +82,7 @@ export interface TrackerConfig {
   team_ids?: string[];
   project_id?: string;
   webhook_secret?: string;
+  // Comment controls
+  comments_enabled: boolean;
+  comment_events: string[];
 }

@@ -365,8 +365,10 @@ export function createDelegationManager(deps: DelegationDeps): DelegationManager
 
       // Synthesize all child outcomes into a single aggregate comment
       try {
-        const synthesisComment = await this.synthesize(parentIssue, finalOutcomes);
-        await deps.tracker.postComment(parentIssue.id, synthesisComment);
+        if (config.tracker?.comments_enabled !== false) {
+          const synthesisComment = await this.synthesize(parentIssue, finalOutcomes);
+          await deps.tracker.postComment(parentIssue.id, synthesisComment);
+        }
       } catch (err) {
         logger.warn(
           "delegation",

@@ -155,6 +155,26 @@ interface LinearSdkIssue {
 }
 
 /**
+ * Retry a function on 429 (rate limit) responses with exponential backoff.
+ * Linear API returns 429 when rate limited.
+ */
+async function withRateLimitRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const is429 =
+        err instanceof Error &&
+        (err.message.includes("429") || err.message.includes("rate limit") || err.message.toLowerCase().includes("too many requests"));
+      if (!is429 || attempt === maxRetries) throw err;
+      const delayMs = 1000 * 2 ** attempt; // 1s, 2s, 4s
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error("withRateLimitRetry: unreachable");
+}
+
+/**
  * Create a Linear Issues TrackerAdapter.
  *
  * Supports multi-team issue fetching, parent/child sub-issues,
@@ -434,7 +454,7 @@ export function createLinearAdapter(
     },
 
     async postComment(issueId: string, body: string): Promise<void> {
-      await client.createComment({ issueId, body });
+      await withRateLimitRetry(() => client.createComment({ issueId, body }));
     },
 
     async updateState(issueId: string, state: string): Promise<void> {
