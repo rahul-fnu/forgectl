@@ -133,4 +133,43 @@ export class ImageCache {
 
     return removed;
   }
+
+  /**
+   * Remove dangling forgectl images (untagged or from failed builds).
+   * Returns the number of images removed.
+   */
+  async pruneDangling(): Promise<number> {
+    const images = await this.docker.listImages({
+      filters: { dangling: ["true"] },
+    });
+
+    let removed = 0;
+    for (const img of images) {
+      const labels = img.Labels ?? {};
+      // Only prune images that look like forgectl artifacts
+      if (labels["forgectl.workflow"] || (img.RepoTags ?? []).some(t => t.startsWith("forgectl"))) {
+        try {
+          await this.docker.getImage(img.Id).remove({ force: true });
+          removed++;
+        } catch {
+          // May be in use or already removed
+        }
+      }
+    }
+
+    // Also clean up orphaned forgectl-custom images
+    const customImages = await this.docker.listImages({
+      filters: { reference: ["forgectl-custom"] },
+    });
+    for (const img of customImages) {
+      try {
+        await this.docker.getImage(img.Id).remove({ force: true });
+        removed++;
+      } catch {
+        // May be in use
+      }
+    }
+
+    return removed;
+  }
 }

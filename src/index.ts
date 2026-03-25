@@ -581,6 +581,7 @@ cacheCmd
   .description("Prune cached images")
   .option("-w, --workflow <name>", "Only clear cache for this workflow")
   .option("--older-than <duration>", "Only clear images older than duration (e.g. 7d, 24h)")
+  .option("--dangling", "Remove dangling/phantom forgectl images from failed builds")
   .action(cacheClearCommand);
 
 cacheCmd

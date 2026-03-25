@@ -100,24 +100,35 @@ validation:
 `,
 };
 
+const VALID_STACKS = Object.keys(STARTER_CONFIGS);
+
 export async function initCommand(options: { stack?: string }): Promise<void> {
   const configDir = join(process.cwd(), ".forgectl");
   const configPath = join(configDir, "config.yaml");
 
   if (existsSync(configPath)) {
     console.log(chalk.yellow(`Config already exists at ${configPath}`));
+    console.log(chalk.gray(`  To regenerate, remove it first: rm ${configPath}`));
     return;
+  }
+
+  const stack = options.stack || "node";
+
+  if (!STARTER_CONFIGS[stack]) {
+    console.error(chalk.red(`Unknown stack: "${stack}"`));
+    console.error(`Available stacks: ${VALID_STACKS.join(", ")}`);
+    process.exit(1);
   }
 
   mkdirSync(configDir, { recursive: true });
 
-  const stack = options.stack || "node";
-  const content = STARTER_CONFIGS[stack] || STARTER_CONFIGS.node;
+  const content = STARTER_CONFIGS[stack];
 
   writeFileSync(configPath, content);
   console.log(chalk.green(`✔ Created ${configPath} (stack: ${stack})`));
   console.log(`\nNext steps:`);
-  console.log(`  1. Edit .forgectl/config.yaml to match your project`);
-  console.log(`  2. Run: forgectl auth add claude-code`);
-  console.log(`  3. Run: forgectl run --task "your task" --dry-run`);
+  console.log(`  1. Run: forgectl doctor              (verify your setup)`);
+  console.log(`  2. Edit .forgectl/config.yaml         (match your project)`);
+  console.log(`  3. Run: forgectl auth add claude-code  (add your API key)`);
+  console.log(`  4. Run: forgectl run --task "your task" --dry-run`);
 }
