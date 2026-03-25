@@ -180,7 +180,7 @@ function extractFieldsFromText(text: string): StructuredReview | undefined {
 }
 
 function buildReview(obj: Record<string, unknown>): StructuredReview {
-  const summary = typeof obj.summary === "string" ? obj.summary : "No summary";
+  const summary = typeof obj.summary === "string" && obj.summary.trim() ? obj.summary.trim() : "No summary provided";
   const approval = obj.approval === "request_changes" ? "request_changes" as const : "approve" as const;
 
   const comments: InlineReviewComment[] = [];
@@ -704,13 +704,14 @@ export class PRProcessor {
         `Severity: must_fix (blocks merge: bugs, security, data loss), should_fix (edge cases, weak error handling), nit (style).`,
         `Set "approval" to "request_changes" if there are any must_fix issues. Set to "approve" only if there are NO must_fix issues.`,
         ``,
-        `Respond with ONLY a JSON object, no other text. Two examples:`,
+        `Respond with ONLY a JSON object, no other text.`,
+        `The "summary" field is MANDATORY — write a concrete one-sentence description of what the PR changes and whether it does it correctly. Never leave summary empty or write "No summary".`,
         ``,
         `Example with issues:`,
-        `{"summary": "Missing null check on user input could cause runtime crash", "approval": "request_changes", "comments": [{"file": "src/handler.ts", "line": 42, "severity": "must_fix", "body": "user input is not validated before use", "suggested_fix": "add null check"}]}`,
+        `{"summary": "Adds pagination to users endpoint but the offset parameter is not validated, allowing negative values to crash the query", "approval": "request_changes", "comments": [{"file": "src/routes/users.ts", "line": 42, "severity": "must_fix", "body": "offset can be negative — add Math.max(0, offset) guard", "suggested_fix": "const safeOffset = Math.max(0, parseInt(offset) || 0);"}]}`,
         ``,
         `Example when clean:`,
-        `{"summary": "Clean implementation with proper error handling", "approval": "approve", "comments": []}`,
+        `{"summary": "Adds GET /health endpoint with proper error handling and test coverage — no issues found", "approval": "approve", "comments": []}`,
       ].join("\n");
 
       const promptFile = `${tmpDir}/.forgectl-review-prompt.txt`;
