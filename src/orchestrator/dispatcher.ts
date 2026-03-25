@@ -620,6 +620,8 @@ async function executeWorkerAndHandle(
       promotedFindings,
       tracker,
       governanceWithRunId?.costRepo,
+      outcomeDeps?.eventRepo,
+      governanceWithRunId?.runRepo,
     );
 
     // Remove from running

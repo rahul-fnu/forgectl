@@ -40,6 +40,9 @@ import type { CostRepository } from "../storage/repositories/costs.js";
 import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.js";
 import type { RunCommentData } from "../tracker/linear-comments.js";
 import { BudgetExceededError, checkCostCeiling } from "../agent/budget.js";
+import type { EventRepository } from "../storage/repositories/events.js";
+import type { RunRepository } from "../storage/repositories/runs.js";
+import { generateRunSummary } from "../analysis/run-summary.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -255,6 +258,8 @@ export async function executeWorker(
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   tracker?: TrackerAdapter,
   costRepo?: CostRepository,
+  eventRepo?: EventRepository,
+  runRepo?: RunRepository,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -812,6 +817,20 @@ export async function executeWorker(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("worker", `Cleanup failed for ${issue.identifier} (ignored): ${message}`);
+  }
+
+  // Fire-and-forget: generate LLM summary for the completed run
+  const summaryRunId = githubDeps?.runId ?? plan.runId;
+  if (eventRepo && costRepo && runRepo) {
+    generateRunSummary(summaryRunId, eventRepo, costRepo)
+      .then((summary) => {
+        runRepo.setSummary(summaryRunId, summary);
+        logger.info("worker", `Run summary stored for ${summaryRunId}`);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("worker", `Failed to generate run summary for ${summaryRunId}: ${msg}`);
+      });
   }
 
   return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput };
