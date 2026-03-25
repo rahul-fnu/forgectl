@@ -24,6 +24,7 @@ import {
 import { inspectCommand } from "./cli/inspect.js";
 import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
+import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 import { costsCommand } from "./cli/costs.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
@@ -588,6 +589,22 @@ cacheCmd
   .command("prebuild <workflow>")
   .description("Build and cache the image for a workflow without running anything")
   .action(cachePrebuildCommand);
+
+// forgectl images
+const imagesCmd = program
+  .command("images")
+  .description("Manage Docker images for workflows");
+
+imagesCmd
+  .command("build [workflow]")
+  .description("Build Docker image for a workflow (default: code)")
+  .option("--all", "Build all images")
+  .action(imagesBuildCommand);
+
+imagesCmd
+  .command("list")
+  .description("Show available images and their build status")
+  .action(imagesListCommand);
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";

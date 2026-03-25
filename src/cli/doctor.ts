@@ -60,24 +60,102 @@ export async function checkDocker(): Promise<CheckResult> {
     return {
       status: "fail",
       message: `Docker daemon not reachable: ${err instanceof Error ? err.message : String(err)}`,
-      fix: "Install and start Docker: https://docs.docker.com/get-docker/",
+      fix: "Start Docker: sudo systemctl start docker (or install: https://docs.docker.com/get-docker/)",
+    };
+  }
+}
+
+const IMAGE_DOCKERFILE_MAP: Record<string, string> = {
+  "forgectl/code-node20": "Dockerfile.code-node20",
+  "forgectl/research-browser": "Dockerfile.research-browser",
+  "forgectl/content": "Dockerfile.content",
+  "forgectl/data": "Dockerfile.data",
+  "forgectl/ops": "Dockerfile.ops",
+};
+
+export async function checkDockerImages(): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+  try {
+    const Docker = (await import("dockerode")).default;
+    const docker = new Docker();
+    // Verify Docker is reachable first
+    await docker.version();
+
+    const { listWorkflows } = await import("../workflow/registry.js");
+    let workflows;
+    try {
+      workflows = listWorkflows();
+    } catch {
+      workflows = [];
+    }
+
+    const images = new Set<string>();
+    for (const wf of workflows) {
+      if (wf.sandbox?.image) {
+        images.add(wf.sandbox.image);
+      }
+    }
+    // Always check the default image
+    images.add("forgectl/code-node20");
+
+    for (const image of images) {
+      try {
+        await docker.getImage(image).inspect();
+        results.push({ status: "pass", message: `Docker image: ${image}` });
+      } catch {
+        const dockerfile = IMAGE_DOCKERFILE_MAP[image];
+        const fix = dockerfile
+          ? `Build it: docker build -t ${image} -f dockerfiles/${dockerfile} dockerfiles/`
+          : `Pull or build the image: docker pull ${image}`;
+        results.push({
+          status: "warn",
+          message: `Docker image missing: ${image}`,
+          fix,
+        });
+      }
+    }
+  } catch {
+    // Docker not reachable — skip image checks (checkDocker already reports this)
+  }
+  return results;
+}
+
+export async function checkCredentialBackend(): Promise<CheckResult> {
+  try {
+    const { getStorageBackend } = await import("../auth/store.js");
+    const backend = await getStorageBackend();
+    if (backend === "keychain") {
+      return { status: "pass", message: "Credential storage: OS keychain" };
+    }
+    return {
+      status: "pass",
+      message: "Credential storage: file fallback (~/.forgectl/credentials.json)",
+    };
+  } catch (err) {
+    return {
+      status: "warn",
+      message: `Could not determine credential backend: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
 
 export async function checkCredentials(): Promise<CheckResult> {
   try {
-    const { listCredentials } = await import("../auth/store.js");
+    const { listCredentials, getStorageBackend } = await import("../auth/store.js");
     const creds = await listCredentials();
+    const backend = await getStorageBackend();
+    const backendLabel = backend === "keychain"
+      ? "OS keychain"
+      : "file (~/.forgectl/credentials.json)";
     if (creds.length === 0) {
       return {
         status: "warn",
-        message: "No agent credentials configured",
+        message: `No agent credentials configured (storage: ${backendLabel})`,
         fix: "Add credentials with: forgectl auth add claude-code",
       };
     }
     const providers = [...new Set(creds.map(c => c.provider))];
-    return { status: "pass", message: `Credentials configured for: ${providers.join(", ")}` };
+    return { status: "pass", message: `Credentials configured for: ${providers.join(", ")} (storage: ${backendLabel})` };
   } catch (err) {
     return {
       status: "warn",
@@ -269,6 +347,7 @@ export function registerDoctorCommand(program: Command): void {
         { name: "Node.js", fn: checkNodeVersion },
         { name: "Docker", fn: checkDocker },
         { name: "Credentials", fn: checkCredentials },
+        { name: "Credential Backend", fn: checkCredentialBackend },
         { name: "SQLite", fn: checkSqlite },
         { name: "Daemon", fn: checkDaemon },
         { name: "GitHub App", fn: checkGitHubApp },
@@ -281,6 +360,14 @@ export function registerDoctorCommand(program: Command): void {
 
       for (const check of checks) {
         const result = await check.fn();
+        console.log(formatResult(result));
+        if (result.status === "fail") failures++;
+        if (result.status === "warn") warnings++;
+      }
+
+      // Docker image checks (returns multiple results)
+      const imageResults = await checkDockerImages();
+      for (const result of imageResults) {
         console.log(formatResult(result));
         if (result.status === "fail") failures++;
         if (result.status === "warn") warnings++;

@@ -3,6 +3,8 @@ import {
   checkNodeVersion,
   checkDocker,
   checkCredentials,
+  checkCredentialBackend,
+  checkDockerImages,
   checkSqlite,
   checkDaemon,
   checkGitHubApp,
@@ -207,6 +209,38 @@ describe("doctor checks", () => {
       // In test env, may or may not find config
       expect(["pass", "warn", "fail"]).toContain(result.status);
       expect(result.message).toBeDefined();
+    });
+  });
+
+  describe("checkDockerImages", () => {
+    it("returns array of CheckResults", async () => {
+      const results = await checkDockerImages();
+      expect(Array.isArray(results)).toBe(true);
+      for (const result of results) {
+        expect(result).toHaveProperty("status");
+        expect(result).toHaveProperty("message");
+        expect(["pass", "fail", "warn"]).toContain(result.status);
+      }
+    });
+
+    it("includes build command for missing images", async () => {
+      const results = await checkDockerImages();
+      for (const result of results) {
+        if (result.status === "warn" && result.message.includes("missing")) {
+          expect(result.fix).toBeDefined();
+          expect(result.fix).toMatch(/Build it:|Pull or build/);
+        }
+      }
+    });
+  });
+
+  describe("checkCredentialBackend", () => {
+    it("returns keychain or file backend", async () => {
+      const result = await checkCredentialBackend();
+      expect(["pass", "warn"]).toContain(result.status);
+      if (result.status === "pass") {
+        expect(result.message).toMatch(/Credential storage: (OS keychain|file fallback)/);
+      }
     });
   });
 
