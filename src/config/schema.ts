@@ -127,7 +127,10 @@ export const ConfigSchema = z.object({
   }).default({}),
 
   container: z.object({
-    image: z.string().optional(),       // Override workflow's default image
+    image: z.string().regex(
+      /^[a-zA-Z0-9][a-zA-Z0-9._\-\/]*(:[a-zA-Z0-9._\-]+)?$/,
+      "Must be a valid Docker image reference (e.g. forgectl/code-python312 or registry.io/org/image:tag)"
+    ).optional(),       // Override workflow's default image
     dockerfile: z.string().optional(),  // Build from custom Dockerfile
     network: z.object({
       mode: NetworkMode.optional(),     // Override workflow's network mode

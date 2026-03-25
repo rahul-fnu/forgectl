@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { ValidationStep } from "../config/schema.js";
 import { getWorkflow } from "./registry.js";
 import { parseDuration } from "../utils/duration.js";
 import { parseMemory } from "../container/runner.js";
@@ -66,6 +68,53 @@ function detectWorkflow(options: CLIOptions): string {
   }
 }
 
+interface LanguageDefaults {
+  image: string;
+  validation: ValidationStep[];
+}
+
+const LANGUAGE_DEFAULTS: Record<string, LanguageDefaults> = {
+  python: {
+    image: "forgectl/code-python312",
+    validation: [
+      { name: "test", command: "pytest", retries: 3, description: "" },
+      { name: "lint", command: "ruff check .", retries: 3, description: "" },
+      { name: "typecheck", command: "mypy .", retries: 2, description: "" },
+    ],
+  },
+  go: {
+    image: "forgectl/code-go122",
+    validation: [
+      { name: "test", command: "go test ./...", retries: 3, description: "" },
+      { name: "lint", command: "golangci-lint run", retries: 3, description: "" },
+    ],
+  },
+  rust: {
+    image: "forgectl/code-rust",
+    validation: [
+      { name: "test", command: "cargo test", retries: 3, description: "" },
+      { name: "lint", command: "cargo clippy -- -D warnings", retries: 3, description: "" },
+    ],
+  },
+};
+
+/**
+ * Detect the project language from marker files in the workspace directory.
+ * Returns language key or undefined if no marker is found (defaults to Node).
+ */
+function detectLanguage(workspaceDir: string): string | undefined {
+  if (existsSync(resolve(workspaceDir, "pyproject.toml")) || existsSync(resolve(workspaceDir, "requirements.txt"))) {
+    return "python";
+  }
+  if (existsSync(resolve(workspaceDir, "go.mod"))) {
+    return "go";
+  }
+  if (existsSync(resolve(workspaceDir, "Cargo.toml"))) {
+    return "rust";
+  }
+  return undefined;
+}
+
 /**
  * Resolve network configuration from workflow + config overrides.
  */
@@ -126,6 +175,13 @@ export function resolveRunPlan(
   const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 
+  // Language auto-detection for code workflow (only when no explicit config image)
+  const workspaceDir = resolve(options.repo || ".");
+  const detectedLang = workflowName === "code" && !config.container.image
+    ? detectLanguage(workspaceDir)
+    : undefined;
+  const langDefaults = detectedLang ? LANGUAGE_DEFAULTS[detectedLang] : undefined;
+
   // Team config: CLI --team-size overrides workflow, --no-team disables entirely
   const resolvedNoTeam = options.team === false;
   const effectiveTeamSize = resolvedNoTeam
@@ -162,7 +218,7 @@ export function resolveRunPlan(
       flags: config.agent.flags,
     },
     container: {
-      image: config.container.image ?? workflow.container.image,
+      image: config.container.image ?? langDefaults?.image ?? workflow.container.image,
       dockerfile: config.container.dockerfile,
       network: resolveNetwork(workflow, config, agentType, runId),
       resources: {
@@ -184,7 +240,7 @@ export function resolveRunPlan(
       inject: [],
     },
     validation: {
-      steps: workflow.validation.steps,
+      steps: langDefaults?.validation ?? workflow.validation.steps,
       lintSteps: workflow.validation.lint_steps ?? [],
       onFailure: workflow.validation.on_failure,
       maxSameFailures: workflow.validation.max_same_failures ?? 2,
