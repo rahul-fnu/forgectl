@@ -124,6 +124,22 @@ export const ConfigSchema = z.object({
     flags: z.array(z.string()).default([]),
     max_cost_usd: z.number().positive().optional(),
     max_tokens: z.number().int().positive().optional(),
+    usage_limit: z.object({
+      enabled: z.boolean().default(true),
+      cooldown_minutes: z.number().int().positive().default(60),
+      probe_enabled: z.boolean().default(true),
+      probe_interval_minutes: z.number().int().positive().default(15),
+      max_resumes: z.number().int().positive().default(3),
+      detection_patterns: z.array(z.string()).default([
+        "usage limit",
+        "rate limit",
+        "capacity",
+        "too many requests",
+        "quota exceeded",
+        "please try again later",
+      ]),
+      hang_timeout_ms: z.number().int().positive().default(300000),
+    }).default({}),
   }).default({}),
 
   container: z.object({
