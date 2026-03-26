@@ -158,9 +158,10 @@ program
   .description("Start daemon with orchestration enabled (polls tracker, dispatches agents)")
   .option("-p, --port <port>", "daemon port", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
+  .option("--tunnel", "Expose daemon via Cloudflare Tunnel")
   .option("-c, --config <path>", "Config file path")
   .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
-  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
+  .action(async (opts: { port: string; foreground?: boolean; tunnel?: boolean; config?: string; repo?: string }) => {
     if (opts.config && opts.repo) {
       console.error("Error: --config and --repo are mutually exclusive");
       process.exit(1);
@@ -176,9 +177,10 @@ program
 
     if (opts.foreground) {
       const { startDaemon } = await import("./daemon/server.js");
-      await startDaemon(port, true, configPath);
+      await startDaemon(port, true, configPath, opts.tunnel);
     } else {
       const extraArgs = buildConfigArgs(opts);
+      if (opts.tunnel) extraArgs.push("--tunnel");
       const child = spawn(process.execPath, [process.argv[1], "orchestrate", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
@@ -200,9 +202,10 @@ program
   .description("Start the forgectl daemon")
   .option("-p, --port <number>", "Port to listen on", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
+  .option("--tunnel", "Expose daemon via Cloudflare Tunnel")
   .option("-c, --config <path>", "Config file path")
   .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
-  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
+  .action(async (opts: { port: string; foreground?: boolean; tunnel?: boolean; config?: string; repo?: string }) => {
     if (opts.config && opts.repo) {
       console.error("Error: --config and --repo are mutually exclusive");
       process.exit(1);
@@ -218,10 +221,11 @@ program
 
     if (opts.foreground) {
       const { startDaemon } = await import("./daemon/server.js");
-      await startDaemon(port, false, configPath);
+      await startDaemon(port, false, configPath, opts.tunnel);
     } else {
       // Spawn detached background process
       const extraArgs = buildConfigArgs(opts);
+      if (opts.tunnel) extraArgs.push("--tunnel");
       const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",

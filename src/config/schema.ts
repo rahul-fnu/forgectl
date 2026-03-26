@@ -226,6 +226,12 @@ export const ConfigSchema = z.object({
     branch_pattern: z.string().default("forge/*"),
   }).optional(),
 
+  tunnel: z.object({
+    enabled: z.boolean().default(false),
+    cloudflared_path: z.string().default("cloudflared"),
+    port: z.number().int().positive().optional(),
+  }).optional(),
+
   scheduled_qa: z.object({
     enabled: z.boolean().default(false),
     interval_ms: z.number().int().positive().default(86_400_000), // 24 hours

@@ -40,10 +40,18 @@ import { mapFrontMatterToConfig } from "../workflow/map-front-matter.js";
 import { ConfigSchema } from "../config/schema.js";
 import type { ValidatedWorkflowFile } from "../workflow/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
+import { startTunnel, type TunnelHandle } from "./tunnel.js";
 
-export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string): Promise<void> {
+export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string, enableTunnel = false): Promise<void> {
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: [`http://127.0.0.1:${port}`, `http://localhost:${port}`] });
+  const corsOrigins: string[] = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+  await app.register(cors, { origin: (origin, cb) => {
+    if (!origin || corsOrigins.some(o => origin === o)) {
+      cb(null, true);
+    } else {
+      cb(null, false);
+    }
+  } });
 
   const daemonToken = generateAndSaveToken();
 
@@ -557,7 +565,27 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
+  // Start cloudflared tunnel if enabled (via CLI flag or config)
+  let tunnel: TunnelHandle | null = null;
+  const tunnelEnabled = enableTunnel || config.tunnel?.enabled;
+  if (tunnelEnabled) {
+    try {
+      tunnel = await startTunnel({
+        port,
+        cloudflaredPath: config.tunnel?.cloudflared_path,
+        logger: daemonLogger,
+      });
+      corsOrigins.push(tunnel.url);
+      console.log(`Tunnel URL: ${tunnel.url}`);
+      console.log(`Remote access: ${tunnel.url}?token=${daemonToken}`);
+    } catch (err) {
+      daemonLogger.error("tunnel", `Failed to start tunnel: ${err}`);
+      console.error(`Tunnel failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const shutdown = async () => {
+    tunnel?.stop();
     clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
     watcher?.stop();
