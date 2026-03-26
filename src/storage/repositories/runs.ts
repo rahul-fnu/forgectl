@@ -35,6 +35,8 @@ export interface RunRow {
   childrenDispatched: number;
   complexityScore: number | null;
   complexityAssessment: unknown;
+  summary: unknown;
+  resumeAfter: string | null;
 }
 
 export interface RunInsertParams {
@@ -67,6 +69,7 @@ export interface RunUpdateParams {
   depth?: number;
   maxChildren?: number;
   childrenDispatched?: number;
+  resumeAfter?: string;
 }
 
 export interface RunRepository {
@@ -107,6 +110,8 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     childrenDispatched: raw.childrenDispatched ?? 0,
     complexityScore: raw.complexityScore ?? null,
     complexityAssessment: raw.complexityAssessment ? JSON.parse(raw.complexityAssessment) : null,
+    summary: raw.summary ? JSON.parse(raw.summary) : null,
+    resumeAfter: raw.resumeAfter ?? null,
   };
 }
 
@@ -157,6 +162,8 @@ export function createRunRepository(db: AppDatabase): RunRepository {
       if (params.maxChildren !== undefined) updates.maxChildren = params.maxChildren;
       if (params.childrenDispatched !== undefined)
         updates.childrenDispatched = params.childrenDispatched;
+      if (params.resumeAfter !== undefined)
+        updates.resumeAfter = params.resumeAfter;
       db.update(runs).set(updates).where(eq(runs.id, id)).run();
     },
 

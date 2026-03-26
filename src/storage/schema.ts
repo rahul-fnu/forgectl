@@ -24,6 +24,7 @@ export const runs = sqliteTable("runs", {
   complexityScore: integer("complexity_score"),
   complexityAssessment: text("complexity_assessment"), // JSON-serialized ComplexityAssessment
   summary: text("summary"), // JSON-serialized RunSummary
+  resumeAfter: text("resume_after"), // ISO timestamp — earliest time to re-queue after usage limit pause
 });
 
 export const delegations = sqliteTable("delegations", {
