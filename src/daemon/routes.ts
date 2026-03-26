@@ -776,7 +776,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       metadata: { source: "dispatch", ...(repo ? { repo } : {}) },
     };
 
-    orchestrator.dispatchIssue(issue);
+    void orchestrator.dispatchIssue(issue);
 
     reply.code(202);
     return { id: syntheticId, status: "dispatched" };

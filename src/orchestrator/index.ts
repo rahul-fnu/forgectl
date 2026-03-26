@@ -309,7 +309,7 @@ export class Orchestrator {
    * Delegates to the standalone dispatchIssue function using orchestrator internals.
    * No-op if the orchestrator is not running.
    */
-  dispatchIssue(issue: TrackerIssue, githubContext?: GitHubContext): void {
+  async dispatchIssue(issue: TrackerIssue, githubContext?: GitHubContext): Promise<void> {
     if (!this.running) {
       this.logger.warn("orchestrator", `dispatchIssue called but orchestrator not running`);
       return;
@@ -330,7 +330,7 @@ export class Orchestrator {
     } else if (!mergedContext && this.githubContext) {
       mergedContext = this.githubContext;
     }
-    dispatchIssueImpl(
+    await dispatchIssueImpl(
       issue,
       this.state,
       this.tracker,

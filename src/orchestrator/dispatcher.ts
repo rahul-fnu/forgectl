@@ -22,7 +22,7 @@ import { createProgressComment } from "../github/comments.js";
 import { serializeReviewOutput } from "../validation/review-agent.js";
 import { emitRunEvent } from "../logging/events.js";
 import { needsPreApproval } from "../governance/autonomy.js";
-import { triageIssue } from "./triage.js";
+import { triageIssue, type ComplexityAssessment } from "./triage.js";
 import { enterPendingApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
 import {
@@ -311,7 +311,7 @@ export function handleSynthesizerOutcome(
  * Dispatch an issue: claim it, start a worker in the background,
  * and handle completion with retry logic.
  */
-export function dispatchIssue(
+export async function dispatchIssue(
   issue: TrackerIssue,
   state: OrchestratorState,
   tracker: TrackerAdapter,
@@ -331,7 +331,40 @@ export function dispatchIssue(
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
-): void {
+): Promise<void> {
+  // --- Pre-dispatch triage gate: score complexity before claiming ---
+  const triageResult = await triageIssue(issue, state, config);
+
+  if (!triageResult.shouldDispatch) {
+    // If blocked by complexity, post a comment and add a label
+    if (triageResult.assessment) {
+      const a = triageResult.assessment;
+      const commentBody = [
+        `**forgectl:** Issue skipped — complexity too high.`,
+        ``,
+        `**Complexity score:** ${a.complexityScore} (max: ${config.orchestrator.triage_max_complexity})`,
+        a.riskFactors.length > 0 ? `**Risk factors:** ${a.riskFactors.join(", ")}` : "",
+        `**Recommendation:** ${a.recommendation}`,
+      ].filter(Boolean).join("\n");
+
+      if (config.tracker?.comments_enabled !== false) {
+        tracker.postComment(issue.id, commentBody).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("dispatcher", `Failed to post complexity comment for ${issue.identifier}: ${msg}`);
+        });
+      }
+
+      const complexityLabel = a.recommendation === "split" ? "needs-decomposition" : "too-complex";
+      tracker.updateLabels(issue.id, [complexityLabel], []).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Failed to add complexity label for ${issue.identifier}: ${msg}`);
+      });
+    }
+
+    logger.info("dispatcher", `Triage skipped ${issue.identifier}: ${triageResult.reason}`);
+    return;
+  }
+
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
     return;
@@ -378,6 +411,16 @@ export function dispatchIssue(
     data: { issueId: issue.id, identifier: issue.identifier, attempt },
   });
 
+  // Store complexity assessment in run record (even for dispatched issues)
+  if (triageResult.assessment && governance?.runRepo && governance?.runId) {
+    try {
+      governance.runRepo.setComplexityAssessment(governance.runId, triageResult.assessment);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("dispatcher", `Failed to store complexity assessment for ${issue.identifier}: ${msg}`);
+    }
+  }
+
   // Fire-and-forget worker execution
   void executeWorkerAndHandle(
     issue,
@@ -422,53 +465,8 @@ async function executeWorkerAndHandle(
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
+  triageAssessment?: ComplexityAssessment,
 ): Promise<void> {
-  // --- Triage gate: fast pre-dispatch filtering ---
-  const triageResult = await triageIssue(issue, state, config);
-
-  // Store complexity assessment in run record (even for dispatched issues)
-  if (triageResult.assessment && governance?.runRepo && governance?.runId) {
-    try {
-      governance.runRepo.setComplexityAssessment(governance.runId, triageResult.assessment);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn("dispatcher", `Failed to store complexity assessment for ${issue.identifier}: ${msg}`);
-    }
-  }
-
-  if (!triageResult.shouldDispatch) {
-    // If blocked by complexity, post a comment and add a label
-    if (triageResult.assessment) {
-      const a = triageResult.assessment;
-      const commentBody = [
-        `**forgectl:** Issue skipped — complexity too high.`,
-        ``,
-        `**Complexity score:** ${a.complexityScore} (max: ${config.orchestrator.triage_max_complexity})`,
-        a.riskFactors.length > 0 ? `**Risk factors:** ${a.riskFactors.join(", ")}` : "",
-        `**Recommendation:** ${a.recommendation}`,
-      ].filter(Boolean).join("\n");
-
-      if (config.tracker?.comments_enabled !== false) {
-        tracker.postComment(issue.id, commentBody).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("dispatcher", `Failed to post complexity comment for ${issue.identifier}: ${msg}`);
-        });
-      }
-
-      const complexityLabel = a.recommendation === "split" ? "needs-decomposition" : "too-complex";
-      tracker.updateLabels(issue.id, [complexityLabel], []).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn("dispatcher", `Failed to add complexity label for ${issue.identifier}: ${msg}`);
-      });
-    }
-
-    logger.info("dispatcher", `Triage skipped ${issue.identifier}: ${triageResult.reason}`);
-    state.running.delete(issue.id);
-    slotManager?.releaseTopLevel(issue.id);
-    releaseIssue(state, issue.id);
-    return;
-  }
-
   // Per-issue repo routing: detect repo from issue description and load profile overlay
   const issueRepo = extractRepoFromIssue(issue);
   let effectiveConfig = config;
@@ -593,9 +591,9 @@ async function executeWorkerAndHandle(
       governanceWithRunId = { ...governance, runId };
 
       // Store complexity assessment on the newly created run record
-      if (triageResult.assessment) {
+      if (triageAssessment) {
         try {
-          governance.runRepo.setComplexityAssessment(runId, triageResult.assessment);
+          governance.runRepo.setComplexityAssessment(runId, triageAssessment);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn("dispatcher", `Failed to store complexity assessment for ${issue.identifier}: ${msg}`);

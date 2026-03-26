@@ -16,7 +16,7 @@ export interface ScheduledQADeps {
   state: OrchestratorState;
   logger: Logger;
   kgDbPath?: string;
-  dispatchIssue: (issue: TrackerIssue) => void;
+  dispatchIssue: (issue: TrackerIssue) => void | Promise<void>;
 }
 
 /**

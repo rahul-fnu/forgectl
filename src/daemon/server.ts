@@ -238,7 +238,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         onDispatch: (issue, octokit, repo) => {
           if (orchestrator) {
             daemonLogger.info("github", `Dispatching issue ${issue.identifier} via webhook`);
-            orchestrator.dispatchIssue(issue, { octokit: octokit as any, repo });
+            void orchestrator.dispatchIssue(issue, { octokit: octokit as any, repo });
           } else {
             daemonLogger.warn("github", `Webhook trigger for ${issue.identifier} but orchestrator not running`);
           }
