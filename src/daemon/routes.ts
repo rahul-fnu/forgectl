@@ -137,12 +137,15 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       reply.code(404);
       return { error: "Run not found" };
     }
-    // Attach budget status if cost repo is available
+    const extras: Record<string, unknown> = {};
     if (costRepo) {
-      const budget = getBudgetStatus(costRepo, request.params.id, budgetConfig);
-      return { ...run, budget };
+      extras.budget = getBudgetStatus(costRepo, request.params.id, budgetConfig);
     }
-    return run;
+    if (runRepo) {
+      const summary = runRepo.getSummary(request.params.id);
+      if (summary) extras.summary = summary;
+    }
+    return Object.keys(extras).length > 0 ? { ...run, ...extras } : run;
   });
 
   // Get structured output for a completed run

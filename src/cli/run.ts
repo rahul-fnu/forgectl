@@ -192,16 +192,33 @@ export async function runSummaryCommand(runId: string): Promise<void> {
   const { createDatabase, closeDatabase } = await import("../storage/database.js");
   const { runMigrations } = await import("../storage/migrator.js");
   const { createRunRepository } = await import("../storage/repositories/runs.js");
+  const { createEventRepository } = await import("../storage/repositories/events.js");
+  const { createCostRepository } = await import("../storage/repositories/costs.js");
+  const { generateRunSummary } = await import("../analysis/run-summary.js");
 
   const dbPath = join(homedir(), ".forgectl", "daemon.db");
   const db = createDatabase(dbPath);
   try {
     runMigrations(db);
     const runRepo = createRunRepository(db);
-    const summary = runRepo.getSummary(runId);
+    const eventRepo = createEventRepository(db);
+    const costRepo = createCostRepository(db);
+    let summary = runRepo.getSummary(runId);
     if (!summary) {
-      console.log("Summary not yet generated. Run may still be in progress.");
-      return;
+      const run = runRepo.findById(runId);
+      if (!run) {
+        console.log("Run not found.");
+        return;
+      }
+      console.log("No summary cached — generating...");
+      try {
+        summary = await generateRunSummary(runId, eventRepo, costRepo);
+        runRepo.setSummary(runId, summary);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`Failed to generate summary: ${msg}`);
+        return;
+      }
     }
     console.log(formatRunSummary(runId, summary));
   } finally {

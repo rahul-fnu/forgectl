@@ -4,6 +4,7 @@ import { runMigrations } from "../storage/migrator.js";
 import { createRunRepository } from "../storage/repositories/runs.js";
 import { createEventRepository } from "../storage/repositories/events.js";
 import { createCostRepository } from "../storage/repositories/costs.js";
+import { generateRunSummary } from "../analysis/run-summary.js";
 import type { EventRow } from "../storage/repositories/events.js";
 import type { RunRow } from "../storage/repositories/runs.js";
 
@@ -184,16 +185,25 @@ export async function summaryCommand(runId: string): Promise<void> {
     runMigrations(db);
 
     const runRepo = createRunRepository(db);
+    const eventRepo = createEventRepository(db);
+    const costRepo = createCostRepository(db);
     const run = runRepo.findById(runId);
     if (!run) {
       console.error(chalk.red(`Run not found: ${runId}`));
       process.exit(1);
     }
 
-    const summary = runRepo.getSummary(runId);
+    let summary = runRepo.getSummary(runId);
     if (!summary) {
-      console.log(chalk.yellow(`No summary available for run ${runId}`));
-      process.exit(0);
+      console.log(chalk.gray("No summary cached — generating..."));
+      try {
+        summary = await generateRunSummary(runId, eventRepo, costRepo);
+        runRepo.setSummary(runId, summary);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(chalk.red(`Failed to generate summary: ${msg}`));
+        process.exit(1);
+      }
     }
 
     console.log(chalk.bold(`\nRun Summary: ${runId}\n`));
