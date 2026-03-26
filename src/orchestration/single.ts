@@ -481,12 +481,23 @@ export async function executeSingleAgent(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("execution", message);
-    emitRunEvent({
-      runId: plan.runId,
-      type: "failed",
-      timestamp: new Date().toISOString(),
-      data: { error: message },
-    });
+
+    if (err instanceof BudgetExceededError) {
+      emitRunEvent({
+        runId: plan.runId,
+        type: "failed",
+        timestamp: new Date().toISOString(),
+        data: { reason: "cost_ceiling_exceeded", error: message },
+      });
+    } else {
+      emitRunEvent({
+        runId: plan.runId,
+        type: "failed",
+        timestamp: new Date().toISOString(),
+        data: { error: message },
+      });
+    }
+
     return {
       success: false,
       validation: { passed: false, totalAttempts: 0, stepResults: [] },

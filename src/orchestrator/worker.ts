@@ -55,6 +55,7 @@ export interface WorkerResult {
   pendingApproval?: boolean;
   reviewOutput?: ReviewOutput;
   diffStat?: string;
+  costCeilingExceeded?: boolean;
 }
 
 /** Optional GitHub dependencies for progress comment updates during worker execution. */
@@ -374,6 +375,7 @@ export async function executeWorker(
   let checkRunId: number | undefined;
   let pendingApproval = false;
   let reviewOutput: ReviewOutput | undefined;
+  let costCeilingExceeded = false;
   let prUrl: string | undefined;
 
   // Create check run at start (if headSha available)
@@ -678,6 +680,44 @@ export async function executeWorker(
         durationMs: agentResult?.durationMs ?? 0,
         turnCount: agentResult?.turnCount ?? 0,
       };
+
+      // Record cost to DB before aborting
+      const tu = agentResult.tokenUsage;
+      if (costRepo && (tu.input > 0 || tu.output > 0)) {
+        const costUsd = (tu.input * 3 + tu.output * 15) / 1_000_000;
+        try {
+          costRepo.insert({
+            runId: githubDeps?.runId ?? plan.runId,
+            agentType: config.agent.type,
+            model: config.agent.model,
+            inputTokens: tu.input,
+            outputTokens: tu.output,
+            costUsd,
+            timestamp: new Date().toISOString(),
+          });
+        } catch { /* best-effort */ }
+      }
+
+      // Update run status to cost_ceiling_exceeded
+      if (runRepo) {
+        try {
+          const runId = githubDeps?.runId ?? plan.runId;
+          runRepo.updateStatus(runId, {
+            status: "cost_ceiling_exceeded",
+            completedAt: new Date().toISOString(),
+            error: err.message,
+          });
+        } catch { /* best-effort */ }
+      }
+
+      costCeilingExceeded = true;
+
+      emitRunEvent({
+        runId: plan.runId,
+        type: "failed",
+        timestamp: new Date().toISOString(),
+        data: { reason: "cost_ceiling_exceeded", error: err.message },
+      });
     } else {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -873,5 +913,5 @@ export async function executeWorker(
       });
   }
 
-  return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput };
+  return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput, costCeilingExceeded: costCeilingExceeded || undefined };
 }
