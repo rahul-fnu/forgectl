@@ -199,13 +199,6 @@ export const ConfigSchema = z.object({
 
   merger_app: GitHubAppConfigSchema.optional(),
 
-  daemon: z.object({
-    tunnel: z.object({
-      enabled: z.boolean().default(false),
-      hostname: z.string().optional(),
-    }).default({}),
-  }).default({}),
-
   schedules: z.array(ScheduleEntrySchema).default([]),
 
   merge_daemon: z.object({

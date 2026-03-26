@@ -627,7 +627,6 @@ import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStat
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
-import { tunnelStartCommand, tunnelStopCommand, tunnelStatusCommand } from "./cli/tunnel.js";
 
 const repoCmd = program
   .command("repo")
@@ -768,26 +767,5 @@ program
   .description("Validate a plan response (use - for stdin)")
   .option("--db <path>", "Custom KG database path")
   .action(planValidateResponseCommand);
-
-// forgectl tunnel
-const tunnelCmd = program
-  .command("tunnel")
-  .description("Manage cloudflared tunnel for exposing the daemon");
-
-tunnelCmd
-  .command("start")
-  .description("Start a cloudflared tunnel")
-  .option("-p, --port <port>", "Local port to expose", "4856")
-  .action(tunnelStartCommand);
-
-tunnelCmd
-  .command("stop")
-  .description("Stop the cloudflared tunnel")
-  .action(tunnelStopCommand);
-
-tunnelCmd
-  .command("status")
-  .description("Show tunnel status and URL")
-  .action(tunnelStatusCommand);
 
 program.parse();

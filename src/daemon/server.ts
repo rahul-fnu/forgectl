@@ -1,6 +1,6 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { spawn as cpSpawn, type ChildProcess } from "node:child_process";
 import yaml from "js-yaml";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -344,10 +344,30 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     daemonLogger.info("daemon", "Linear webhook endpoint registered at /api/v1/linear/webhook");
   }
 
-  let tunnelUrl = "";
+  // Serve dashboard UI — find the index.html from src/ui or bundled location
+  const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
+  const uiCandidates = [
+    join(selfDir, "ui", "index.html"),         // bundled alongside dist/
+    join(selfDir, "..", "src", "ui", "index.html"), // running from dist/ in dev
+    join(selfDir, "..", "ui", "index.html"),    // alt layout
+  ];
+  const uiPath = uiCandidates.find((candidate) => existsSync(candidate));
+  const injectToken = (html: string): string =>
+    html.replace("<head>", `<head>\n  <meta name="forgectl-token" content="${daemonToken}" />`);
 
-  app.get("/", async () => {
-    return { name: "forgectl", version: "0.1.0", docs: "/api/v1/" };
+  app.get("/", async (_req, reply) => {
+    if (!uiPath) {
+      reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
+      return;
+    }
+    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
+  });
+  app.get("/ui", async (_req, reply) => {
+    if (!uiPath) {
+      reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
+      return;
+    }
+    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
   });
 
   // Start merge daemon poll loop alongside orchestrator (if merge_daemon or merger_app configured)
@@ -537,67 +557,10 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
-  // Auto-start cloudflared tunnel when configured
-  let tunnelProcess: ChildProcess | null = null;
-  if (config.daemon?.tunnel?.enabled) {
-    try {
-      const hostname = config.daemon.tunnel.hostname;
-      const args = hostname
-        ? ["tunnel", "run", "--hostname", hostname, "--url", `http://127.0.0.1:${port}`]
-        : ["tunnel", "--url", `http://127.0.0.1:${port}`];
-
-      tunnelProcess = cpSpawn("cloudflared", args, { stdio: ["ignore", "pipe", "pipe"] });
-
-      const parseUrl = (data: Buffer): void => {
-        const line = data.toString();
-        const match = line.match(/https?:\/\/[^\s]+\.trycloudflare\.com[^\s]*/);
-        if (match) {
-          tunnelUrl = match[0];
-          daemonLogger.info("tunnel", `Tunnel URL: ${tunnelUrl}`);
-        }
-        if (hostname && !tunnelUrl) {
-          const namedMatch = line.match(/https?:\/\/[^\s]+/);
-          if (namedMatch && namedMatch[0].includes(hostname)) {
-            tunnelUrl = namedMatch[0];
-            daemonLogger.info("tunnel", `Tunnel URL: ${tunnelUrl}`);
-          }
-        }
-      };
-
-      tunnelProcess.stdout?.on("data", parseUrl);
-      tunnelProcess.stderr?.on("data", parseUrl);
-
-      tunnelProcess.on("error", (err) => {
-        daemonLogger.error("tunnel", `Failed to start cloudflared: ${err.message}`);
-        tunnelProcess = null;
-      });
-
-      tunnelProcess.on("exit", (code) => {
-        if (code !== null && code !== 0) {
-          daemonLogger.warn("tunnel", `cloudflared exited with code ${code}`);
-        }
-        tunnelProcess = null;
-      });
-
-      if (hostname) {
-        tunnelUrl = `https://${hostname}`;
-        daemonLogger.info("tunnel", `Tunnel configured with hostname: ${tunnelUrl}`);
-      } else {
-        daemonLogger.info("tunnel", "Starting quick tunnel, waiting for URL...");
-      }
-    } catch (err) {
-      daemonLogger.error("tunnel", `Failed to start tunnel: ${err}`);
-    }
-  }
-
   const shutdown = async () => {
     clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
     watcher?.stop();
-    if (tunnelProcess) {
-      tunnelProcess.kill();
-      tunnelProcess = null;
-    }
     if (orchestrator) {
       await orchestrator.stop();
     }
