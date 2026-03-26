@@ -23,6 +23,15 @@ const DEFAULT_PATTERNS = [
   "your account has reached",
 ];
 
+export class UsageLimitError extends Error {
+  constructor(
+    public readonly detection: DetectionResult,
+  ) {
+    super(`Usage limit detected: ${detection.reason}${detection.matchedPattern ? ` (${detection.matchedPattern})` : ""}`);
+    this.name = "UsageLimitError";
+  }
+}
+
 export class UsageLimitDetector {
   private patterns: string[];
 

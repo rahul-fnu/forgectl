@@ -40,6 +40,8 @@ import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.
 import type { RunCommentData } from "../tracker/linear-comments.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { UsageLimitError } from "../agent/usage-limit-detector.js";
+import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
 
 /**
  * Extract a GitHub repo slug from an issue description.
@@ -328,6 +330,7 @@ export function dispatchIssue(
   kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
+  usageLimitRecovery?: UsageLimitRecovery,
 ): void {
   // Claim issue — if already claimed, skip
   if (!claimIssue(state, issue.id)) {
@@ -395,6 +398,7 @@ export function dispatchIssue(
     kgContext,
     promotedFindings,
     slotManager,
+    usageLimitRecovery,
   );
 }
 
@@ -417,6 +421,7 @@ async function executeWorkerAndHandle(
   kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
+  usageLimitRecovery?: UsageLimitRecovery,
 ): Promise<void> {
   // --- Triage gate: fast pre-dispatch filtering ---
   const triageResult = await triageIssue(issue, state, config);
@@ -1092,6 +1097,21 @@ async function executeWorkerAndHandle(
       }
     }
   } catch (err) {
+    // --- Usage limit recovery ---
+    if (err instanceof UsageLimitError && usageLimitRecovery) {
+      slotManager?.releaseTopLevel(issue.id);
+      logger.warn("dispatcher", `Usage limit hit during ${issue.identifier}: ${err.message}`);
+      await usageLimitRecovery.handleUsageLimitHit(
+        err.detection,
+        issue.id,
+        state,
+        tracker,
+        effectiveConfig,
+        governanceWithRunId?.runRepo,
+      );
+      return;
+    }
+
     // Unexpected error in worker
     const runtimeMs = Date.now() - startedAt;
     state.running.delete(issue.id);

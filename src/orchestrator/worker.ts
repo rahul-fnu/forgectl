@@ -43,6 +43,7 @@ import { BudgetExceededError, checkCostCeiling } from "../agent/budget.js";
 import type { EventRepository } from "../storage/repositories/events.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { generateRunSummary } from "../analysis/run-summary.js";
+import { UsageLimitDetector, UsageLimitError } from "../agent/usage-limit-detector.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -415,6 +416,21 @@ export async function executeWorker(
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
     agentResult = await session.invoke(fullPrompt);
 
+    // --- Usage limit detection ---
+    const usageLimitConfig = config.agent.usage_limit;
+    if (usageLimitConfig?.enabled) {
+      const detector = new UsageLimitDetector({
+        enabled: true,
+        patterns: usageLimitConfig.detection_patterns,
+        hangTimeoutMs: usageLimitConfig.hang_timeout_ms,
+      });
+      const combined = `${agentResult.stdout}\n${agentResult.stderr}`;
+      const detection = detector.checkOutput(combined);
+      if (detection) {
+        throw new UsageLimitError(detection);
+      }
+    }
+
     // --- Cost ceiling check ---
     const ceilingConfig = {
       maxCostUsd: config.agent.max_cost_usd,
@@ -647,6 +663,10 @@ export async function executeWorker(
       logger.warn("worker", `Agent stderr: ${agentResult!.stderr.slice(0, 1000)}`);
     }
   } catch (err) {
+    if (err instanceof UsageLimitError) {
+      // Re-throw so the dispatcher can handle recovery
+      throw err;
+    }
     if (err instanceof BudgetExceededError) {
       logger.error("worker", `Cost ceiling exceeded for ${issue.identifier}: ${err.message}`);
       agentResult = {
