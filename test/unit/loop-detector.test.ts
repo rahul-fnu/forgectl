@@ -19,6 +19,9 @@ vi.mock("../../src/agent/invoke.js", () => ({
 vi.mock("../../src/container/runner.js", () => ({
   execInContainer: vi.fn(),
 }));
+vi.mock("../../src/logging/events.js", () => ({
+  emitRunEvent: vi.fn(),
+}));
 
 describe("agent/loop-detector", () => {
   describe("recordFileWrite", () => {
@@ -188,10 +191,14 @@ describe("validation loop — loop detection integration", () => {
 
   function makePlan(retries = 5) {
     return {
+      runId: "test-loop-run",
       input: { mountPath: "/workspace", mode: "repo" as const, sources: [], exclude: [] },
       validation: {
         steps: [{ name: "lint", command: "npm run lint", retries, description: "" }],
         onFailure: "abandon" as const,
+        maxSameFailures: 999,
+        onRepeatedFailure: "abort" as const,
+        lintSteps: [],
       },
       workflow: { name: "code" },
       agent: { type: "claude-code", maxTurns: 10, timeout: 60000, model: "", flags: [] },
