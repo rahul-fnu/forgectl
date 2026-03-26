@@ -19,6 +19,8 @@ import { cleanupRun } from "../container/cleanup.js";
 import { MetricsCollector } from "./metrics.js";
 import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispatcher.js";
 import { startScheduledQA, type ScheduledQADeps } from "./scheduled-qa.js";
+import { createUsageLimitRecovery, type UsageLimitRecovery } from "./usage-limit-recovery.js";
+import type { CooldownRepository } from "../storage/repositories/cooldown.js";
 
 /** GitHub context passed from webhook handler through to dispatcher. */
 export interface GitHubContext {
@@ -48,6 +50,8 @@ export interface OrchestratorOptions {
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
   /** Promoted review findings to inject as conventions into agent prompts. */
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
+  /** Cooldown state repository for persisting usage limit cooldown across restarts. */
+  cooldownRepo?: CooldownRepository;
 }
 
 /**
@@ -73,6 +77,8 @@ export class Orchestrator {
   private readonly skills: string[];
   private readonly validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
   private promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
+  private readonly cooldownRepo?: CooldownRepository;
+  private usageLimitRecovery: UsageLimitRecovery | null = null;
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private stopQA: (() => void) | null = null;
@@ -98,6 +104,7 @@ export class Orchestrator {
     this.skills = opts.skills ?? [];
     this.validationConfig = opts.validationConfig;
     this.promotedFindings = opts.promotedFindings;
+    this.cooldownRepo = opts.cooldownRepo;
   }
 
   /**
@@ -114,6 +121,12 @@ export class Orchestrator {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn("orchestrator", `Startup recovery failed (continuing): ${msg}`);
+    }
+
+    // Create UsageLimitRecovery
+    this.usageLimitRecovery = createUsageLimitRecovery(this.config, this.logger);
+    if (this.usageLimitRecovery && this.runRepo) {
+      this.usageLimitRecovery.restoreFromDatabase(this.runRepo);
     }
 
     // Start the scheduler tick loop
@@ -137,6 +150,8 @@ export class Orchestrator {
       skills: this.skills,
       validationConfig: this.validationConfig,
       promotedFindings: this.promotedFindings,
+      cooldownRepo: this.cooldownRepo,
+      usageLimitRecovery: this.usageLimitRecovery ?? undefined,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -215,6 +230,9 @@ export class Orchestrator {
     // Stop Scheduled QA
     this.stopQA?.();
     this.stopQA = null;
+
+    // Close usage limit recovery timers
+    this.usageLimitRecovery?.close();
 
     // Clear all pending retry timers
     clearAllRetries(this.state);
@@ -349,6 +367,7 @@ export class Orchestrator {
       undefined,
       this.promotedFindings,
       this.slotManager,
+      this.usageLimitRecovery ?? undefined,
     );
   }
 

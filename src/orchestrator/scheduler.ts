@@ -14,11 +14,14 @@ import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
 import type { ContextResult } from "../context/builder.js";
+import type { CooldownRepository } from "../storage/repositories/cooldown.js";
+import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 import { pruneStaleState } from "./state.js";
 import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
 import { parseCron, cronMatches } from "./cron.js";
+import { probeUsageLimit } from "./usage-limit-probe.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -50,6 +53,12 @@ export interface TickDeps {
   kgDbPath?: string;
   /** Promoted review findings to inject as conventions into agent prompts. */
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
+  /** Cooldown state repository for persisting usage limit cooldown across restarts. */
+  cooldownRepo?: CooldownRepository;
+  /** Timestamp of the last usage limit probe (mutable, updated each tick). */
+  lastProbeAt?: number;
+  /** Usage limit recovery manager for re-dispatching paused tasks. */
+  usageLimitRecovery?: UsageLimitRecovery;
 }
 
 /**
@@ -81,7 +90,74 @@ export async function tick(deps: TickDeps): Promise<void> {
     }
   }
 
-  // Step 1.6: Evaluate cron schedules and inject synthetic issues
+  // Step 1.6a: Check if in cooldown (usage limit). If so, run probe and skip dispatch.
+  if (deps.cooldownRepo) {
+    const cooldownState = deps.cooldownRepo.getCooldownState();
+    if (cooldownState?.active) {
+      const probeIntervalMs = (config.agent.usage_limit.probe_interval_minutes ?? 15) * 60_000;
+      const lastProbe = deps.lastProbeAt ?? 0;
+      const timeSinceProbe = Date.now() - lastProbe;
+
+      if (timeSinceProbe >= probeIntervalMs) {
+        deps.lastProbeAt = Date.now();
+        deps.cooldownRepo.incrementProbeCount();
+
+        let probeSuccess = false;
+        try {
+          probeSuccess = await probeUsageLimit(config, logger);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn("scheduler", `Usage limit probe error: ${msg}`);
+        }
+
+        if (probeSuccess) {
+          deps.cooldownRepo.exitCooldown();
+          logger.info("scheduler", "Usage limit probe succeeded — exiting cooldown");
+
+          // Re-queue paused runs
+          const maxResumes = config.agent.usage_limit.max_resumes ?? 3;
+          const pausedRuns = deps.runRepo?.findByStatus("paused_usage_limit") ?? [];
+          for (const run of pausedRuns) {
+            const ctx = run.pauseContext as { usageLimitPauseCount?: number } | null;
+            const pauseCount = ctx?.usageLimitPauseCount ?? 0;
+            if (pauseCount >= maxResumes) {
+              deps.runRepo!.updateStatus(run.id, {
+                status: "failed",
+                completedAt: new Date().toISOString(),
+                error: "usage_limit_max_resumes",
+              });
+              deps.runRepo!.clearPauseContext(run.id);
+              logger.warn("scheduler", `Run ${run.id} failed — max usage limit resumes (${maxResumes}) exceeded`);
+            } else {
+              deps.runRepo!.updateStatus(run.id, { status: "todo" });
+              deps.runRepo!.clearPauseContext(run.id);
+              logger.info("scheduler", `Re-queued run ${run.id} after usage limit cooldown`);
+
+              // Post tracker comment about restart
+              if (deps.tracker && config.tracker?.comments_enabled !== false) {
+                deps.tracker.postComment(
+                  run.id,
+                  `▶️ **forgectl:** Task restarted after usage limit cooldown (attempt ${pauseCount + 1}/${maxResumes}).`,
+                ).catch(() => { /* best-effort */ });
+              }
+            }
+
+            // Stagger re-queues to avoid immediately hitting the limit again
+            if (pausedRuns.indexOf(run) < pausedRuns.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 30_000));
+            }
+          }
+        } else {
+          logger.info("scheduler", `Usage limit probe failed — staying in cooldown`);
+        }
+      }
+
+      logger.info("scheduler", `Scheduler in cooldown until ${cooldownState.resumeAt ?? "unknown"}`);
+      return;
+    }
+  }
+
+  // Step 1.7: Evaluate cron schedules and inject synthetic issues
   const scheduledIssues = await evaluateSchedules(config, deps.kgDbPath ?? resolveDefaultKgPath(config), logger);
 
   // Step 2: Validate config (tracker must be defined)
@@ -211,7 +287,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {
-    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager, deps.usageLimitRecovery);
   }
 }
 

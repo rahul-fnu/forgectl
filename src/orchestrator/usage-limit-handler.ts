@@ -3,6 +3,7 @@ import type { TrackerAdapter } from "../tracker/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
+import type { CooldownRepository } from "../storage/repositories/cooldown.js";
 import { emitRunEvent } from "../logging/events.js";
 
 export async function handleUsageLimitDetected(
@@ -11,6 +12,7 @@ export async function handleUsageLimitDetected(
   logger: Logger,
   config: ForgectlConfig,
   runRepo?: RunRepository,
+  cooldownRepo?: CooldownRepository,
 ): Promise<void> {
   emitRunEvent({
     runId: "orchestrator",
@@ -19,7 +21,7 @@ export async function handleUsageLimitDetected(
     data: { runningCount: state.running.size },
   });
 
-  const cooldownMinutes = (config as Record<string, unknown>).cooldown_minutes as number | undefined ?? 60;
+  const cooldownMinutes = config.agent?.usage_limit?.cooldown_minutes ?? (config as Record<string, unknown>).cooldown_minutes as number | undefined ?? 60;
   const resumeAfter = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
 
   const entries = [...state.running.entries()];
@@ -82,6 +84,15 @@ export async function handleUsageLimitDetected(
     state.claimed.delete(issueId);
 
     logger.info("usage-limit", `Killed container and paused run for ${workerInfo.identifier}`);
+  }
+
+  // Persist cooldown state to database
+  if (cooldownRepo) {
+    try {
+      cooldownRepo.enterCooldown(resumeAfter);
+    } catch {
+      // best-effort
+    }
   }
 
   emitRunEvent({
