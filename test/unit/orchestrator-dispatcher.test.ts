@@ -264,22 +264,22 @@ describe("dispatchIssue", () => {
     metrics = new MetricsCollector();
   });
 
-  it("returns immediately if issue is already claimed", () => {
+  it("returns immediately if issue is already claimed", async () => {
     const issue = makeIssue({ id: "a" });
     claimIssue(state, "a");
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(executeWorker).not.toHaveBeenCalled();
   });
 
-  it("claims the issue on dispatch", () => {
+  it("claims the issue on dispatch", async () => {
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(state.claimed.has("a")).toBe(true);
   });
 
-  it("calls updateLabels with in_progress_label (best-effort)", () => {
+  it("calls updateLabels with in_progress_label (best-effort)", async () => {
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["in-progress"], []);
   });
 
@@ -464,14 +464,12 @@ describe("dispatchIssue", () => {
     const configWithTriage = makeConfig({ enable_triage: true, triage_max_complexity: 7 });
 
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
+    await dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
 
-    await vi.waitFor(() => {
-      expect(logger.info).toHaveBeenCalledWith(
-        "dispatcher",
-        expect.stringContaining("Triage skipped"),
-      );
-    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "dispatcher",
+      expect.stringContaining("Triage skipped"),
+    );
 
     // Should post a complexity comment
     expect(tracker.postComment).toHaveBeenCalledWith(
@@ -486,7 +484,7 @@ describe("dispatchIssue", () => {
       [],
     );
 
-    // Issue should be released
+    // Issue should never have been claimed (pre-dispatch triage)
     expect(state.claimed.has("a")).toBe(false);
 
     // Worker should NOT be called
@@ -510,11 +508,9 @@ describe("dispatchIssue", () => {
 
     const configWithTriage = makeConfig({ enable_triage: true, triage_max_complexity: 7 });
     const issue = makeIssue({ id: "a" });
-    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
+    await dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics);
 
-    await vi.waitFor(() => {
-      expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["too-complex"], []);
-    });
+    expect(tracker.updateLabels).toHaveBeenCalledWith("a", ["too-complex"], []);
   });
 
   it("stores complexity assessment in run record when governance runRepo is available", async () => {
@@ -553,7 +549,7 @@ describe("dispatchIssue", () => {
     const issue = makeIssue({ id: "a", identifier: "#1" });
     const governance = { runRepo: mockRunRepo };
 
-    dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics, governance);
+    await dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics, governance);
 
     await vi.waitFor(() => {
       expect(mockRunRepo.setComplexityAssessment).toHaveBeenCalledWith("#1", assessment);

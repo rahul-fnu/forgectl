@@ -5,7 +5,7 @@ import { buildHelpMessage, buildErrorMessage } from "./commands.js";
 
 /** Minimal orchestrator interface needed by the command handler. */
 export interface OrchestratorLike {
-  dispatchIssue(issue: TrackerIssue): void;
+  dispatchIssue(issue: TrackerIssue): void | Promise<void>;
   isRunning(): boolean;
 }
 
@@ -147,7 +147,7 @@ export async function handleSlashCommand(
     case "rerun": {
       if (orchestrator) {
         const trackerIssue = contextToTrackerIssue(context);
-        orchestrator.dispatchIssue(trackerIssue);
+        void orchestrator.dispatchIssue(trackerIssue);
       } else {
         await postComment(octokit, context, buildErrorMessage("Orchestrator is not running"));
       }

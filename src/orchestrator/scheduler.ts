@@ -209,9 +209,9 @@ export async function tick(deps: TickDeps): Promise<void> {
     }
   }
 
-  // Step 10: Dispatch up to available slots
+  // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {
-    dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager);
   }
 }
 
