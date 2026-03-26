@@ -1,5 +1,4 @@
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import yaml from "js-yaml";
 import Fastify from "fastify";
@@ -40,9 +39,7 @@ import { mapFrontMatterToConfig } from "../workflow/map-front-matter.js";
 import { ConfigSchema } from "../config/schema.js";
 import type { ValidatedWorkflowFile } from "../workflow/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
-import { startTunnel, type TunnelHandle } from "./tunnel.js";
-
-export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string, enableTunnel = false): Promise<void> {
+export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string): Promise<void> {
   const app = Fastify({ logger: false });
   const corsOrigins: string[] = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
   await app.register(cors, { origin: (origin, cb) => {
@@ -352,32 +349,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     daemonLogger.info("daemon", "Linear webhook endpoint registered at /api/v1/linear/webhook");
   }
 
-  // Serve dashboard UI — find the index.html from src/ui or bundled location
-  const selfDir = typeof import.meta.dirname === "string" ? import.meta.dirname : dirname(fileURLToPath(import.meta.url));
-  const uiCandidates = [
-    join(selfDir, "ui", "index.html"),         // bundled alongside dist/
-    join(selfDir, "..", "src", "ui", "index.html"), // running from dist/ in dev
-    join(selfDir, "..", "ui", "index.html"),    // alt layout
-  ];
-  const uiPath = uiCandidates.find((candidate) => existsSync(candidate));
-  const injectToken = (html: string): string =>
-    html.replace("<head>", `<head>\n  <meta name="forgectl-token" content="${daemonToken}" />`);
-
-  app.get("/", async (_req, reply) => {
-    if (!uiPath) {
-      reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
-      return;
-    }
-    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
-  });
-  app.get("/ui", async (_req, reply) => {
-    if (!uiPath) {
-      reply.type("text/html").send("<h1>forgectl dashboard</h1><p>UI file not found</p>");
-      return;
-    }
-    reply.type("text/html").send(injectToken(readFileSync(uiPath, "utf-8")));
-  });
-
   // Start merge daemon poll loop alongside orchestrator (if merge_daemon or merger_app configured)
   let mergeDaemonRunning = false;
   const stopMergeDaemon = { fn: (): void => { mergeDaemonRunning = false; } };
@@ -565,27 +536,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
-  // Start cloudflared tunnel if enabled (via CLI flag or config)
-  let tunnel: TunnelHandle | null = null;
-  const tunnelEnabled = enableTunnel || config.tunnel?.enabled;
-  if (tunnelEnabled) {
-    try {
-      tunnel = await startTunnel({
-        port,
-        cloudflaredPath: config.tunnel?.cloudflared_path,
-        logger: daemonLogger,
-      });
-      corsOrigins.push(tunnel.url);
-      console.log(`Tunnel URL: ${tunnel.url}`);
-      console.log(`Remote access: ${tunnel.url}?token=${daemonToken}`);
-    } catch (err) {
-      daemonLogger.error("tunnel", `Failed to start tunnel: ${err}`);
-      console.error(`Tunnel failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
   const shutdown = async () => {
-    tunnel?.stop();
     clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
     watcher?.stop();
