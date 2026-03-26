@@ -62,6 +62,12 @@ function detectWorkflow(options: CLIOptions): string {
   // Check if cwd is a git repo
   try {
     execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
+    // Auto-detect language-specific code workflow
+    const cwd = resolve(options.repo || ".");
+    const lang = detectLanguage(cwd);
+    if (lang === "python") return "code-python";
+    if (lang === "go") return "code-go";
+    if (lang === "rust") return "code-rust";
     return "code";
   } catch {
     return "general";
