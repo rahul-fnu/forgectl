@@ -21,7 +21,7 @@ import {
   boardListCommand,
   boardShowCommand,
 } from "./cli/board.js";
-import { inspectCommand } from "./cli/inspect.js";
+import { inspectCommand, summaryCommand } from "./cli/inspect.js";
 import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
 import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
@@ -124,6 +124,12 @@ program
   .command("inspect <runId>")
   .description("Show the full audit trail for a run")
   .action(inspectCommand);
+
+// forgectl summary
+program
+  .command("summary <runId>")
+  .description("Show the structured summary for a run")
+  .action(summaryCommand);
 
 // forgectl costs
 program
