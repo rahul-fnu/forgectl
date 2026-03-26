@@ -127,6 +127,13 @@
       "when": 1774074000000,
       "tag": "0016_usage_limit_pause",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1774160400000,
+      "tag": "0016_cooldown_state_table",
+      "breakpoints": true
     }
   ]
 }

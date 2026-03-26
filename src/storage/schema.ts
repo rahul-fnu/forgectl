@@ -163,6 +163,14 @@ export const reviewMetrics = sqliteTable(
   (table) => [unique().on(table.repo, table.prNumber, table.reviewRound)]
 );
 
+export const cooldownState = sqliteTable("cooldown_state", {
+  id: integer("id").primaryKey().default(1),
+  active: integer("active").notNull().default(0),
+  enteredAt: text("entered_at"),
+  resumeAt: text("resume_at"),
+  probeCount: integer("probe_count").default(0),
+});
+
 export const reviewCalibration = sqliteTable(
   "review_calibration",
   {
