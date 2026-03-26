@@ -1011,6 +1011,21 @@ async function executeWorkerAndHandle(
           });
         }
       }
+    } else if (result.costCeilingExceeded) {
+      // Cost ceiling exceeded — terminal, no retries
+      logger.warn("dispatcher", `Cost ceiling exceeded for ${issue.identifier} — not retrying`);
+
+      if (commentsEnabled) {
+        const ceilingComment = `**forgectl:** Run aborted — cost ceiling exceeded. Not retrying.\n\n\`\`\`\n${result.agentResult.stderr}\n\`\`\``;
+        tracker.postComment(issue.id, ceilingComment).catch(() => {});
+      }
+
+      tracker
+        .updateLabels(issue.id, [], [orchestratorConfig.in_progress_label])
+        .catch(() => {});
+
+      cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
+      releaseIssue(state, issue.id);
     } else {
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
