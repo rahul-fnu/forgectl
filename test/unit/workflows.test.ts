@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { getWorkflow, listWorkflowNames, listWorkflows } from "../../src/workflow/registry.js";
 
 describe("workflow registry", () => {
-  it("lists all 7 built-in workflow names", () => {
+  it("lists all 10 built-in workflow names", () => {
     const names = listWorkflowNames();
     expect(names).toContain("code");
     expect(names).toContain("research");
@@ -11,12 +11,15 @@ describe("workflow registry", () => {
     expect(names).toContain("ops");
     expect(names).toContain("general");
     expect(names).toContain("browser-research");
-    expect(names).toHaveLength(7);
+    expect(names).toContain("code-python");
+    expect(names).toContain("code-go");
+    expect(names).toContain("code-rust");
+    expect(names).toHaveLength(10);
   });
 
-  it("lists all 7 built-in workflow definitions", () => {
+  it("lists all 10 built-in workflow definitions", () => {
     const workflows = listWorkflows();
-    expect(workflows).toHaveLength(7);
+    expect(workflows).toHaveLength(10);
     for (const w of workflows) {
       expect(w.name).toBeTruthy();
       expect(w.container.image).toBeTruthy();
@@ -86,6 +89,36 @@ describe("workflow registry", () => {
     expect(workflow.validation.steps).toHaveLength(3);
     expect(workflow.review.enabled).toBe(true);
     expect(workflow.autonomy).toBe("full");
+  });
+
+  it("getWorkflow('code-python') returns valid definition", () => {
+    const workflow = getWorkflow("code-python");
+    expect(workflow.name).toBe("code-python");
+    expect(workflow.container.image).toBe("forgectl/code-python312");
+    expect(workflow.input.mode).toBe("repo");
+    expect(workflow.output.mode).toBe("git");
+    expect(workflow.validation.steps.length).toBeGreaterThan(0);
+    expect(workflow.review.enabled).toBe(true);
+  });
+
+  it("getWorkflow('code-go') returns valid definition", () => {
+    const workflow = getWorkflow("code-go");
+    expect(workflow.name).toBe("code-go");
+    expect(workflow.container.image).toBe("forgectl/code-go122");
+    expect(workflow.input.mode).toBe("repo");
+    expect(workflow.output.mode).toBe("git");
+    expect(workflow.validation.steps.length).toBeGreaterThan(0);
+    expect(workflow.review.enabled).toBe(true);
+  });
+
+  it("getWorkflow('code-rust') returns valid definition", () => {
+    const workflow = getWorkflow("code-rust");
+    expect(workflow.name).toBe("code-rust");
+    expect(workflow.container.image).toBe("forgectl/code-rust");
+    expect(workflow.input.mode).toBe("repo");
+    expect(workflow.output.mode).toBe("git");
+    expect(workflow.validation.steps.length).toBeGreaterThan(0);
+    expect(workflow.review.enabled).toBe(true);
   });
 
   it("getWorkflow('nonexistent') throws", () => {

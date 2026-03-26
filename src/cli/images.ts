@@ -57,6 +57,9 @@ const LANGUAGE_IMAGE_MAP: Record<string, string> = {
   python: "forgectl/code-python312",
   go: "forgectl/code-go122",
   rust: "forgectl/code-rust",
+  "code-python": "forgectl/code-python312",
+  "code-go": "forgectl/code-go122",
+  "code-rust": "forgectl/code-rust",
 };
 
 function resolveImageForWorkflow(workflowName: string): ImageInfo | undefined {

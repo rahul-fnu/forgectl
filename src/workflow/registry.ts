@@ -6,6 +6,9 @@ import { dataWorkflow } from "./builtins/data.js";
 import { opsWorkflow } from "./builtins/ops.js";
 import { generalWorkflow } from "./builtins/general.js";
 import { browserResearchWorkflow } from "./builtins/browser-research.js";
+import { codePythonWorkflow } from "./builtins/code-python.js";
+import { codeGoWorkflow } from "./builtins/code-go.js";
+import { codeRustWorkflow } from "./builtins/code-rust.js";
 import { loadCustomWorkflows } from "./custom.js";
 import { deepMerge } from "../config/loader.js";
 
@@ -17,6 +20,9 @@ const BUILTINS: Record<string, WorkflowDefinition> = {
   ops: opsWorkflow,
   general: generalWorkflow,
   "browser-research": browserResearchWorkflow,
+  "code-python": codePythonWorkflow,
+  "code-go": codeGoWorkflow,
+  "code-rust": codeRustWorkflow,
 };
 
 /**
