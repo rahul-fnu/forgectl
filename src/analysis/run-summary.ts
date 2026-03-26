@@ -1,7 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import type { EventRepository, EventRow } from "../storage/repositories/events.js";
 import type { CostRepository, CostSummary } from "../storage/repositories/costs.js";
 import type { RunSummary } from "../storage/repositories/runs.js";
@@ -60,26 +57,20 @@ export async function generateRunSummary(
   const keyEvents = filterKeyEvents(events);
   const promptText = buildPromptText(keyEvents, costSummary);
 
-  const promptFile = join(tmpdir(), `forgectl-summary-${runId}.txt`);
-  try {
-    writeFileSync(promptFile, promptText);
-    const output = execFileSync("claude", [
-      "--model", "claude-haiku-4-5-20251001",
-      "-p", promptFile,
-      "--output-format", "json",
-      "--max-turns", "1",
-    ], { encoding: "utf-8", timeout: 30_000 });
+  const output = execFileSync("claude", [
+    "--model", "claude-haiku-4-5-20251001",
+    "-p", promptText,
+    "--output-format", "json",
+    "--max-turns", "1",
+  ], { encoding: "utf-8", timeout: 30_000 });
 
-    const parsed = JSON.parse(output);
-    return {
-      approach: String(parsed.approach ?? ""),
-      keyActions: String(parsed.keyActions ?? ""),
-      obstacles: String(parsed.obstacles ?? ""),
-      retries: String(parsed.retries ?? ""),
-      outcome: String(parsed.outcome ?? ""),
-      tokenEfficiency: String(parsed.tokenEfficiency ?? ""),
-    };
-  } finally {
-    try { unlinkSync(promptFile); } catch { /* best-effort cleanup */ }
-  }
+  const parsed = JSON.parse(output);
+  return {
+    approach: String(parsed.approach ?? ""),
+    keyActions: String(parsed.keyActions ?? ""),
+    obstacles: String(parsed.obstacles ?? ""),
+    retries: String(parsed.retries ?? ""),
+    outcome: String(parsed.outcome ?? ""),
+    tokenEfficiency: String(parsed.tokenEfficiency ?? ""),
+  };
 }
