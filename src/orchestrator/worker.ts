@@ -374,6 +374,7 @@ export async function executeWorker(
   let checkRunId: number | undefined;
   let pendingApproval = false;
   let reviewOutput: ReviewOutput | undefined;
+  let prUrl: string | undefined;
 
   // Create check run at start (if headSha available)
   if (githubDeps?.headSha && githubDeps?.repoContext) {
@@ -742,7 +743,7 @@ export async function executeWorker(
         agent: runResult.agent ?? "unknown",
       };
       // Create PR if it doesn't exist, then update description
-      await createPRForBranch(
+      const prNumber = await createPRForBranch(
         githubDeps.octokit as any,
         githubDeps.repoContext.owner,
         githubDeps.repoContext.repo,
@@ -750,6 +751,9 @@ export async function executeWorker(
         issue.title,
         prData,
       );
+      if (prNumber != null) {
+        prUrl = `https://github.com/${githubDeps.repoContext.owner}/${githubDeps.repoContext.repo}/pull/${prNumber}`;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Failed to update PR description: ${msg}`);
@@ -816,6 +820,7 @@ export async function executeWorker(
           ? { input: agentResult.tokenUsage.input, output: agentResult.tokenUsage.output }
           : undefined,
         costUsd,
+        prUrl,
         validationResults: validationResult?.stepResults?.map((sr) => ({
           name: sr.name,
           passed: sr.passed,

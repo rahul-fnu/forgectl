@@ -120,6 +120,13 @@
       "when": 1773987600000,
       "tag": "0015_run_summary_column",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1774074000000,
+      "tag": "0016_usage_limit_pause",
+      "breakpoints": true
     }
   ]
 }

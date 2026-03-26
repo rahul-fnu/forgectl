@@ -47,7 +47,7 @@ export async function createContainer(
 export async function execInContainer(
   container: Docker.Container,
   cmd: string[],
-  options?: { env?: string[]; user?: string; workingDir?: string; timeout?: number }
+  options?: { env?: string[]; user?: string; workingDir?: string; timeout?: number; onOutput?: (chunk: string, stream: "stdout" | "stderr") => void }
 ): Promise<ExecResult> {
   const start = Date.now();
 
@@ -69,8 +69,14 @@ export async function execInContainer(
     // dockerode multiplexes stdout/stderr on the same stream
     // We need to demux it
     docker.modem.demuxStream(stream,
-      { write: (chunk: Buffer) => stdoutChunks.push(chunk) } as unknown as NodeJS.WritableStream,
-      { write: (chunk: Buffer) => stderrChunks.push(chunk) } as unknown as NodeJS.WritableStream
+      { write: (chunk: Buffer) => {
+        stdoutChunks.push(chunk);
+        options?.onOutput?.(chunk.toString("utf-8"), "stdout");
+      } } as unknown as NodeJS.WritableStream,
+      { write: (chunk: Buffer) => {
+        stderrChunks.push(chunk);
+        options?.onOutput?.(chunk.toString("utf-8"), "stderr");
+      } } as unknown as NodeJS.WritableStream
     );
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -105,6 +111,13 @@ export async function execInContainer(
 export async function destroyContainer(container: Docker.Container): Promise<void> {
   try { await container.stop({ t: 5 }); } catch { /* ignore */ }
   try { await container.remove({ force: true }); } catch { /* ignore */ }
+}
+
+export class UsageLimitError extends Error {
+  constructor(message = "Claude Code usage limit detected") {
+    super(message);
+    this.name = "UsageLimitError";
+  }
 }
 
 export function parseMemory(mem: string): number {
