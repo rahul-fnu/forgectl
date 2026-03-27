@@ -226,6 +226,11 @@ export const ConfigSchema = z.object({
     branch_pattern: z.string().default("forge/*"),
   }).optional(),
 
+  reactive: z.object({
+    auto_create_issues: z.boolean().default(true),
+    max_issues_per_day: z.number().int().positive().default(5),
+  }).optional(),
+
   scheduled_qa: z.object({
     enabled: z.boolean().default(false),
     interval_ms: z.number().int().positive().default(86_400_000), // 24 hours
