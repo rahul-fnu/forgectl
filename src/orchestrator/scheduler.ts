@@ -218,11 +218,9 @@ export async function tick(deps: TickDeps): Promise<void> {
     return scoreB - scoreA;
   });
 
-  // Step 6: Get available slots — use state.running.size as ground truth
-  // (TwoTierSlotManager.registerTopLevel/releaseTopLevel are not wired up yet,
-  // so slotManager always reports full availability. Use state.running instead.)
-  const maxSlots = config.orchestrator?.max_concurrent_agents ?? 3;
-  const available = Math.max(0, maxSlots - state.running.size);
+  // Step 6: Get available slots from TwoTierSlotManager
+  // (dispatcher calls registerTopLevel/releaseTopLevel to keep it in sync)
+  const available = slotManager.availableTopLevelSlots();
 
   // Step 7: Build governance opts if runRepo available
   const governance: GovernanceOpts | undefined = deps.runRepo
