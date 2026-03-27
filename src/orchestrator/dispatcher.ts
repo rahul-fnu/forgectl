@@ -334,6 +334,7 @@ export async function dispatchIssue(
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
+  alertManager?: import("../alerting/manager.js").AlertManager,
 ): Promise<void> {
   // --- Pre-dispatch triage gate: score complexity before claiming ---
   const triageResult = await triageIssue(issue, state, config);
@@ -638,8 +639,7 @@ async function executeWorkerAndHandle(
       governanceWithRunId?.costRepo,
       outcomeDeps?.eventRepo,
       governanceWithRunId?.runRepo,
-      governanceWithRunId?.traceRepo,
-      traceId,
+      alertManager,
     );
 
     // Remove from running

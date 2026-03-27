@@ -16,6 +16,7 @@ import type { GitHubContext } from "./dispatcher.js";
 import type { ContextResult } from "../context/builder.js";
 import type { CooldownRepository } from "../storage/repositories/cooldown.js";
 import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
+import type { AlertManager } from "../alerting/manager.js";
 import { reconcile } from "./reconciler.js";
 import { filterCandidates, sortCandidates, dispatchIssue, type GovernanceOpts } from "./dispatcher.js";
 import { pruneStaleState } from "./state.js";
@@ -59,6 +60,8 @@ export interface TickDeps {
   lastProbeAt?: number;
   /** Usage limit recovery manager for re-dispatching paused tasks. */
   usageLimitRecovery?: UsageLimitRecovery;
+  /** Alert manager for webhook/Slack notifications. */
+  alertManager?: AlertManager;
 }
 
 /**
@@ -285,7 +288,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {
-    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager, deps.usageLimitRecovery);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager, deps.usageLimitRecovery, deps.alertManager);
   }
 }
 

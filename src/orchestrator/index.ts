@@ -21,6 +21,7 @@ import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispa
 import { startScheduledQA, type ScheduledQADeps } from "./scheduled-qa.js";
 import { createUsageLimitRecovery, type UsageLimitRecovery } from "./usage-limit-recovery.js";
 import type { CooldownRepository } from "../storage/repositories/cooldown.js";
+import { AlertManager } from "../alerting/manager.js";
 
 /** GitHub context passed from webhook handler through to dispatcher. */
 export interface GitHubContext {
@@ -79,6 +80,7 @@ export class Orchestrator {
   private promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
   private readonly cooldownRepo?: CooldownRepository;
   private usageLimitRecovery: UsageLimitRecovery | null = null;
+  private readonly alertManager: AlertManager;
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private stopQA: (() => void) | null = null;
@@ -105,6 +107,7 @@ export class Orchestrator {
     this.validationConfig = opts.validationConfig;
     this.promotedFindings = opts.promotedFindings;
     this.cooldownRepo = opts.cooldownRepo;
+    this.alertManager = new AlertManager(opts.config.alerting ?? {});
   }
 
   /**
@@ -152,6 +155,7 @@ export class Orchestrator {
       promotedFindings: this.promotedFindings,
       cooldownRepo: this.cooldownRepo,
       usageLimitRecovery: this.usageLimitRecovery ?? undefined,
+      alertManager: this.alertManager,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -368,6 +372,7 @@ export class Orchestrator {
       this.promotedFindings,
       this.slotManager,
       this.usageLimitRecovery ?? undefined,
+      this.alertManager,
     );
   }
 
