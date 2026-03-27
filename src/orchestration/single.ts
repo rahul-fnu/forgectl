@@ -290,13 +290,21 @@ export async function executeSingleAgent(
     if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
 
     // --- Phase: Lint Gate ---
+    const lintOnOutput = (chunk: string, stream: "stdout" | "stderr") => {
+      emitRunEvent({
+        runId: plan.runId,
+        type: "agent_output",
+        timestamp: new Date().toISOString(),
+        data: { stream, chunk, phase: "lint_fix" },
+      });
+    };
     let lintGateResult: LintGateResult | undefined;
     if (plan.validation.lintSteps.length > 0) {
       emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "lint" } });
       logger.info("validation", `Running ${plan.validation.lintSteps.length} lint steps...`);
       lintGateResult = await runLintGate(
         container, plan.validation.lintSteps, plan.input.mountPath,
-        adapter, agentOptions, agentEnv, logger,
+        adapter, agentOptions, agentEnv, logger, lintOnOutput,
       );
       if (!lintGateResult.passed) {
         logger.error("validation", `Lint gate failed after ${lintGateResult.lintIterations} iterations`);
@@ -391,7 +399,7 @@ export async function executeSingleAgent(
         if (plan.validation.lintSteps.length > 0) {
           const reLint = await runLintGate(
             container, plan.validation.lintSteps, plan.input.mountPath,
-            adapter, agentOptions, agentEnv, logger,
+            adapter, agentOptions, agentEnv, logger, lintOnOutput,
           );
           if (!reLint.passed) {
             logger.warn("review-agent", "Lint gate failed after review fix — stopping self-addressing");
