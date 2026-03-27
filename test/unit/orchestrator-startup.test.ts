@@ -53,7 +53,7 @@ function makeWorkspaceManager(overrides: Partial<WorkspaceManager> = {}): Worksp
 
 function makeConfig(overrides: Partial<ForgectlConfig> = {}): ForgectlConfig {
   return {
-    agent: { type: "claude-code", model: "", max_turns: 50, timeout: "30m", flags: [] },
+    agent: { type: "claude-code", model: "", max_turns: 50, timeout: "30m", flags: [], usage_limit: { enabled: false } },
     container: {
       image: undefined,
       dockerfile: undefined,

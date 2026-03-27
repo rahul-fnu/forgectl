@@ -272,6 +272,7 @@ describe("dispatchIssue", () => {
   });
 
   it("claims the issue on dispatch", async () => {
+    vi.mocked(executeWorker).mockReturnValue(new Promise(() => {}));
     const issue = makeIssue({ id: "a" });
     await dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
     expect(state.claimed.has("a")).toBe(true);
@@ -547,7 +548,7 @@ describe("dispatchIssue", () => {
 
     const configWithTriage = makeConfig({ enable_triage: true });
     const issue = makeIssue({ id: "a", identifier: "#1" });
-    const governance = { runRepo: mockRunRepo };
+    const governance = { runRepo: mockRunRepo, runId: "#1" };
 
     await dispatchIssue(issue, state, tracker, configWithTriage, workspaceManager, "prompt", logger, metrics, governance);
 

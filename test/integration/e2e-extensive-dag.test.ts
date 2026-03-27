@@ -29,6 +29,11 @@ vi.mock("../../src/logging/events.js", () => ({
   runEvents: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
 }));
 
+// Mock triage module
+vi.mock("../../src/orchestrator/triage.js", () => ({
+  triageIssue: vi.fn().mockResolvedValue({ shouldDispatch: true, reason: "triage disabled" }),
+}));
+
 // Import after mocks
 import {
   dispatchIssue,
@@ -580,7 +585,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
       expect(available).toBe(4);
 
       for (const issue of sorted.slice(0, available)) {
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       }
 
       // Both roots (A1, C1) should be dispatched
@@ -605,7 +610,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
 
       const available = slotManager.availableSlots(state.running);
       for (const issue of sorted.slice(0, available)) {
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       }
 
       // All 4 mid-layer issues dispatched in parallel
@@ -632,7 +637,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
       expect(available).toBe(2);
 
       for (const issue of sorted.slice(0, available)) {
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       }
 
       // Only first 2 sorted (by priority then time) should be dispatched
@@ -653,7 +658,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
         makeSuccessResult("forge/a1-db-schema"),
       );
 
-      dispatchIssue(issues[0], state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issues[0], state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       await vi.waitFor(() => {
         expect(state.issueBranches.has("A1")).toBe(true);
@@ -686,7 +691,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
           makeSuccessResult(branches[issue.id]),
         );
 
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
         await vi.waitFor(() => {
           expect(state.issueBranches.has(issue.id)).toBe(true);
@@ -871,7 +876,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
           shared.executeWorkerMock.mockResolvedValueOnce(
             makeSuccessResult(`forge/${issue.id.toLowerCase()}`),
           );
-          dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+          await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
           dispatchedIds.push(issue.id);
         }
 
@@ -953,7 +958,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
           shared.executeWorkerMock.mockResolvedValueOnce(
             makeSuccessResult(`forge/${issue.id.toLowerCase()}`),
           );
-          dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+          await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
           waveIds.push(issue.id);
         }
 
@@ -1011,7 +1016,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
           shared.executeWorkerMock.mockResolvedValueOnce(
             makeSuccessResult(`forge/${issue.id.toLowerCase()}`),
           );
-          dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+          await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
           waveIds.push(issue.id);
         }
 

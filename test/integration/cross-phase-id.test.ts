@@ -30,6 +30,11 @@ vi.mock("../../src/logging/events.js", () => ({
   runEvents: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
 }));
 
+// Mock triage module
+vi.mock("../../src/orchestrator/triage.js", () => ({
+  triageIssue: vi.fn().mockResolvedValue({ shouldDispatch: true, reason: "triage disabled" }),
+}));
+
 // Mock cleanup
 vi.mock("../../src/container/cleanup.js", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -122,9 +127,9 @@ describe("Cross-phase ID correctness", () => {
   });
 
   describe("Dispatcher passes number-based issue.id to tracker mutations", () => {
-    it("updateLabels receives issue number '42' for in_progress label", () => {
+    it("updateLabels receives issue number '42' for in_progress label", async () => {
       const issue = makeIssue();
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "prompt", logger, metrics);
 
       expect(tracker.updateLabels).toHaveBeenCalledWith("42", ["in-progress"], []);
     });

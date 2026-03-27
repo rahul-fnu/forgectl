@@ -27,6 +27,11 @@ vi.mock("../../src/logging/events.js", () => ({
   runEvents: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
 }));
 
+// Mock triage module
+vi.mock("../../src/orchestrator/triage.js", () => ({
+  triageIssue: vi.fn().mockResolvedValue({ shouldDispatch: true, reason: "triage disabled" }),
+}));
+
 // Import after mocks
 import { dispatchIssue, filterCandidates, sortCandidates } from "../../src/orchestrator/dispatcher.js";
 import { reconcile } from "../../src/orchestrator/reconciler.js";
@@ -241,7 +246,7 @@ describe("E2E Orchestration", () => {
       shared.executeWorkerMock.mockResolvedValueOnce(successResult);
 
       // Dispatch the issue
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       // Issue should be claimed and running
       expect(state.claimed.has("1")).toBe(true);
@@ -262,7 +267,7 @@ describe("E2E Orchestration", () => {
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       // Wait for auto-close and done label
       await vi.waitFor(() => {
@@ -289,7 +294,7 @@ describe("E2E Orchestration", () => {
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       await vi.waitFor(() => {
         expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(1);
@@ -310,7 +315,7 @@ describe("E2E Orchestration", () => {
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       // Wait for issue to be released (agent completes)
       await vi.waitFor(() => {
@@ -334,7 +339,7 @@ describe("E2E Orchestration", () => {
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeSuccessResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       await vi.waitFor(() => {
         expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(1);
@@ -356,7 +361,7 @@ describe("E2E Orchestration", () => {
       // First call fails, triggers retry
       shared.executeWorkerMock.mockResolvedValueOnce(makeFailedResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       await vi.waitFor(() => {
         expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(1);
@@ -379,7 +384,7 @@ describe("E2E Orchestration", () => {
 
       shared.executeWorkerMock.mockResolvedValueOnce(makeFailedResult());
 
-      dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
 
       await vi.waitFor(() => {
         expect(tracker.calls.postComment.length).toBeGreaterThanOrEqual(2);
@@ -517,7 +522,7 @@ describe("E2E Orchestration", () => {
 
       // Dispatch up to slot limit
       for (const issue of sorted.slice(0, available)) {
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       }
 
       // Only 2 should be claimed and running
@@ -546,7 +551,7 @@ describe("E2E Orchestration", () => {
       // Dispatch first two
       const firstBatch = issues.slice(0, 2);
       for (const issue of firstBatch) {
-        dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+        await dispatchIssue(issue, state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       }
 
       expect(state.claimed.size).toBe(2);
@@ -564,7 +569,7 @@ describe("E2E Orchestration", () => {
       const remainingCandidates = filterCandidates([issues[2]], state, new Set());
       expect(remainingCandidates).toHaveLength(1);
 
-      dispatchIssue(issues[2], state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
+      await dispatchIssue(issues[2], state, tracker, config, workspaceManager, "Fix: {{title}}", logger, metrics);
       expect(state.claimed.has("12")).toBe(true);
     });
 
