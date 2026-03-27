@@ -130,6 +130,7 @@ describe("Governance wiring", () => {
         config: {
           orchestrator: { max_concurrent_agents: 3, poll_interval_ms: 30000, drain_timeout_ms: 5000 },
           tracker: { terminal_states: [] },
+          agent: { usage_limit: { enabled: false } },
         } as unknown as ForgectlConfig,
         promptTemplate: "test",
         logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
@@ -171,6 +172,7 @@ describe("Governance wiring", () => {
         config: {
           orchestrator: { max_concurrent_agents: 3, poll_interval_ms: 30000, drain_timeout_ms: 5000 },
           tracker: { terminal_states: [] },
+          agent: { usage_limit: { enabled: false } },
         } as unknown as ForgectlConfig,
         promptTemplate: "test",
         logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,

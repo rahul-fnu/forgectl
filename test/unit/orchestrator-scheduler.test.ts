@@ -360,9 +360,10 @@ describe("startScheduler", () => {
   });
 
   /** Flush microtasks so async tick() fully completes and schedules its setTimeout.
-   *  50 iterations is empirically sufficient to drain the microtask queue for tick() + setTimeout promise chain. */
+   *  200 iterations is empirically sufficient to drain the microtask queue for tick() + setTimeout promise chain
+   *  (tick now has dynamic imports for evaluateSchedules, KG context building, etc.). */
   async function flushTick(): Promise<void> {
-    for (let i = 0; i < 50; i++) await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 200; i++) await vi.advanceTimersByTimeAsync(0);
   }
 
   it("returns a stop function", () => {
