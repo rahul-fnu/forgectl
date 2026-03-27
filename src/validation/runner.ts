@@ -84,10 +84,23 @@ export async function runValidationLoop(
 
     for (const step of steps) {
       logger.debug("validation", `Running: ${step.name} — ${step.command}`);
+      emitRunEvent({
+        runId: plan.runId,
+        type: "validation_step_started",
+        timestamp: new Date().toISOString(),
+        data: { step: step.name, attempt },
+      });
       const result = await runValidationStep(container, step, plan.input.mountPath);
       results.push(result);
       stepAttemptCounts[step.name]++;
       stepLastPassed[step.name] = result.passed;
+
+      emitRunEvent({
+        runId: plan.runId,
+        type: "validation_step_completed",
+        timestamp: new Date().toISOString(),
+        data: { step: step.name, attempt, passed: result.passed, durationMs: result.durationMs },
+      });
 
       if (result.passed) {
         logger.info("validation", `✔ ${step.name} passed (${result.durationMs}ms)`);
@@ -220,6 +233,12 @@ export async function runValidationLoop(
     }
 
     // Re-invoke agent with feedback
+    emitRunEvent({
+      runId: plan.runId,
+      type: "agent_retry",
+      timestamp: new Date().toISOString(),
+      data: { attempt, failedSteps: failedSteps.map(s => s.name) },
+    });
     logger.info("agent", "Agent fixing validation failures...");
     const fixResult = await invokeAgent(
       container, adapter, feedback, agentOptions, agentEnv, `fix-${attempt}`

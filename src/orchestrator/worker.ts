@@ -404,6 +404,14 @@ export async function executeWorker(
     // 6. Create agent session with onActivity callback for stall detection
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
       onActivity,
+      onOutput: (chunk, stream) => {
+        emitRunEvent({
+          runId: plan.runId,
+          type: "agent_output",
+          timestamp: new Date().toISOString(),
+          data: { stream, chunk },
+        });
+      },
     });
 
     // 6.5. Record pre-agent HEAD so we can detect agent changes later
@@ -417,6 +425,14 @@ export async function executeWorker(
     // 7. Invoke agent with full prompt (includes validation step descriptions)
     const fullPrompt = buildPrompt(plan, promotedFindings ? { kgContext, promotedFindings } : kgContext);
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
+
+    emitRunEvent({
+      runId: plan.runId,
+      type: "agent_started",
+      timestamp: new Date().toISOString(),
+      data: { issueId: issue.id, identifier: issue.identifier, attempt },
+    });
+
     agentResult = await session.invoke(fullPrompt);
 
     // --- Usage limit detection ---

@@ -22,6 +22,7 @@ import type { AnalyticsRepository } from "../storage/repositories/analytics.js";
 import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
+import type { EventRepository } from "../storage/repositories/events.js";
 
 interface InlineContext {
   name: string;
@@ -38,6 +39,8 @@ interface RouteServices {
   outcomeRepo?: OutcomeRepository;
   analyticsRepo?: AnalyticsRepository;
   budgetConfig?: BudgetConfig;
+  eventRepo?: EventRepository;
+  authToken?: string;
 }
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
@@ -50,6 +53,8 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const outcomeRepo = services.outcomeRepo;
   const analyticsRepo = services.analyticsRepo;
   const budgetConfig = services.budgetConfig;
+  const eventRepo = services.eventRepo;
+  const authToken = services.authToken;
 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -465,6 +470,61 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
 
     return card.runHistory;
   });
+
+  // --- SSE stream for a run's real-time events (auth via query param) ---
+  app.get<{ Params: { id: string }; Querystring: { token?: string } }>(
+    "/api/v1/runs/:id/stream",
+    async (request, reply) => {
+      if (authToken && request.query.token !== authToken) {
+        reply.code(401);
+        return { error: { code: "UNAUTHORIZED", message: "Invalid or missing token" } };
+      }
+
+      const runId = request.params.id;
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+
+      const handler = (event: RunEvent) => {
+        try {
+          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch {
+          // Client may have disconnected
+        }
+      };
+
+      runEvents.on(`run:${runId}`, handler);
+
+      request.raw.on("close", () => {
+        runEvents.off(`run:${runId}`, handler);
+      });
+    },
+  );
+
+  // --- Historical events for a run ---
+  app.get<{ Params: { id: string }; Querystring: { token?: string; type?: string } }>(
+    "/api/v1/runs/:id/events",
+    async (request, reply) => {
+      if (authToken && request.query.token !== authToken) {
+        reply.code(401);
+        return { error: { code: "UNAUTHORIZED", message: "Invalid or missing token" } };
+      }
+
+      if (!eventRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Event repository not available" } };
+      }
+
+      const runId = request.params.id;
+      const type = request.query.type;
+      const events = type
+        ? eventRepo.findByRunIdAndType(runId, type)
+        : eventRepo.findByRunId(runId);
+      return events;
+    },
+  );
 
   // --- Run Summary API ---
   app.get<{ Params: { id: string } }>("/api/v1/runs/:id/summary", async (request, reply) => {

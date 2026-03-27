@@ -17,7 +17,6 @@ import { createCostRepository } from "../storage/repositories/costs.js";
 import { createRetryRepository } from "../storage/repositories/retries.js";
 import { createEventRepository } from "../storage/repositories/events.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
-import { createAnalyticsRepository } from "../storage/repositories/analytics.js";
 import { EventRecorder } from "../logging/recorder.js";
 import { resolveRunPlan } from "../workflow/resolver.js";
 import { executeRun } from "../orchestration/modes.js";
@@ -83,7 +82,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const retryRepo = createRetryRepository(db);
   const eventRepo = createEventRepository(db);
   const outcomeRepo = createOutcomeRepository(db);
-  const analyticsRepo = createAnalyticsRepository(db);
   const recorder = new EventRecorder(eventRepo, snapshotRepo);
 
   // --- Startup recovery (before accepting requests) ---
@@ -211,7 +209,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     orchestrator: orchestrator ?? undefined,
     runRepo,
     outcomeRepo,
-    analyticsRepo,
+    eventRepo,
   });
 
   // GitHub App initialization (optional, only when config.github_app is present)
