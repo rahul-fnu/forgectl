@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `traces` (
+CREATE TABLE `spans` (
   `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   `trace_id` text NOT NULL,
   `span_id` text NOT NULL,
@@ -10,4 +10,4 @@ CREATE TABLE IF NOT EXISTS `traces` (
   `attributes` text
 );
 --> statement-breakpoint
-ALTER TABLE `runs` ADD COLUMN `trace_id` text;
+ALTER TABLE `runs` ADD COLUMN `trace_id` TEXT;

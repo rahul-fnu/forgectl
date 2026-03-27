@@ -164,24 +164,24 @@ export const reviewMetrics = sqliteTable(
   (table) => [unique().on(table.repo, table.prNumber, table.reviewRound)]
 );
 
+export const spans = sqliteTable("spans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  traceId: text("trace_id").notNull(),
+  spanId: text("span_id").notNull(),
+  parentSpanId: text("parent_span_id"),
+  operationName: text("operation_name").notNull(),
+  startMs: integer("start_ms").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  status: text("status").notNull().default("ok"),
+  attributes: text("attributes"), // JSON-serialized
+});
+
 export const cooldownState = sqliteTable("cooldown_state", {
   id: integer("id").primaryKey().default(1),
   active: integer("active").notNull().default(0),
   enteredAt: text("entered_at"),
   resumeAt: text("resume_at"),
   probeCount: integer("probe_count").default(0),
-});
-
-export const traces = sqliteTable("traces", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  traceId: text("trace_id").notNull(),
-  spanId: text("span_id").notNull(),
-  parentSpanId: text("parent_span_id"),
-  name: text("name").notNull(),
-  startMs: integer("start_ms").notNull(),
-  endMs: integer("end_ms"),
-  status: text("status").notNull().default("running"),
-  attributes: text("attributes"), // JSON-serialized
 });
 
 export const reviewCalibration = sqliteTable(

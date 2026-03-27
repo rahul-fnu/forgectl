@@ -44,8 +44,8 @@ import type { EventRepository } from "../storage/repositories/events.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { generateRunSummary } from "../analysis/run-summary.js";
 import { UsageLimitDetector, UsageLimitError } from "../agent/usage-limit-detector.js";
-import { createSpan, endSpan } from "../tracing/context.js";
-import type { TraceRepository } from "../storage/repositories/traces.js";
+import type { AlertManager } from "../alerting/manager.js";
+import type { AlertEvent } from "../alerting/types.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -264,6 +264,7 @@ export async function executeWorker(
   costRepo?: CostRepository,
   eventRepo?: EventRepository,
   runRepo?: RunRepository,
+  alertManager?: AlertManager,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -736,6 +737,17 @@ export async function executeWorker(
         timestamp: new Date().toISOString(),
         data: { reason: "cost_ceiling_exceeded", error: err.message },
       });
+
+      if (alertManager) {
+        const alertEvt: AlertEvent = {
+          type: "cost_ceiling_hit",
+          timestamp: new Date().toISOString(),
+          runId: githubDeps?.runId ?? plan.runId,
+          issueIdentifier: issue.identifier,
+          message: `Cost ceiling exceeded for ${issue.identifier}: ${err.message}`,
+        };
+        alertManager.fire(alertEvt).catch(() => {});
+      }
     } else {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -929,6 +941,19 @@ export async function executeWorker(
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to generate run summary for ${summaryRunId}: ${msg}`);
       });
+  }
+
+  if (alertManager) {
+    const alertEvt: AlertEvent = {
+      type: agentResult.status === "completed" ? "run_completed" : "run_failed",
+      timestamp: new Date().toISOString(),
+      runId: githubDeps?.runId ?? plan.runId,
+      issueIdentifier: issue.identifier,
+      message: agentResult.status === "completed"
+        ? `Run completed for ${issue.identifier}`
+        : `Run failed for ${issue.identifier}: ${agentResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    };
+    alertManager.fire(alertEvt).catch(() => {});
   }
 
   return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput, costCeilingExceeded: costCeilingExceeded || undefined };

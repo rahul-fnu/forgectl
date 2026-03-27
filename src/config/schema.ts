@@ -115,6 +115,25 @@ export const OrchestratorConfigSchema = z.object({
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
+export const AlertEventTypeEnum = z.enum([
+  "run_failed",
+  "run_completed",
+  "cost_ceiling_hit",
+  "usage_limit_detected",
+  "review_escalated",
+]);
+
+export const WebhookTargetSchema = z.object({
+  url: z.string().url(),
+  events: z.array(AlertEventTypeEnum),
+  secret: z.string().optional(),
+});
+
+export const AlertingConfigSchema = z.object({
+  webhooks: z.array(WebhookTargetSchema).default([]),
+  slack_webhook_url: z.string().optional(),
+}).default({});
+
 export const ConfigSchema = z.object({
   agent: z.object({
     type: AgentType.default("claude-code"),
@@ -237,6 +256,8 @@ export const ConfigSchema = z.object({
   team: z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),
+
+  alerting: AlertingConfigSchema,
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

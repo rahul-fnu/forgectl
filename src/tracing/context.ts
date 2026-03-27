@@ -8,21 +8,25 @@ export interface Span {
   startMs: number;
   endMs: number | null;
   status: "running" | "ok" | "error";
-  attributes: Record<string, string | number | boolean>;
+  attributes: Record<string, unknown>;
 }
 
 export function generateTraceId(): string {
   return crypto.randomBytes(16).toString("hex");
 }
 
+function generateSpanId(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
 export function createSpan(
   traceId: string,
   name: string,
-  parentSpanId?: string,
+  parentSpanId?: string | null,
 ): Span {
   return {
     traceId,
-    spanId: crypto.randomBytes(8).toString("hex"),
+    spanId: generateSpanId(),
     parentSpanId: parentSpanId ?? null,
     name,
     startMs: Date.now(),

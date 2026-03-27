@@ -90,7 +90,6 @@ export interface OutcomeDeps {
   outcomeRepo: OutcomeRepository;
   eventRepo?: EventRepository;
   snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
-  traceRepo?: TraceRepository;
 }
 
 /** Optional governance context for pre-execution approval gate. */
@@ -101,6 +100,7 @@ export interface GovernanceOpts {
   runId?: string;
   costRepo?: CostRepository;
   retryRepo?: RetryRepository;
+  traceRepo?: TraceRepository;
 }
 
 /**
@@ -407,13 +407,9 @@ export async function dispatchIssue(
 
   // Generate trace context for this dispatch
   const traceId = generateTraceId();
-  const traceRepo = outcomeDeps?.traceRepo;
   const dispatchSpan = createSpan(traceId, "dispatch");
-  dispatchSpan.attributes.issueId = issue.id;
-  dispatchSpan.attributes.identifier = issue.identifier;
-  dispatchSpan.attributes.attempt = attempt;
-  if (traceRepo) {
-    try { traceRepo.insertSpan(endSpan(dispatchSpan, "ok")); } catch { /* best-effort */ }
+  if (governance?.traceRepo) {
+    try { governance.traceRepo.insertSpan(endSpan(dispatchSpan, "ok")); } catch { /* best-effort */ }
   }
 
   // Record dispatch metrics and emit SSE event
@@ -422,7 +418,7 @@ export async function dispatchIssue(
     runId: "orchestrator",
     type: "dispatch",
     timestamp: new Date().toISOString(),
-    data: { issueId: issue.id, identifier: issue.identifier, attempt },
+    data: { issueId: issue.id, identifier: issue.identifier, attempt, traceId },
   });
 
   // Store complexity assessment in run record (even for dispatched issues)
@@ -456,7 +452,7 @@ export async function dispatchIssue(
     promotedFindings,
     slotManager,
     usageLimitRecovery,
-    undefined,
+    undefined, // triageAssessment
     traceId,
   );
 }
@@ -604,7 +600,6 @@ async function executeWorkerAndHandle(
         workflow: "orchestrated",
         status: "running",
         submittedAt: new Date().toISOString(),
-        traceId,
       });
       governanceWithRunId = { ...governance, runId };
 
@@ -643,8 +638,8 @@ async function executeWorkerAndHandle(
       governanceWithRunId?.costRepo,
       outcomeDeps?.eventRepo,
       governanceWithRunId?.runRepo,
+      governanceWithRunId?.traceRepo,
       traceId,
-      outcomeDeps?.traceRepo,
     );
 
     // Remove from running

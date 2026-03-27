@@ -1,76 +1,85 @@
 import { eq } from "drizzle-orm";
-import { traces } from "../schema.js";
+import { spans } from "../schema.js";
 import type { AppDatabase } from "../database.js";
-import type { Span } from "../../tracing/context.js";
 
-export interface TraceRow {
+export interface SpanRow {
   id: number;
   traceId: string;
   spanId: string;
   parentSpanId: string | null;
-  name: string;
+  operationName: string;
   startMs: number;
-  endMs: number | null;
+  durationMs: number;
   status: string;
-  attributes: Record<string, string | number | boolean>;
+  attributes: unknown;
+}
+
+export interface SpanInsertParams {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string | null;
+  operationName: string;
+  startMs: number;
+  durationMs: number;
+  status?: string;
+  attributes?: unknown;
 }
 
 export interface TraceRepository {
-  insertSpan(span: Span): TraceRow;
-  findByTraceId(traceId: string): TraceRow[];
+  insert(params: SpanInsertParams): SpanRow;
+  findByTraceId(traceId: string): SpanRow[];
 }
 
-function deserializeRow(raw: typeof traces.$inferSelect): TraceRow {
+function deserializeRow(raw: typeof spans.$inferSelect): SpanRow {
   return {
     id: raw.id,
     traceId: raw.traceId,
     spanId: raw.spanId,
-    parentSpanId: raw.parentSpanId ?? null,
-    name: raw.name,
+    parentSpanId: raw.parentSpanId,
+    operationName: raw.operationName,
     startMs: raw.startMs,
-    endMs: raw.endMs ?? null,
+    durationMs: raw.durationMs,
     status: raw.status,
-    attributes: raw.attributes ? JSON.parse(raw.attributes) : {},
+    attributes: raw.attributes ? JSON.parse(raw.attributes) : null,
   };
 }
 
 export function createTraceRepository(db: AppDatabase): TraceRepository {
   return {
-    insertSpan(span: Span): TraceRow {
+    insert(params: SpanInsertParams): SpanRow {
       const values = {
-        traceId: span.traceId,
-        spanId: span.spanId,
-        parentSpanId: span.parentSpanId,
-        name: span.name,
-        startMs: span.startMs,
-        endMs: span.endMs,
-        status: span.status,
-        attributes: Object.keys(span.attributes).length > 0
-          ? JSON.stringify(span.attributes)
-          : null,
+        traceId: params.traceId,
+        spanId: params.spanId,
+        parentSpanId: params.parentSpanId ?? null,
+        operationName: params.operationName,
+        startMs: params.startMs,
+        durationMs: params.durationMs,
+        status: params.status ?? "ok",
+        attributes: params.attributes != null ? JSON.stringify(params.attributes) : null,
       };
-      const result = db.insert(traces).values(values).run();
+      const result = db.insert(spans).values(values).run();
       const id = Number(result.lastInsertRowid);
       return {
         id,
-        traceId: span.traceId,
-        spanId: span.spanId,
-        parentSpanId: span.parentSpanId,
-        name: span.name,
-        startMs: span.startMs,
-        endMs: span.endMs,
-        status: span.status,
-        attributes: span.attributes,
+        traceId: params.traceId,
+        spanId: params.spanId,
+        parentSpanId: params.parentSpanId ?? null,
+        operationName: params.operationName,
+        startMs: params.startMs,
+        durationMs: params.durationMs,
+        status: params.status ?? "ok",
+        attributes: params.attributes ?? null,
       };
     },
 
-    findByTraceId(traceId: string): TraceRow[] {
+    findByTraceId(traceId: string): SpanRow[] {
       return db
         .select()
-        .from(traces)
-        .where(eq(traces.traceId, traceId))
+        .from(spans)
+        .where(eq(spans.traceId, traceId))
         .all()
-        .map(deserializeRow);
+        .map(deserializeRow)
+        .sort((a, b) => a.startMs - b.startMs);
     },
   };
 }

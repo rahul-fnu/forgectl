@@ -5,6 +5,7 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { CooldownRepository } from "../storage/repositories/cooldown.js";
 import { emitRunEvent } from "../logging/events.js";
+import type { AlertManager } from "../alerting/manager.js";
 
 export async function handleUsageLimitDetected(
   state: OrchestratorState,
@@ -13,6 +14,7 @@ export async function handleUsageLimitDetected(
   config: ForgectlConfig,
   runRepo?: RunRepository,
   cooldownRepo?: CooldownRepository,
+  alertManager?: AlertManager,
 ): Promise<void> {
   emitRunEvent({
     runId: "orchestrator",
@@ -101,6 +103,15 @@ export async function handleUsageLimitDetected(
     timestamp: new Date().toISOString(),
     data: { resumeAfter, killedCount: entries.length },
   });
+
+  if (alertManager) {
+    alertManager.fire({
+      type: "usage_limit_detected",
+      timestamp: new Date().toISOString(),
+      runId: "orchestrator",
+      message: `Usage limit detected — ${entries.length} containers killed, cooldown until ${resumeAfter}`,
+    }).catch(() => {});
+  }
 
   logger.info("usage-limit", `Cooldown entered — ${entries.length} containers killed, resume after ${resumeAfter}`);
 }
