@@ -242,7 +242,16 @@ export async function executeSingleAgent(
     logger.info("agent", `Running ${plan.agent.type}...`);
 
     // Use AgentSession for the top-level invocation
-    const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+    const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
+      onOutput: (chunk, stream) => {
+        emitRunEvent({
+          runId: plan.runId,
+          type: "agent_output",
+          timestamp: new Date().toISOString(),
+          data: { stream, chunk },
+        });
+      },
+    });
     const agentResult = await session.invoke(prompt);
     await session.close();
 
