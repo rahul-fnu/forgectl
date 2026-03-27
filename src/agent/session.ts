@@ -37,6 +37,8 @@ export interface AgentResult {
  */
 export interface AgentSessionOptions {
   onActivity?: () => void;
+  /** Callback invoked with each chunk of agent output as it arrives. */
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
   /** When true and agent is codex, use AppServerSession for persistent multi-turn sessions. */
   useAppServer?: boolean;
 }

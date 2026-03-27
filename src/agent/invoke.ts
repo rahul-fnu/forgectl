@@ -19,6 +19,7 @@ export async function invokeAgent(
   options: AgentOptions,
   env?: string[],
   promptId = "prompt",
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void,
 ): Promise<ExecResult> {
   const promptFile = `${PROMPT_DIR}/${promptId}.txt`;
 
@@ -54,5 +55,6 @@ export async function invokeAgent(
     env,
     workingDir: options.workingDir,
     timeout: options.timeout,
+    onOutput,
   });
 }
