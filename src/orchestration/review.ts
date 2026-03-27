@@ -253,7 +253,16 @@ export async function executeReviewMode(
     logger.info("agent", `Running ${plan.agent.type}...`);
 
     // Use AgentSession for the implementer invocation
-    const implementerSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+    const implementerSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
+      onOutput: (chunk, stream) => {
+        emitRunEvent({
+          runId: plan.runId,
+          type: "agent_output",
+          timestamp: new Date().toISOString(),
+          data: { stream, chunk },
+        });
+      },
+    });
     const agentResult = await implementerSession.invoke(prompt);
     await implementerSession.close();
 
@@ -360,7 +369,16 @@ export async function executeReviewMode(
       }
 
       logger.info("review", "Reviewer running...");
-      const reviewerSession = createAgentSession(reviewAgent, reviewerContainer, reviewOptions, reviewerCreds.agentEnv);
+      const reviewerSession = createAgentSession(reviewAgent, reviewerContainer, reviewOptions, reviewerCreds.agentEnv, {
+        onOutput: (chunk, stream) => {
+          emitRunEvent({
+            runId: plan.runId,
+            type: "agent_output",
+            timestamp: new Date().toISOString(),
+            data: { stream, chunk, role: "reviewer" },
+          });
+        },
+      });
       const reviewExecResult = await reviewerSession.invoke(reviewPrompt);
       await reviewerSession.close();
 
@@ -409,7 +427,16 @@ export async function executeReviewMode(
           : buildFixPrompt(parsed.feedback, round);
 
         logger.info("agent", "Agent fixing review issues...");
-        const fixSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv);
+        const fixSession = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
+          onOutput: (chunk, stream) => {
+            emitRunEvent({
+              runId: plan.runId,
+              type: "agent_output",
+              timestamp: new Date().toISOString(),
+              data: { stream, chunk, role: "fix" },
+            });
+          },
+        });
         await fixSession.invoke(fixPrompt);
         await fixSession.close();
 

@@ -42,6 +42,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UsageLimitError } from "../agent/usage-limit-detector.js";
 import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
+import { generateTraceId, createSpan, endSpan } from "../tracing/context.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
 
 /**
  * Extract a GitHub repo slug from an issue description.
@@ -98,6 +100,7 @@ export interface GovernanceOpts {
   runId?: string;
   costRepo?: CostRepository;
   retryRepo?: RetryRepository;
+  traceRepo?: TraceRepository;
 }
 
 /**
@@ -402,13 +405,20 @@ export async function dispatchIssue(
     slotManager.registerTopLevel(issue.id, workerInfo);
   }
 
+  // Generate trace context for this dispatch
+  const traceId = generateTraceId();
+  const dispatchSpan = createSpan(traceId, "dispatch");
+  if (governance?.traceRepo) {
+    try { governance.traceRepo.insertSpan(endSpan(dispatchSpan, "ok")); } catch { /* best-effort */ }
+  }
+
   // Record dispatch metrics and emit SSE event
   metrics.recordDispatch(issue.id, issue.identifier);
   emitRunEvent({
     runId: "orchestrator",
     type: "dispatch",
     timestamp: new Date().toISOString(),
-    data: { issueId: issue.id, identifier: issue.identifier, attempt },
+    data: { issueId: issue.id, identifier: issue.identifier, attempt, traceId },
   });
 
   // Store complexity assessment in run record (even for dispatched issues)
@@ -442,6 +452,8 @@ export async function dispatchIssue(
     promotedFindings,
     slotManager,
     usageLimitRecovery,
+    undefined, // triageAssessment
+    traceId,
   );
 }
 
@@ -466,6 +478,7 @@ async function executeWorkerAndHandle(
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
   triageAssessment?: ComplexityAssessment,
+  traceId?: string,
 ): Promise<void> {
   // Per-issue repo routing: detect repo from issue description and load profile overlay
   const issueRepo = extractRepoFromIssue(issue);
@@ -625,6 +638,8 @@ async function executeWorkerAndHandle(
       governanceWithRunId?.costRepo,
       outcomeDeps?.eventRepo,
       governanceWithRunId?.runRepo,
+      governanceWithRunId?.traceRepo,
+      traceId,
     );
 
     // Remove from running
@@ -827,6 +842,25 @@ async function executeWorkerAndHandle(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("dispatcher", `Failed to record outcome for ${issue.identifier}: ${msg}`);
+      }
+    }
+
+    // Reactive dispatch: detect anomalies and create issues
+    if (outcomeDeps && config.reactive?.auto_create_issues !== false) {
+      try {
+        const { dispatchReactiveIssues } = await import("../analysis/reactive-dispatch.js");
+        const allOutcomes = outcomeDeps.outcomeRepo.findAll();
+        const reactiveConfig = {
+          auto_create_issues: config.reactive?.auto_create_issues ?? true,
+          max_issues_per_day: config.reactive?.max_issues_per_day ?? 5,
+        };
+        const created = await dispatchReactiveIssues(allOutcomes, tracker, reactiveConfig, logger);
+        if (created.length > 0) {
+          logger.info("dispatcher", `Created ${created.length} reactive issue(s): ${created.join(", ")}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Reactive dispatch failed: ${msg}`);
       }
     }
 
