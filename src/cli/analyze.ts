@@ -3,7 +3,8 @@ import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
 import { createReviewFindingsRepository } from "../storage/repositories/review-findings.js";
-import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, buildReviewQualityReport, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion, type ReviewQualityReport } from "../analysis/outcome-analyzer.js";
+import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, buildReviewQualityReport, analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion, type ReviewQualityReport, type ToolUsageReport, type FailurePatternsReport, type TokenWasteReport } from "../analysis/outcome-analyzer.js";
+import { createCostRepository } from "../storage/repositories/costs.js";
 import { createReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { TrackerAdapter } from "../tracker/types.js";
 
@@ -164,6 +165,51 @@ function formatReviewQualityReport(report: ReviewQualityReport): void {
   console.log("");
 }
 
+function formatToolUsage(report: ToolUsageReport): void {
+  console.log(chalk.bold("  Tool Usage:"));
+  console.log(`    Total turns:           ${report.totalTurns}`);
+  console.log(`    Lint iterations:       ${report.totalLintIterations}`);
+  console.log(`    Files changed:         ${report.totalFilesChanged}`);
+  console.log(`    Tests added:           ${report.totalTestsAdded}`);
+  if (report.toolBreakdown.length > 0) {
+    console.log(chalk.bold("\n    Tool Counts:"));
+    for (const t of report.toolBreakdown.slice(0, 10)) {
+      console.log(`      ${t.tool.padEnd(25)} ${String(t.count).padStart(6)}`);
+    }
+  }
+  console.log("");
+}
+
+function formatStuckPoints(report: FailurePatternsReport): void {
+  if (report.stuckPoints.length === 0) return;
+
+  console.log(chalk.bold("  Stuck Points:"));
+  for (const sp of report.stuckPoints.slice(0, 10)) {
+    console.log(`    ${sp.runId.padEnd(30)} ${sp.failureMode.padEnd(20)} turns=${sp.turns}`);
+    if (sp.detail) {
+      console.log(`      ${sp.detail.slice(0, 100)}`);
+    }
+  }
+  console.log("");
+}
+
+function formatTokenWaste(report: TokenWasteReport): void {
+  console.log(chalk.bold("  Token Waste:"));
+  console.log(`    Total cost:    $${report.totalCostUsd.toFixed(4)}`);
+  console.log(`    Wasted cost:   $${report.wastedCostUsd.toFixed(4)} (${report.failedRuns} failed runs)`);
+  const totalTokens = report.totalTokens.input + report.totalTokens.output;
+  const wastedTokens = report.wastedTokens.input + report.wastedTokens.output;
+  console.log(`    Total tokens:  ${totalTokens}`);
+  console.log(`    Wasted tokens: ${wastedTokens}`);
+  if (report.highRetryRuns.length > 0) {
+    console.log(chalk.bold("\n    High-Retry Runs:"));
+    for (const r of report.highRetryRuns.slice(0, 5)) {
+      console.log(`      ${r.runId.padEnd(30)} retries=${r.lintIterations}  turns=${r.turns}`);
+    }
+  }
+  console.log("");
+}
+
 function formatSuggestions(suggestions: ImprovementSuggestion[]): void {
   if (suggestions.length === 0) {
     console.log(chalk.yellow("\n  No improvement suggestions generated (need more outcome data)."));
@@ -229,6 +275,27 @@ export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void>
     });
 
     formatReport(report);
+
+    const toolUsage = analyzeToolUsage(allRows);
+    formatToolUsage(toolUsage);
+
+    const failurePatterns = analyzeFailurePatterns(allRows);
+    formatStuckPoints(failurePatterns);
+
+    const costRepo = createCostRepository(db);
+    const costsByRunId = new Map<string, { inputTokens: number; outputTokens: number; costUsd: number }>();
+    for (const row of allRows) {
+      const summary = costRepo.sumByRunId(row.id);
+      if (summary.recordCount > 0) {
+        costsByRunId.set(row.id, {
+          inputTokens: summary.totalInputTokens,
+          outputTokens: summary.totalOutputTokens,
+          costUsd: summary.totalCostUsd,
+        });
+      }
+    }
+    const tokenWaste = analyzeTokenWaste(allRows, costsByRunId);
+    formatTokenWaste(tokenWaste);
 
     if (opts.suggest) {
       const suggestions = generateImprovementSuggestions(report);

@@ -662,6 +662,153 @@ function dumpTaskSpecYaml(spec: TaskSpec): string {
   return yaml.dump(spec, { lineWidth: 100, quotingType: "\"", forceQuotes: false, noRefs: true, sortKeys: false });
 }
 
+// --- Behavior Analysis (tool-usage, failure-patterns, token-waste) ---
+
+export interface ToolUsageReport {
+  totalRuns: number;
+  totalTurns: number;
+  totalLintIterations: number;
+  totalFilesChanged: number;
+  totalTestsAdded: number;
+  toolBreakdown: Array<{ tool: string; count: number }>;
+}
+
+export function analyzeToolUsage(rows: OutcomeRow[]): ToolUsageReport {
+  let totalTurns = 0;
+  let totalLintIterations = 0;
+  let totalFilesChanged = 0;
+  let totalTestsAdded = 0;
+  const toolCounts = new Map<string, number>();
+
+  for (const r of rows) {
+    totalTurns += r.totalTurns ?? 0;
+    totalLintIterations += r.lintIterations ?? 0;
+    totalFilesChanged += r.filesChanged ?? 0;
+    totalTestsAdded += r.testsAdded ?? 0;
+
+    if (r.rawEventsJson) {
+      try {
+        const events: Array<{ type?: string; data?: { tool?: string } }> = JSON.parse(r.rawEventsJson);
+        for (const e of events) {
+          if (e.type === "tool_use" && e.data?.tool) {
+            toolCounts.set(e.data.tool, (toolCounts.get(e.data.tool) ?? 0) + 1);
+          }
+        }
+      } catch {
+        // skip malformed
+      }
+    }
+  }
+
+  const toolBreakdown = Array.from(toolCounts.entries())
+    .map(([tool, count]) => ({ tool, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalRuns: rows.length,
+    totalTurns,
+    totalLintIterations,
+    totalFilesChanged,
+    totalTestsAdded,
+    toolBreakdown,
+  };
+}
+
+export interface FailurePatternsReport {
+  totalRuns: number;
+  failedRuns: number;
+  topFailureModes: Array<{ mode: string; count: number; pct: number }>;
+  riskyModules: Array<{ module: string; failureRate: number; avgRetries: number }>;
+  stuckPoints: Array<{ runId: string; failureMode: string; detail: string; turns: number }>;
+  recommendations: string[];
+}
+
+export function analyzeFailurePatterns(rows: OutcomeRow[]): FailurePatternsReport {
+  const report = analyzeOutcomes(rows, {});
+  const failedRuns = rows.filter(r => r.status === "failure" || r.failureMode !== null);
+
+  const stuckPoints: FailurePatternsReport["stuckPoints"] = [];
+  for (const r of failedRuns) {
+    if ((r.totalTurns ?? 0) >= 10 || (r.lintIterations ?? 0) >= 3) {
+      stuckPoints.push({
+        runId: r.id,
+        failureMode: r.failureMode ?? "unknown",
+        detail: r.failureDetail ?? "",
+        turns: r.totalTurns ?? 0,
+      });
+    }
+  }
+  stuckPoints.sort((a, b) => b.turns - a.turns);
+
+  return {
+    totalRuns: rows.length,
+    failedRuns: failedRuns.length,
+    topFailureModes: report.topFailureModes,
+    riskyModules: report.riskyModules,
+    stuckPoints: stuckPoints.slice(0, 20),
+    recommendations: report.recommendations,
+  };
+}
+
+export interface TokenWasteReport {
+  totalRuns: number;
+  failedRuns: number;
+  totalTokens: { input: number; output: number };
+  wastedTokens: { input: number; output: number };
+  totalCostUsd: number;
+  wastedCostUsd: number;
+  highRetryRuns: Array<{ runId: string; lintIterations: number; turns: number }>;
+}
+
+export function analyzeTokenWaste(
+  rows: OutcomeRow[],
+  costsByRunId: Map<string, { inputTokens: number; outputTokens: number; costUsd: number }>,
+): TokenWasteReport {
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCostUsd = 0;
+  let wastedInput = 0;
+  let wastedOutput = 0;
+  let wastedCostUsd = 0;
+  const failedRuns = rows.filter(r => r.status === "failure");
+  const highRetryRuns: TokenWasteReport["highRetryRuns"] = [];
+
+  for (const r of rows) {
+    const costs = costsByRunId.get(r.id);
+    if (costs) {
+      totalInput += costs.inputTokens;
+      totalOutput += costs.outputTokens;
+      totalCostUsd += costs.costUsd;
+
+      if (r.status === "failure") {
+        wastedInput += costs.inputTokens;
+        wastedOutput += costs.outputTokens;
+        wastedCostUsd += costs.costUsd;
+      }
+    }
+
+    if ((r.lintIterations ?? 0) >= 3) {
+      highRetryRuns.push({
+        runId: r.id,
+        lintIterations: r.lintIterations ?? 0,
+        turns: r.totalTurns ?? 0,
+      });
+    }
+  }
+
+  highRetryRuns.sort((a, b) => b.lintIterations - a.lintIterations);
+
+  return {
+    totalRuns: rows.length,
+    failedRuns: failedRuns.length,
+    totalTokens: { input: totalInput, output: totalOutput },
+    wastedTokens: { input: wastedInput, output: wastedOutput },
+    totalCostUsd: Math.round(totalCostUsd * 10000) / 10000,
+    wastedCostUsd: Math.round(wastedCostUsd * 10000) / 10000,
+    highRetryRuns: highRetryRuns.slice(0, 20),
+  };
+}
+
 // --- Review Quality (RAH-31) ---
 
 export interface ReviewQualityReport {
