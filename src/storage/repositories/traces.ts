@@ -1,57 +1,75 @@
 import { eq } from "drizzle-orm";
 import { spans } from "../schema.js";
 import type { AppDatabase } from "../database.js";
-import type { Span } from "../../tracing/context.js";
 
 export interface SpanRow {
   id: number;
   traceId: string;
   spanId: string;
   parentSpanId: string | null;
-  name: string;
+  operationName: string;
   startMs: number;
-  endMs: number | null;
+  durationMs: number;
   status: string;
-  attributes: Record<string, unknown>;
+  attributes: unknown;
+}
+
+export interface SpanInsertParams {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string | null;
+  operationName: string;
+  startMs: number;
+  durationMs: number;
+  status?: string;
+  attributes?: unknown;
 }
 
 export interface TraceRepository {
-  insertSpan(span: Span): SpanRow;
+  insert(params: SpanInsertParams): SpanRow;
   findByTraceId(traceId: string): SpanRow[];
 }
 
-function toRow(raw: typeof spans.$inferSelect): SpanRow {
+function deserializeRow(raw: typeof spans.$inferSelect): SpanRow {
   return {
     id: raw.id,
     traceId: raw.traceId,
     spanId: raw.spanId,
-    parentSpanId: raw.parentSpanId ?? null,
-    name: raw.name,
+    parentSpanId: raw.parentSpanId,
+    operationName: raw.operationName,
     startMs: raw.startMs,
-    endMs: raw.endMs ?? null,
+    durationMs: raw.durationMs,
     status: raw.status,
-    attributes: raw.attributes ? JSON.parse(raw.attributes) : {},
+    attributes: raw.attributes ? JSON.parse(raw.attributes) : null,
   };
 }
 
 export function createTraceRepository(db: AppDatabase): TraceRepository {
   return {
-    insertSpan(span: Span): SpanRow {
-      const result = db
-        .insert(spans)
-        .values({
-          traceId: span.traceId,
-          spanId: span.spanId,
-          parentSpanId: span.parentSpanId,
-          name: span.name,
-          startMs: span.startMs,
-          endMs: span.endMs,
-          status: span.status,
-          attributes: JSON.stringify(span.attributes),
-        })
-        .returning()
-        .get();
-      return toRow(result);
+    insert(params: SpanInsertParams): SpanRow {
+      const values = {
+        traceId: params.traceId,
+        spanId: params.spanId,
+        parentSpanId: params.parentSpanId ?? null,
+        operationName: params.operationName,
+        startMs: params.startMs,
+        durationMs: params.durationMs,
+        status: params.status ?? "ok",
+        attributes: params.attributes != null ? JSON.stringify(params.attributes) : null,
+      };
+      const result = db.insert(spans).values(values).run();
+      const id = Number(result.lastInsertRowid);
+      return {
+        id,
+        traceId: params.traceId,
+        spanId: params.spanId,
+        parentSpanId: params.parentSpanId ?? null,
+        operationName: params.operationName,
+        startMs: params.startMs,
+        durationMs: params.durationMs,
+        status: params.status ?? "ok",
+        attributes: params.attributes ?? null,
+      };
     },
 
     findByTraceId(traceId: string): SpanRow[] {
@@ -60,7 +78,8 @@ export function createTraceRepository(db: AppDatabase): TraceRepository {
         .from(spans)
         .where(eq(spans.traceId, traceId))
         .all()
-        .map(toRow);
+        .map(deserializeRow)
+        .sort((a, b) => a.startMs - b.startMs);
     },
   };
 }

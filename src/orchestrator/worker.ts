@@ -44,8 +44,8 @@ import type { EventRepository } from "../storage/repositories/events.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { generateRunSummary } from "../analysis/run-summary.js";
 import { UsageLimitDetector, UsageLimitError } from "../agent/usage-limit-detector.js";
-import { generateTraceId, createSpan, endSpan, type Span } from "../tracing/context.js";
-import type { TraceRepository } from "../storage/repositories/traces.js";
+import type { AlertManager } from "../alerting/manager.js";
+import type { AlertEvent } from "../alerting/types.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -264,8 +264,7 @@ export async function executeWorker(
   costRepo?: CostRepository,
   eventRepo?: EventRepository,
   runRepo?: RunRepository,
-  traceRepo?: TraceRepository,
-  traceId?: string,
+  alertManager?: AlertManager,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -357,14 +356,6 @@ export async function executeWorker(
     logger.warn("worker", `Failed to build per-workspace KG (continuing without): ${msg}`);
   }
 
-  // Tracing: resolve traceId
-  const effectiveTraceId = traceId ?? generateTraceId();
-  const recordSpan = (span: Span): void => {
-    if (traceRepo) {
-      try { traceRepo.insertSpan(span); } catch { /* best-effort */ }
-    }
-  };
-
   // 3. Build RunPlan (with optional validationConfig and skills)
   const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
 
@@ -445,9 +436,7 @@ export async function executeWorker(
       data: { issueId: issue.id, identifier: issue.identifier, attempt },
     });
 
-    const agentSpan = createSpan(effectiveTraceId, "agent_invocation");
     agentResult = await session.invoke(fullPrompt);
-    recordSpan(endSpan(agentSpan, agentResult.status === "completed" ? "ok" : "error"));
 
     // --- Usage limit detection ---
     const usageLimitConfig = config.agent.usage_limit;
@@ -531,9 +520,7 @@ export async function executeWorker(
     // 8. Run validation loop BEFORE closing session (container must be alive)
     if (plan.validation.steps.length > 0 && agentResult.status !== "failed") {
       logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
-      const valSpan = createSpan(effectiveTraceId, "validation_loop");
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
-      recordSpan(endSpan(valSpan, validationResult.passed ? "ok" : "error"));
 
       // Halt on loop detection
       if (validationResult.loopDetected) {
@@ -629,15 +616,12 @@ export async function executeWorker(
 
     // 9. Collect git output — skip if build gate already failed
     if (agentResult.status !== "failed") {
-      const outputSpan = createSpan(effectiveTraceId, "output_collection");
       try {
         const pushToken = config.tracker?.token;
         const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
         branch = gitResult.branch;
         diffStat = gitResult.diffStat;
-        recordSpan(endSpan(outputSpan, "ok"));
       } catch (err) {
-        recordSpan(endSpan(outputSpan, "error"));
         const message = err instanceof Error ? err.message : String(err);
         logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
         // Override agent result — the work is lost if we can't collect output
@@ -753,6 +737,17 @@ export async function executeWorker(
         timestamp: new Date().toISOString(),
         data: { reason: "cost_ceiling_exceeded", error: err.message },
       });
+
+      if (alertManager) {
+        const alertEvt: AlertEvent = {
+          type: "cost_ceiling_hit",
+          timestamp: new Date().toISOString(),
+          runId: githubDeps?.runId ?? plan.runId,
+          issueIdentifier: issue.identifier,
+          message: `Cost ceiling exceeded for ${issue.identifier}: ${err.message}`,
+        };
+        alertManager.fire(alertEvt).catch(() => {});
+      }
     } else {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -802,7 +797,6 @@ export async function executeWorker(
 
   // Create PR and set description when branch and GitHub context available
   if (githubDeps?.repoContext && branch) {
-    const prSpan = createSpan(effectiveTraceId, "pr_creation");
     try {
       const prData: PRDescriptionData = {
         issueNumber: githubDeps.issueContext.issueNumber,
@@ -830,9 +824,7 @@ export async function executeWorker(
       if (prNumber != null) {
         prUrl = `https://github.com/${githubDeps.repoContext.owner}/${githubDeps.repoContext.repo}/pull/${prNumber}`;
       }
-      recordSpan(endSpan(prSpan, "ok"));
     } catch (err) {
-      recordSpan(endSpan(prSpan, "error"));
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Failed to update PR description: ${msg}`);
     }
@@ -949,6 +941,19 @@ export async function executeWorker(
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to generate run summary for ${summaryRunId}: ${msg}`);
       });
+  }
+
+  if (alertManager) {
+    const alertEvt: AlertEvent = {
+      type: agentResult.status === "completed" ? "run_completed" : "run_failed",
+      timestamp: new Date().toISOString(),
+      runId: githubDeps?.runId ?? plan.runId,
+      issueIdentifier: issue.identifier,
+      message: agentResult.status === "completed"
+        ? `Run completed for ${issue.identifier}`
+        : `Run failed for ${issue.identifier}: ${agentResult.stderr?.slice(0, 200) ?? "unknown error"}`,
+    };
+    alertManager.fire(alertEvt).catch(() => {});
   }
 
   return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput, costCeilingExceeded: costCeilingExceeded || undefined };
