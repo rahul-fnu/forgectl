@@ -46,6 +46,24 @@ import { generateRunSummary } from "../analysis/run-summary.js";
 import { UsageLimitDetector, UsageLimitError } from "../agent/usage-limit-detector.js";
 import type { AlertManager } from "../alerting/manager.js";
 import type { AlertEvent } from "../alerting/types.js";
+import { createSpan, endSpan } from "../tracing/context.js";
+import type { Span } from "../tracing/context.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
+
+function persistSpan(traceRepo: TraceRepository | undefined, span: Span): void {
+  if (!traceRepo) return;
+  try {
+    traceRepo.insert({
+      traceId: span.traceId,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      operationName: span.name,
+      startMs: span.startMs,
+      durationMs: (span.endMs ?? Date.now()) - span.startMs,
+      status: span.status,
+    });
+  } catch { /* best-effort */ }
+}
 
 export interface WorkerResult {
   agentResult: AgentResult;
@@ -264,6 +282,8 @@ export async function executeWorker(
   costRepo?: CostRepository,
   eventRepo?: EventRepository,
   runRepo?: RunRepository,
+  traceRepo?: TraceRepository,
+  traceId?: string,
   alertManager?: AlertManager,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
@@ -359,6 +379,9 @@ export async function executeWorker(
   // 3. Build RunPlan (with optional validationConfig and skills)
   const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
 
+  // Create root span for the entire worker execution
+  const rootSpan = traceId ? createSpan(traceId, "run", null) : undefined;
+
   // Save prepare checkpoint with workspace metadata
   if (snapshotRepo) {
     saveCheckpoint(snapshotRepo, plan.runId, "prepare", {
@@ -399,7 +422,9 @@ export async function executeWorker(
 
   try {
     // 5. Prepare execution (container, credentials, network)
+    const prepareSpan = traceId ? createSpan(traceId, "prepare", rootSpan?.spanId) : undefined;
     const { container, agentOptions, agentEnv, adapter } = await prepareExecution(plan, logger, cleanup);
+    if (prepareSpan) persistSpan(traceRepo, endSpan(prepareSpan, "ok"));
 
     // Ensure container is in worker-level cleanup context so it is destroyed on errors
     cleanup.container = container;
@@ -436,7 +461,9 @@ export async function executeWorker(
       data: { issueId: issue.id, identifier: issue.identifier, attempt },
     });
 
+    const agentSpan = traceId ? createSpan(traceId, "agent_invoke", rootSpan?.spanId) : undefined;
     agentResult = await session.invoke(fullPrompt);
+    if (agentSpan) persistSpan(traceRepo, endSpan(agentSpan, agentResult.status === "completed" ? "ok" : "error"));
 
     // --- Usage limit detection ---
     const usageLimitConfig = config.agent.usage_limit;
@@ -520,7 +547,9 @@ export async function executeWorker(
     // 8. Run validation loop BEFORE closing session (container must be alive)
     if (plan.validation.steps.length > 0 && agentResult.status !== "failed") {
       logger.info("worker", `Running ${plan.validation.steps.length} validation steps for ${issue.identifier}`);
+      const validationSpan = traceId ? createSpan(traceId, "validation", rootSpan?.spanId) : undefined;
       validationResult = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
+      if (validationSpan) persistSpan(traceRepo, endSpan(validationSpan, validationResult.passed ? "ok" : "error"));
 
       // Halt on loop detection
       if (validationResult.loopDetected) {
@@ -604,24 +633,30 @@ export async function executeWorker(
 
     // 8.5. Run review agent — only after lint gate passes
     if (agentResult.status !== "failed" && validationResult?.passed !== false) {
+      const reviewSpan = traceId ? createSpan(traceId, "review", rootSpan?.spanId) : undefined;
       try {
         reviewOutput = await runReviewAgent(
           container, adapter, agentOptions, agentEnv, plan.task, logger,
         );
+        if (reviewSpan) persistSpan(traceRepo, endSpan(reviewSpan, "ok"));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Review agent failed (non-blocking): ${msg}`);
+        if (reviewSpan) persistSpan(traceRepo, endSpan(reviewSpan, "error"));
       }
     }
 
     // 9. Collect git output — skip if build gate already failed
     if (agentResult.status !== "failed") {
+      const outputSpan = traceId ? createSpan(traceId, "output", rootSpan?.spanId) : undefined;
       try {
         const pushToken = config.tracker?.token;
         const gitResult = await collectGitOutput(container, plan, logger, preAgentSha, pushToken);
         branch = gitResult.branch;
         diffStat = gitResult.diffStat;
+        if (outputSpan) persistSpan(traceRepo, endSpan(outputSpan, "ok"));
       } catch (err) {
+        if (outputSpan) persistSpan(traceRepo, endSpan(outputSpan, "error"));
         const message = err instanceof Error ? err.message : String(err);
         logger.error("worker", `Git output collection failed for ${issue.identifier}: ${message}`);
         // Override agent result — the work is lost if we can't collect output
@@ -797,6 +832,7 @@ export async function executeWorker(
 
   // Create PR and set description when branch and GitHub context available
   if (githubDeps?.repoContext && branch) {
+    const prSpan = traceId ? createSpan(traceId, "pr_creation", rootSpan?.spanId) : undefined;
     try {
       const prData: PRDescriptionData = {
         issueNumber: githubDeps.issueContext.issueNumber,
@@ -824,7 +860,9 @@ export async function executeWorker(
       if (prNumber != null) {
         prUrl = `https://github.com/${githubDeps.repoContext.owner}/${githubDeps.repoContext.repo}/pull/${prNumber}`;
       }
+      if (prSpan) persistSpan(traceRepo, endSpan(prSpan, "ok"));
     } catch (err) {
+      if (prSpan) persistSpan(traceRepo, endSpan(prSpan, "error"));
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn("worker", `Failed to update PR description: ${msg}`);
     }
@@ -954,6 +992,11 @@ export async function executeWorker(
         : `Run failed for ${issue.identifier}: ${agentResult.stderr?.slice(0, 200) ?? "unknown error"}`,
     };
     alertManager.fire(alertEvt).catch(() => {});
+  }
+
+  // End root trace span
+  if (rootSpan) {
+    persistSpan(traceRepo, endSpan(rootSpan, agentResult.status === "completed" ? "ok" : "error"));
   }
 
   return { agentResult, comment, validationResult, lintIterations, branch, diffStat, pendingApproval: pendingApproval || undefined, reviewOutput, costCeilingExceeded: costCeilingExceeded || undefined };

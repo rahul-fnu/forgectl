@@ -86,6 +86,7 @@ export interface RunRepository {
   setComplexityAssessment(runId: string, assessment: { complexityScore: number }): void;
   setSummary(runId: string, summary: RunSummary): void;
   getSummary(runId: string): RunSummary | null;
+  setTraceId(runId: string, traceId: string): void;
 }
 
 function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
@@ -223,6 +224,13 @@ export function createRunRepository(db: AppDatabase): RunRepository {
       const row = db.select({ summary: runs.summary }).from(runs).where(eq(runs.id, runId)).get();
       if (!row?.summary) return null;
       return JSON.parse(row.summary) as RunSummary;
+    },
+
+    setTraceId(runId: string, traceId: string): void {
+      db.update(runs)
+        .set({ traceId })
+        .where(eq(runs.id, runId))
+        .run();
     },
   };
 }
