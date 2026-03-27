@@ -25,6 +25,7 @@ export const runs = sqliteTable("runs", {
   complexityAssessment: text("complexity_assessment"), // JSON-serialized ComplexityAssessment
   summary: text("summary"), // JSON-serialized RunSummary
   resumeAfter: text("resume_after"), // ISO timestamp — earliest time to re-queue after usage limit pause
+  traceId: text("trace_id"),
 });
 
 export const delegations = sqliteTable("delegations", {
@@ -162,6 +163,18 @@ export const reviewMetrics = sqliteTable(
   },
   (table) => [unique().on(table.repo, table.prNumber, table.reviewRound)]
 );
+
+export const spans = sqliteTable("spans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  traceId: text("trace_id").notNull(),
+  spanId: text("span_id").notNull(),
+  parentSpanId: text("parent_span_id"),
+  operationName: text("operation_name").notNull(),
+  startMs: integer("start_ms").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  status: text("status").notNull().default("ok"),
+  attributes: text("attributes"), // JSON-serialized
+});
 
 export const cooldownState = sqliteTable("cooldown_state", {
   id: integer("id").primaryKey().default(1),

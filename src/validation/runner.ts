@@ -237,7 +237,7 @@ export async function runValidationLoop(
       runId: plan.runId,
       type: "agent_retry",
       timestamp: new Date().toISOString(),
-      data: { attempt, failedSteps: failedSteps.map(s => s.name) },
+      data: { attempt, failedSteps: failedSteps.map(s => s.step.name) },
     });
     logger.info("agent", "Agent fixing validation failures...");
     const fixResult = await invokeAgent(

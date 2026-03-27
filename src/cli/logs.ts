@@ -70,10 +70,28 @@ export function formatSSEEvent(event: RunEvent): string {
       return `${chalk.gray(ts)} ${chalk.magenta(`⇥ Output collected (${d.mode || "unknown"}${d.branch ? `: ${d.branch}` : ""})`)}`;
 
     case "agent_output": {
-      const streamLabel = d.stream === "stderr" ? chalk.red("stderr") : chalk.white("stdout");
+      const streamName = d.stream === "stderr" ? chalk.red("stderr") : chalk.white("stdout");
       const text = String(d.chunk ?? "").trimEnd();
       if (!text) return "";
-      return `${chalk.gray(ts)} ${chalk.gray(`[${streamLabel}]`)} ${text}`;
+      const role = d.role ? chalk.gray(` [${d.role}]`) : "";
+      return `${chalk.gray(ts)} ${streamName}${role} ${text}`;
+    }
+
+    case "agent_started":
+      return `${chalk.gray(ts)} ${chalk.green(`▶ Agent started`)}${d.agent ? ` (${d.agent})` : ""}`;
+
+    case "agent_retry":
+      return `${chalk.gray(ts)} ${chalk.yellow(`↻ Agent retry`)}${d.attempt ? ` #${d.attempt}` : ""}`;
+
+    case "validation_step_started":
+      return `${chalk.gray(ts)} ${chalk.cyan(`⟫ Validation step: ${d.name || "check"}`)}`;
+
+    case "validation_step_completed": {
+      const icon = d.passed ? chalk.green("✔") : chalk.red("✘");
+      const label = d.passed
+        ? chalk.green(`${d.name || "check"}: passed`)
+        : chalk.red(`${d.name || "check"}: failed${d.error ? ` — ${d.error}` : ""}`);
+      return `${chalk.gray(ts)} ${icon} ${label}`;
     }
 
     case "cost": {
@@ -111,11 +129,10 @@ export async function logsFollowCommand(runId: string): Promise<void> {
   }
 
   const token = readDaemonToken();
-  const streamUrl = token
-    ? `${getDaemonUrl()}/api/v1/runs/${runId}/stream?token=${encodeURIComponent(token)}`
-    : `${getDaemonUrl()}/api/v1/runs/${runId}/stream`;
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+  const url = `${getDaemonUrl()}/api/v1/runs/${runId}/stream${tokenParam}`;
   try {
-    const res = await fetch(streamUrl, { headers: getDaemonHeaders() });
+    const res = await fetch(url, { headers: getDaemonHeaders() });
     if (!res.ok || !res.body) {
       console.error(chalk.red(`Run not found or not accessible: ${runId}`));
       process.exit(1);
@@ -140,8 +157,7 @@ export async function logsFollowCommand(runId: string): Promise<void> {
       for (const part of parts) {
         const events = parseSSEData(part + "\n");
         for (const event of events) {
-          const formatted = formatSSEEvent(event);
-          if (formatted) console.log(formatted);
+          console.log(formatSSEEvent(event));
           if (event.type === "completed" || event.type === "failed") {
             return;
           }

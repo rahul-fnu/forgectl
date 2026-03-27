@@ -37,6 +37,7 @@ export interface RunRow {
   complexityAssessment: unknown;
   summary: unknown;
   resumeAfter: string | null;
+  traceId: string | null;
 }
 
 export interface RunInsertParams {
@@ -51,6 +52,7 @@ export interface RunInsertParams {
   depth?: number;
   maxChildren?: number;
   childrenDispatched?: number;
+  traceId?: string;
 }
 
 export interface RunUpdateParams {
@@ -112,6 +114,7 @@ function deserializeRow(raw: typeof runs.$inferSelect): RunRow {
     complexityAssessment: raw.complexityAssessment ? JSON.parse(raw.complexityAssessment) : null,
     summary: raw.summary ? JSON.parse(raw.summary) : null,
     resumeAfter: raw.resumeAfter ?? null,
+    traceId: raw.traceId ?? null,
   };
 }
 
@@ -130,6 +133,7 @@ export function createRunRepository(db: AppDatabase): RunRepository {
         depth: params.depth ?? 0,
         maxChildren: params.maxChildren ?? null,
         childrenDispatched: params.childrenDispatched ?? 0,
+        traceId: params.traceId ?? null,
       };
       db.insert(runs).values(values).run();
       return this.findById(params.id)!;
