@@ -43,6 +43,7 @@ export class OneShotSession implements AgentSession {
       opts,
       this.env,
       undefined,
+      this.sessionOptions?.onOutput,
     );
 
     // Fire activity callback if there is output
