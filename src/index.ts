@@ -28,6 +28,7 @@ import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 import { costsCommand } from "./cli/costs.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
+import { logsCommand } from "./cli/logs.js";
 
 const program = new Command();
 
@@ -321,60 +322,9 @@ program
 // forgectl logs — show or stream logs for a run
 program
   .command("logs <runId>")
-  .description("Show logs for a run")
+  .description("Show logs for a run (use --follow for live SSE streaming)")
   .option("--follow", "Stream events as they arrive (SSE)")
-  .action(async (runId: string, opts: { follow?: boolean }) => {
-    if (opts.follow) {
-      if (!isDaemonRunning()) {
-        console.error("Daemon is not running.");
-        process.exit(1);
-      }
-      // Stream SSE events
-      const url = `http://127.0.0.1:4856/runs/${runId}/events`;
-      try {
-        const res = await fetch(url);
-        if (!res.ok || !res.body) {
-          console.error(`Run not found: ${runId}`);
-          process.exit(1);
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          process.stdout.write(decoder.decode(value));
-        }
-      } catch (err) {
-        console.error(`Failed to stream logs: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
-    } else {
-      // Show run status
-      try {
-        const res = await fetch(`http://127.0.0.1:4856/runs/${runId}`);
-        if (!res.ok) {
-          // Try reading from local log file
-          const { readFileSync, existsSync } = await import("node:fs");
-          const { loadConfig } = await import("./config/loader.js");
-          const config = loadConfig();
-          const logPath = `${config.output.log_dir}/${runId}.json`;
-          if (existsSync(logPath)) {
-            const log = JSON.parse(readFileSync(logPath, "utf-8"));
-            console.log(JSON.stringify(log, null, 2));
-          } else {
-            console.error(`Run not found: ${runId}`);
-            process.exit(1);
-          }
-        } else {
-          const run = await res.json();
-          console.log(JSON.stringify(run, null, 2));
-        }
-      } catch {
-        console.error(`Failed to fetch logs for: ${runId}`);
-        process.exit(1);
-      }
-    }
-  });
+  .action(logsCommand);
 
 // forgectl pipeline
 const pipelineCmd = program
