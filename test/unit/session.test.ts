@@ -107,6 +107,7 @@ describe("OneShotSession", () => {
         baseAgentOptions,
         ["KEY=val"],
         undefined,
+        undefined,
       );
       expect(result.stdout).toBe("Hello world");
       expect(result.stderr).toBe("");
@@ -167,6 +168,7 @@ describe("OneShotSession", () => {
         "test",
         { ...baseAgentOptions, timeout: 60000 },
         [],
+        undefined,
         undefined,
       );
     });

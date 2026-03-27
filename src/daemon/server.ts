@@ -208,7 +208,9 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     boardEngine,
     orchestrator: orchestrator ?? undefined,
     runRepo,
+    costRepo,
     outcomeRepo,
+    eventRepo,
   });
 
   // GitHub App initialization (optional, only when config.github_app is present)

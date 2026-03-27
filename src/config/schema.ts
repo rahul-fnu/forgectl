@@ -115,6 +115,25 @@ export const OrchestratorConfigSchema = z.object({
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
+export const AlertEventTypeEnum = z.enum([
+  "run_failed",
+  "run_completed",
+  "cost_ceiling_hit",
+  "usage_limit_detected",
+  "review_escalated",
+]);
+
+export const WebhookTargetSchema = z.object({
+  url: z.string().url(),
+  events: z.array(AlertEventTypeEnum),
+  secret: z.string().optional(),
+});
+
+export const AlertingConfigSchema = z.object({
+  webhooks: z.array(WebhookTargetSchema).default([]),
+  slack_webhook_url: z.string().optional(),
+}).default({});
+
 export const ConfigSchema = z.object({
   agent: z.object({
     type: AgentType.default("claude-code"),
@@ -226,6 +245,11 @@ export const ConfigSchema = z.object({
     branch_pattern: z.string().default("forge/*"),
   }).optional(),
 
+  reactive: z.object({
+    auto_create_issues: z.boolean().default(true),
+    max_issues_per_day: z.number().int().positive().default(5),
+  }).optional(),
+
   scheduled_qa: z.object({
     enabled: z.boolean().default(false),
     interval_ms: z.number().int().positive().default(86_400_000), // 24 hours
@@ -234,9 +258,18 @@ export const ConfigSchema = z.object({
     labels: z.array(z.string()).default(["scheduled-qa"]),
   }).optional(),
 
+  reactive: z.object({
+    enabled: z.boolean().default(false),
+    repeated_failure_threshold: z.number().int().min(1).default(3),
+    cost_spike_multiplier: z.number().positive().default(3),
+    success_rate_floor: z.number().min(0).max(1).default(0.7),
+  }).optional(),
+
   team: z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),
+
+  alerting: AlertingConfigSchema,
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;

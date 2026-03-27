@@ -18,9 +18,12 @@ import { resumeRun } from "../durability/pause.js";
 import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import type { AnalyticsRepository } from "../storage/repositories/analytics.js";
 import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
+import type { EventRepository } from "../storage/repositories/events.js";
+import { analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste } from "../analysis/outcome-analyzer.js";
 
 interface InlineContext {
   name: string;
@@ -35,7 +38,10 @@ interface RouteServices {
   runRepo?: RunRepository;
   costRepo?: CostRepository;
   outcomeRepo?: OutcomeRepository;
+  analyticsRepo?: AnalyticsRepository;
   budgetConfig?: BudgetConfig;
+  eventRepo?: EventRepository;
+  authToken?: string;
 }
 
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
@@ -46,7 +52,10 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const runRepo = services.runRepo;
   const costRepo = services.costRepo;
   const outcomeRepo = services.outcomeRepo;
+  const analyticsRepo = services.analyticsRepo;
   const budgetConfig = services.budgetConfig;
+  const eventRepo = services.eventRepo;
+  const authToken = services.authToken;
 
   // Health check
   app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
@@ -463,6 +472,61 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     return card.runHistory;
   });
 
+  // --- SSE stream for a run's real-time events (auth via query param) ---
+  app.get<{ Params: { id: string }; Querystring: { token?: string } }>(
+    "/api/v1/runs/:id/stream",
+    async (request, reply) => {
+      if (authToken && request.query.token !== authToken) {
+        reply.code(401);
+        return { error: { code: "UNAUTHORIZED", message: "Invalid or missing token" } };
+      }
+
+      const runId = request.params.id;
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+
+      const handler = (event: RunEvent) => {
+        try {
+          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch {
+          // Client may have disconnected
+        }
+      };
+
+      runEvents.on(`run:${runId}`, handler);
+
+      request.raw.on("close", () => {
+        runEvents.off(`run:${runId}`, handler);
+      });
+    },
+  );
+
+  // --- Historical events for a run ---
+  app.get<{ Params: { id: string }; Querystring: { token?: string; type?: string } }>(
+    "/api/v1/runs/:id/events",
+    async (request, reply) => {
+      if (authToken && request.query.token !== authToken) {
+        reply.code(401);
+        return { error: { code: "UNAUTHORIZED", message: "Invalid or missing token" } };
+      }
+
+      if (!eventRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Event repository not available" } };
+      }
+
+      const runId = request.params.id;
+      const type = request.query.type;
+      const events = type
+        ? eventRepo.findByRunIdAndType(runId, type)
+        : eventRepo.findByRunId(runId);
+      return events;
+    },
+  );
+
   // --- Run Summary API ---
   app.get<{ Params: { id: string } }>("/api/v1/runs/:id/summary", async (request, reply) => {
     if (!runRepo) {
@@ -785,6 +849,44 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     return { id: syntheticId, status: "dispatched" };
   });
 
+  // --- Analytics API ---
+
+  app.get("/api/v1/analytics/tool-usage", async (_request, reply) => {
+    if (!outcomeRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome repository not available" } };
+    }
+    return analyzeToolUsage(outcomeRepo.findAll());
+  });
+
+  app.get("/api/v1/analytics/failure-patterns", async (_request, reply) => {
+    if (!outcomeRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome repository not available" } };
+    }
+    return analyzeFailurePatterns(outcomeRepo.findAll());
+  });
+
+  app.get("/api/v1/analytics/token-waste", async (_request, reply) => {
+    if (!outcomeRepo || !costRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome or cost repository not available" } };
+    }
+    const outcomes = outcomeRepo.findAll();
+    const costsByRunId = new Map<string, { inputTokens: number; outputTokens: number; costUsd: number }>();
+    for (const row of outcomes) {
+      const summary = costRepo.sumByRunId(row.id);
+      if (summary.recordCount > 0) {
+        costsByRunId.set(row.id, {
+          inputTokens: summary.totalInputTokens,
+          outputTokens: summary.totalOutputTokens,
+          costUsd: summary.totalCostUsd,
+        });
+      }
+    }
+    return analyzeTokenWaste(outcomes, costsByRunId);
+  });
+
   // --- Human review result ---
   const VALID_HUMAN_REVIEW_RESULTS = new Set(["rubber_stamp", "minor_changes", "major_rework", "rejected"]);
 
@@ -821,6 +923,54 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       });
 
       return { status: "updated", id, human_review_result };
+    },
+  );
+
+  // --- Analytics API ---
+
+  const analyticsError503 = { error: { code: "NOT_CONFIGURED", message: "Analytics repository not available" } };
+
+  function resolveAnalyticsSince(since?: string): string {
+    if (since) return since;
+    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/summary",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getSummary(since);
+    },
+  );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/cost-trend",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getCostTrend(since);
+    },
+  );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/failure-hotspots",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getFailureHotspots(since);
     },
   );
 }
