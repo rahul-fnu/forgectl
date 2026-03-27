@@ -69,7 +69,7 @@ describe("buildPrompt", () => {
     const plan = makeMinimalPlan();
     const prompt = buildPrompt(plan);
     expect(prompt).toContain("Add a healthcheck endpoint");
-    expect(prompt).toContain("--- Task ---");
+    expect(prompt).toContain("## Task");
   });
 
   it("includes available tools", () => {
@@ -97,8 +97,8 @@ describe("buildPrompt", () => {
       },
     });
     const prompt = buildPrompt(plan);
-    expect(prompt).toContain("VERIFY");
-    expect(prompt).toContain("should PASS after your fix");
+    expect(prompt).toContain("Verification");
+    expect(prompt).toContain("must ALL pass");
     expect(prompt).toContain("lint");
     expect(prompt).toContain("npm run lint");
     expect(prompt).toContain("test");
@@ -109,8 +109,8 @@ describe("buildPrompt", () => {
   it("omits validation section when no steps", () => {
     const plan = makeMinimalPlan({ validation: { steps: [], onFailure: "abandon" } });
     const prompt = buildPrompt(plan);
-    expect(prompt).not.toContain("VERIFY");
-    expect(prompt).not.toContain("REPRODUCE");
+    expect(prompt).not.toContain("Verification");
+    expect(prompt).not.toContain("Reproduce");
   });
 
   it("splits reproduction and verification steps in prompt", () => {
@@ -124,11 +124,11 @@ describe("buildPrompt", () => {
       },
     });
     const prompt = buildPrompt(plan);
-    expect(prompt).toContain("REPRODUCE");
+    expect(prompt).toContain("Reproduce");
     expect(prompt).toContain("should FAIL before your fix");
     expect(prompt).toContain("repro");
-    expect(prompt).toContain("VERIFY");
-    expect(prompt).toContain("should PASS after your fix");
+    expect(prompt).toContain("Verification");
+    expect(prompt).toContain("must ALL pass");
     expect(prompt).toContain("lint");
   });
 
@@ -142,8 +142,8 @@ describe("buildPrompt", () => {
       },
     });
     const prompt = buildPrompt(plan);
-    expect(prompt).toContain("VERIFY");
-    expect(prompt).not.toContain("REPRODUCE");
+    expect(prompt).toContain("Verification");
+    expect(prompt).not.toContain("Reproduce");
   });
 
   it("includes output path instruction for files mode", () => {
@@ -179,16 +179,15 @@ describe("buildPrompt", () => {
         },
       ],
     });
-    expect(prompt).toContain("Review Conventions");
+    expect(prompt).toContain("code review history");
     expect(prompt).toContain("Always handle errors in database calls with typed errors");
-    expect(prompt).toContain("flagged 5 times in review");
-    expect(prompt).toContain("module: src/storage");
+    expect(prompt).toContain("flagged 5 times");
   });
 
   it("omits conventions section when no promoted findings", () => {
     const plan = makeMinimalPlan();
     const prompt = buildPrompt(plan, { promotedFindings: [] });
-    expect(prompt).not.toContain("Review Conventions");
+    expect(prompt).not.toContain("code review history");
   });
 
   it("still works with ContextResult as second argument (backward compat)", () => {

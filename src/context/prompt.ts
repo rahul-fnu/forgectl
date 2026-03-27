@@ -18,6 +18,10 @@ export interface PromptOptions {
   promotedFindings?: ReviewFindingRow[];
 }
 
+const FALLBACK_CONVENTIONS = `No project-specific conventions have been detected yet. Infer patterns from the existing code:
+- Look at 2-3 existing files similar to what you're creating to understand the style.
+- Match import ordering, error handling patterns, export style, and naming conventions.`;
+
 export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | PromptOptions): string {
   let kgContext: ContextResult | undefined;
   let promotedFindings: ReviewFindingRow[] | undefined;
@@ -32,10 +36,22 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
 
   const parts: string[] = [];
 
-  // 1. Workflow system prompt
-  parts.push(plan.context.system || plan.workflow.system);
+  // 1. Build the conventions block for {{conventions}} placeholder
+  const conventionsBlock = buildConventionsBlock(kgContext, promotedFindings);
 
-  // 2. Context files (text inlined, binary/large summarized)
+  // 2. System prompt with conventions injected
+  const systemPrompt = plan.context.system || plan.workflow.system;
+  if (systemPrompt.includes("{{conventions}}")) {
+    parts.push(systemPrompt.replace("{{conventions}}", conventionsBlock));
+  } else {
+    parts.push(systemPrompt);
+    // Append conventions after system prompt if no placeholder exists
+    if (conventionsBlock !== FALLBACK_CONVENTIONS) {
+      parts.push(`\n## Project conventions\n${conventionsBlock}\n`);
+    }
+  }
+
+  // 3. Context files (text inlined, binary/large summarized)
   const artifacts: ContextArtifactSummary[] = [];
   for (const file of plan.context.files) {
     const absPath = resolve(file);
@@ -71,7 +87,7 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push("Use artifact metadata and nearby text context when reasoning about these files.");
   }
 
-  // 2b. KG-derived structural context
+  // 4. KG-derived structural context
   if (kgContext) {
     parts.push(`\n--- Structural Context (Knowledge Graph) ---`);
     parts.push(kgContext.systemContext);
@@ -81,63 +97,78 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(`--- End Structural Context ---\n`);
   }
 
-  // 2c. Mined conventions from KG
-  if (kgContext?.conventions && kgContext.conventions.length > 0) {
-    const conventionSection = formatConventionsForContext(kgContext.conventions);
-    if (conventionSection) {
-      parts.push(`\n--- Mined Conventions ---`);
-      parts.push(conventionSection);
-      parts.push(`--- End Mined Conventions ---\n`);
-    }
-  }
-
-  // 2d. Promoted review conventions
-  if (promotedFindings && promotedFindings.length > 0) {
-    parts.push(`\n--- Review Conventions ---`);
-    parts.push("The following conventions were identified from recurring review findings:");
-    for (const finding of promotedFindings) {
-      const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
-      parts.push(`- Convention: ${desc} (flagged ${finding.occurrenceCount} times in review, module: ${finding.module})`);
-    }
-    parts.push(`--- End Review Conventions ---\n`);
-  }
-
-  // 3. Available tools description
+  // 5. Available tools
   if (plan.workflow.tools.length > 0) {
-    parts.push(`\nAvailable tools in this container: ${plan.workflow.tools.join(", ")}\n`);
+    parts.push(`\n## Available tools\n${plan.workflow.tools.join(", ")}\n`);
   }
 
-  // 4. The task
-  parts.push(`\n--- Task ---\n${plan.task}\n`);
+  // 6. The task
+  parts.push(`\n## Task\n${plan.task}\n`);
 
-  // 5. Validation instructions (so the agent knows what will be checked)
+  // 7. Validation instructions
   if (plan.validation.steps.length > 0) {
     const reproSteps = plan.validation.steps.filter((s) => s.before_fix === true);
     const verifySteps = plan.validation.steps.filter((s) => s.before_fix !== true);
 
     if (reproSteps.length > 0) {
-      parts.push(`\nREPRODUCE — these checks should FAIL before your fix (proving the bug exists):`);
-      for (const step of reproSteps) {
-        parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
+      parts.push(`\n## Reproduce\nThese checks should FAIL before your fix (proving the bug exists):`);
+      for (let i = 0; i < reproSteps.length; i++) {
+        const step = reproSteps[i];
+        parts.push(`${i + 1}. ${step.name}: \`${step.command}\` — ${step.description}`);
       }
     }
 
-    if (verifySteps.length > 0) {
-      parts.push(`\nVERIFY — these checks should PASS after your fix:`);
-      for (const step of verifySteps) {
-        parts.push(`- ${step.name}: \`${step.command}\` — ${step.description}`);
-      }
+    parts.push(`\n## Verification\nThese checks must ALL pass when you are done:`);
+    for (let i = 0; i < verifySteps.length; i++) {
+      const step = verifySteps[i];
+      parts.push(`${i + 1}. ${step.name}: \`${step.command}\` — ${step.description}`);
     }
 
-    parts.push(`\nIf any check fails, you'll receive the error output and must fix it.\n`);
+    parts.push(`\nIf any check fails, you will receive the error output. Read it carefully, identify the root cause, and fix it. Do not retry the same fix.\n`);
   }
 
-  // 6. Output instructions
+  // 8. Output instructions
   if (plan.output.mode === "files") {
     parts.push(`\nSave all output files to ${plan.output.path}\n`);
   }
 
   return parts.join("\n");
+}
+
+/**
+ * Build the conventions block to replace {{conventions}} in the system prompt.
+ * Merges KG-mined conventions and promoted review findings into a single section.
+ */
+function buildConventionsBlock(
+  kgContext?: ContextResult,
+  promotedFindings?: ReviewFindingRow[],
+): string {
+  const lines: string[] = [];
+
+  // KG-mined conventions
+  if (kgContext?.conventions && kgContext.conventions.length > 0) {
+    const formatted = formatConventionsForContext(kgContext.conventions);
+    if (formatted) {
+      lines.push("This project follows these conventions (discovered from the codebase):");
+      lines.push(formatted);
+    }
+  }
+
+  // Promoted review findings
+  if (promotedFindings && promotedFindings.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("Additional conventions from code review history:");
+    for (const finding of promotedFindings) {
+      const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
+      lines.push(`- ${desc} (flagged ${finding.occurrenceCount} times)`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return FALLBACK_CONVENTIONS;
+  }
+
+  return lines.join("\n");
 }
 
 function classifyContext(data: Buffer):
