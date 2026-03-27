@@ -18,6 +18,7 @@ import { resumeRun } from "../durability/pause.js";
 import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import type { AnalyticsRepository } from "../storage/repositories/analytics.js";
 import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
@@ -37,6 +38,7 @@ interface RouteServices {
   runRepo?: RunRepository;
   costRepo?: CostRepository;
   outcomeRepo?: OutcomeRepository;
+  analyticsRepo?: AnalyticsRepository;
   budgetConfig?: BudgetConfig;
   eventRepo?: EventRepository;
   authToken?: string;
@@ -50,6 +52,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const runRepo = services.runRepo;
   const costRepo = services.costRepo;
   const outcomeRepo = services.outcomeRepo;
+  const analyticsRepo = services.analyticsRepo;
   const budgetConfig = services.budgetConfig;
   const eventRepo = services.eventRepo;
   const authToken = services.authToken;
@@ -920,6 +923,54 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       });
 
       return { status: "updated", id, human_review_result };
+    },
+  );
+
+  // --- Analytics API ---
+
+  const analyticsError503 = { error: { code: "NOT_CONFIGURED", message: "Analytics repository not available" } };
+
+  function resolveAnalyticsSince(since?: string): string {
+    if (since) return since;
+    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/summary",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getSummary(since);
+    },
+  );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/cost-trend",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getCostTrend(since);
+    },
+  );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/failure-hotspots",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getFailureHotspots(since);
     },
   );
 }
