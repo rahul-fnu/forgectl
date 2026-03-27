@@ -69,6 +69,13 @@ export function formatSSEEvent(event: RunEvent): string {
     case "output":
       return `${chalk.gray(ts)} ${chalk.magenta(`⇥ Output collected (${d.mode || "unknown"}${d.branch ? `: ${d.branch}` : ""})`)}`;
 
+    case "agent_output": {
+      const streamLabel = d.stream === "stderr" ? chalk.red("stderr") : chalk.white("stdout");
+      const text = String(d.chunk ?? "").trimEnd();
+      if (!text) return "";
+      return `${chalk.gray(ts)} ${chalk.gray(`[${streamLabel}]`)} ${text}`;
+    }
+
     case "cost": {
       const total = typeof d.total === "number" ? d.total : 0;
       return `${chalk.gray(ts)} ${chalk.gray(`$ ${total.toLocaleString("en-US")} tokens`)}`;
@@ -103,9 +110,12 @@ export async function logsFollowCommand(runId: string): Promise<void> {
     process.exit(1);
   }
 
-  const url = `${getDaemonUrl()}/runs/${runId}/events`;
+  const token = readDaemonToken();
+  const streamUrl = token
+    ? `${getDaemonUrl()}/api/v1/runs/${runId}/stream?token=${encodeURIComponent(token)}`
+    : `${getDaemonUrl()}/api/v1/runs/${runId}/stream`;
   try {
-    const res = await fetch(url, { headers: getDaemonHeaders() });
+    const res = await fetch(streamUrl, { headers: getDaemonHeaders() });
     if (!res.ok || !res.body) {
       console.error(chalk.red(`Run not found or not accessible: ${runId}`));
       process.exit(1);
@@ -130,7 +140,8 @@ export async function logsFollowCommand(runId: string): Promise<void> {
       for (const part of parts) {
         const events = parseSSEData(part + "\n");
         for (const event of events) {
-          console.log(formatSSEEvent(event));
+          const formatted = formatSSEEvent(event);
+          if (formatted) console.log(formatted);
           if (event.type === "completed" || event.type === "failed") {
             return;
           }
