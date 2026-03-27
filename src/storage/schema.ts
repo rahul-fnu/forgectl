@@ -184,18 +184,6 @@ export const cooldownState = sqliteTable("cooldown_state", {
   probeCount: integer("probe_count").default(0),
 });
 
-export const spans = sqliteTable("spans", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  traceId: text("trace_id").notNull(),
-  spanId: text("span_id").notNull(),
-  parentSpanId: text("parent_span_id"),
-  name: text("name").notNull(),
-  startMs: integer("start_ms").notNull(),
-  endMs: integer("end_ms"),
-  status: text("status").notNull().default("running"),
-  attributes: text("attributes"), // JSON-serialized
-});
-
 export const reviewCalibration = sqliteTable(
   "review_calibration",
   {
