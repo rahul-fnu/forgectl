@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createAnalyticsRepository } from "../storage/repositories/analytics.js";
-import type { AnalyticsSummary } from "../storage/repositories/analytics.js";
+import type { AnalyticsSummary, RetryPattern, FailureHotspot, WorkflowBreakdown } from "../storage/repositories/analytics.js";
 
 interface StatsOptions {
   since?: string;
@@ -55,8 +55,30 @@ function formatSummary(summary: AnalyticsSummary, sinceLabel: string): void {
       console.log(`    ${f.mode.padEnd(30)} ${String(f.count).padStart(4)}`);
     }
   }
+}
 
-  console.log("");
+function formatRetryPatterns(patterns: RetryPattern[]): void {
+  if (patterns.length === 0) return;
+  console.log(chalk.bold("\nRetry Patterns:"));
+  for (const p of patterns) {
+    console.log(`  ${p.failureReason.padEnd(30)} ${String(p.count).padStart(4)} runs  avg ${p.avgAttempts.toFixed(1)} attempts`);
+  }
+}
+
+function formatFailureHotspots(hotspots: FailureHotspot[]): void {
+  if (hotspots.length === 0) return;
+  console.log(chalk.bold("\nFailure Hotspots:"));
+  for (const h of hotspots) {
+    console.log(`  ${h.module.padEnd(30)} ${String(h.failureCount).padStart(4)}/${h.totalRuns} failures  (${(h.failureRate * 100).toFixed(0)}%)`);
+  }
+}
+
+function formatWorkflowBreakdown(workflows: WorkflowBreakdown[]): void {
+  if (workflows.length === 0) return;
+  console.log(chalk.bold("\nPer-Workflow Breakdown:"));
+  for (const w of workflows) {
+    console.log(`  ${w.workflow.padEnd(20)} ${String(w.runCount).padStart(4)} runs  ${(w.successRate * 100).toFixed(0)}% success  $${w.totalCostUsd.toFixed(4)}  avg ${formatDuration(w.avgDurationMs)}`);
+  }
 }
 
 export async function statsCommand(opts: StatsOptions): Promise<void> {
@@ -69,12 +91,23 @@ export async function statsCommand(opts: StatsOptions): Promise<void> {
     const sinceDate = parseSinceDuration(sinceDuration);
     const sinceISO = sinceDate.toISOString();
 
-    const summary = analyticsRepo.getSummary(sinceISO);
-
     if (opts.json) {
-      console.log(JSON.stringify(summary, null, 2));
+      const metrics = analyticsRepo.getFullMetrics(sinceISO);
+      console.log(JSON.stringify(metrics, null, 2));
     } else {
+      const summary = analyticsRepo.getSummary(sinceISO);
       formatSummary(summary, `last ${sinceDuration}`);
+
+      const retryPatterns = analyticsRepo.getRetryPatterns(sinceISO);
+      formatRetryPatterns(retryPatterns);
+
+      const hotspots = analyticsRepo.getFailureHotspots(sinceISO);
+      formatFailureHotspots(hotspots);
+
+      const workflows = analyticsRepo.getWorkflowBreakdown(sinceISO);
+      formatWorkflowBreakdown(workflows);
+
+      console.log("");
     }
   } finally {
     closeDatabase(db);

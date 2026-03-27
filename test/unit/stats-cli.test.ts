@@ -68,4 +68,27 @@ describe("stats CLI formatting", () => {
     expect(summary.totalCostUsd).toBeCloseTo(0.30, 4);
     expect(summary.avgCostUsd).toBeCloseTo(0.075, 4);
   });
+
+  it("getFullMetrics returns all sections for --json output", () => {
+    const runRepo = createRunRepository(db);
+    const costRepo = createCostRepository(db);
+    const analyticsRepo = createAnalyticsRepository(db);
+
+    runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+    runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "failed" });
+    costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.05, timestamp: "2026-03-20T10:00:00Z" });
+
+    const metrics = analyticsRepo.getFullMetrics("2026-03-20T00:00:00Z");
+    const json = JSON.stringify(metrics);
+    const parsed = JSON.parse(json);
+
+    expect(parsed).toHaveProperty("summary");
+    expect(parsed).toHaveProperty("costTrend");
+    expect(parsed).toHaveProperty("failureHotspots");
+    expect(parsed).toHaveProperty("retryPatterns");
+    expect(parsed).toHaveProperty("workflowBreakdown");
+    expect(parsed.summary.runCount).toBe(2);
+    expect(parsed.workflowBreakdown.length).toBe(1);
+    expect(parsed.workflowBreakdown[0].workflow).toBe("code");
+  });
 });
