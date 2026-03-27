@@ -26,6 +26,7 @@ import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
 import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
 import { costsCommand } from "./cli/costs.js";
+import { statsCommand } from "./cli/stats.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
 import { logsCommand } from "./cli/logs.js";
@@ -146,6 +147,14 @@ program
   .option("--since <duration>", "Show costs since duration (e.g. 24h, 7d)")
   .option("--workflow <name>", "Show costs for a specific workflow")
   .action(costsCommand);
+
+// forgectl stats
+program
+  .command("stats")
+  .description("Show run statistics and analytics")
+  .option("--since <duration>", "Statistics period (e.g. 7d, 24h, 30d)", "7d")
+  .option("--json", "Output as JSON")
+  .action(statsCommand);
 
 // forgectl analyze
 program
