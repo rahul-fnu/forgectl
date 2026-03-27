@@ -8,6 +8,7 @@ import { createAnalyticsRepository, type AnalyticsRepository } from "../../src/s
 import { createRunRepository, type RunRepository } from "../../src/storage/repositories/runs.js";
 import { createCostRepository, type CostRepository } from "../../src/storage/repositories/costs.js";
 import { createOutcomeRepository, type OutcomeRepository } from "../../src/storage/repositories/outcomes.js";
+import { createRetryRepository, type RetryRepository } from "../../src/storage/repositories/retries.js";
 
 describe("storage/repositories/analytics", () => {
   let db: AppDatabase;
@@ -16,6 +17,7 @@ describe("storage/repositories/analytics", () => {
   let runRepo: RunRepository;
   let costRepo: CostRepository;
   let outcomeRepo: OutcomeRepository;
+  let retryRepo: RetryRepository;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "forgectl-analytics-test-"));
@@ -25,6 +27,7 @@ describe("storage/repositories/analytics", () => {
     runRepo = createRunRepository(db);
     costRepo = createCostRepository(db);
     outcomeRepo = createOutcomeRepository(db);
+    retryRepo = createRetryRepository(db);
   });
 
   afterEach(() => {
@@ -136,79 +139,74 @@ describe("storage/repositories/analytics", () => {
   });
 
   describe("getRetryPatterns()", () => {
-    it("returns zeros for empty database", () => {
+    it("returns empty array for no data", () => {
       const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
-      expect(patterns.totalOutcomes).toBe(0);
-      expect(patterns.avgTotalTurns).toBe(0);
-      expect(patterns.avgLintIterations).toBe(0);
-      expect(patterns.avgReviewRounds).toBe(0);
-      expect(patterns.maxTotalTurns).toBe(0);
-      expect(patterns.runsWithRetries).toBe(0);
-      expect(patterns.retryRate).toBe(0);
+      expect(patterns).toEqual([]);
     });
 
-    it("calculates retry patterns from outcomes", () => {
-      outcomeRepo.insert({ id: "o1", status: "completed", totalTurns: 3, lintIterations: 1, reviewRounds: 1, startedAt: "2026-03-20T10:00:00Z" });
-      outcomeRepo.insert({ id: "o2", status: "completed", totalTurns: 1, lintIterations: 0, reviewRounds: 0, startedAt: "2026-03-20T11:00:00Z" });
-      outcomeRepo.insert({ id: "o3", status: "failed", totalTurns: 5, lintIterations: 2, reviewRounds: 2, startedAt: "2026-03-20T12:00:00Z" });
+    it("groups retries by failure reason", () => {
+      runRepo.insert({ id: "r1", task: "t1", submittedAt: "2026-03-20T10:00:00Z", status: "failed" });
+      runRepo.insert({ id: "r2", task: "t2", submittedAt: "2026-03-20T11:00:00Z", status: "failed" });
+      retryRepo.insert({ runId: "r1", attempt: 1, failureReason: "lint_failure" });
+      retryRepo.insert({ runId: "r1", attempt: 2, failureReason: "lint_failure" });
+      retryRepo.insert({ runId: "r2", attempt: 1, failureReason: "test_failure" });
 
-      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
-      expect(patterns.totalOutcomes).toBe(3);
-      expect(patterns.avgTotalTurns).toBe(3);
-      expect(patterns.avgLintIterations).toBe(1);
-      expect(patterns.avgReviewRounds).toBe(1);
-      expect(patterns.maxTotalTurns).toBe(5);
-      expect(patterns.runsWithRetries).toBe(2);
-      expect(patterns.retryRate).toBeCloseTo(0.6667, 3);
-    });
+      const patterns = analyticsRepo.getRetryPatterns("2026-01-01T00:00:00Z");
+      expect(patterns.length).toBe(2);
 
-    it("respects since filter", () => {
-      outcomeRepo.insert({ id: "o1", status: "completed", totalTurns: 3, startedAt: "2026-03-19T10:00:00Z" });
-      outcomeRepo.insert({ id: "o2", status: "completed", totalTurns: 1, startedAt: "2026-03-21T10:00:00Z" });
+      const lint = patterns.find((p) => p.failureReason === "lint_failure")!;
+      expect(lint).toBeDefined();
+      expect(lint.count).toBe(1);
+      expect(lint.avgAttempts).toBeCloseTo(1.5, 1);
 
-      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
-      expect(patterns.totalOutcomes).toBe(1);
+      const test = patterns.find((p) => p.failureReason === "test_failure")!;
+      expect(test).toBeDefined();
+      expect(test.count).toBe(1);
     });
   });
 
-  describe("getPerformanceByWorkflow()", () => {
+  describe("getWorkflowBreakdown()", () => {
     it("returns empty array for no data", () => {
-      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
-      expect(perf).toEqual([]);
+      const breakdown = analyticsRepo.getWorkflowBreakdown("2026-03-20T00:00:00Z");
+      expect(breakdown).toEqual([]);
     });
 
-    it("groups performance by workflow", () => {
-      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed", startedAt: "2026-03-20T10:00:00Z", completedAt: "2026-03-20T10:05:00Z" });
-      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "failed", startedAt: "2026-03-20T11:00:00Z", completedAt: "2026-03-20T11:10:00Z" });
-      runRepo.insert({ id: "r3", task: "t3", workflow: "research", submittedAt: "2026-03-20T12:00:00Z", status: "completed", startedAt: "2026-03-20T12:00:00Z", completedAt: "2026-03-20T12:02:00Z" });
+    it("groups runs by workflow", () => {
+      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "failed" });
+      runRepo.insert({ id: "r3", task: "t3", workflow: "research", submittedAt: "2026-03-20T12:00:00Z", status: "completed" });
       costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.10, timestamp: "2026-03-20T10:00:00Z" });
-      costRepo.insert({ runId: "r2", agentType: "claude-code", inputTokens: 2000, outputTokens: 1000, costUsd: 0.20, timestamp: "2026-03-20T11:00:00Z" });
-      costRepo.insert({ runId: "r3", agentType: "claude-code", inputTokens: 500, outputTokens: 200, costUsd: 0.03, timestamp: "2026-03-20T12:00:00Z" });
 
-      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
-      expect(perf.length).toBe(2);
+      const breakdown = analyticsRepo.getWorkflowBreakdown("2026-03-20T00:00:00Z");
+      expect(breakdown.length).toBe(2);
 
-      const codePerf = perf.find((p) => p.workflow === "code")!;
-      expect(codePerf.runCount).toBe(2);
-      expect(codePerf.successCount).toBe(1);
-      expect(codePerf.failureCount).toBe(1);
-      expect(codePerf.successRate).toBe(0.5);
-      expect(codePerf.totalCostUsd).toBeCloseTo(0.30, 4);
-      expect(codePerf.avgCostUsd).toBeCloseTo(0.15, 4);
+      const code = breakdown.find((w) => w.workflow === "code")!;
+      expect(code.runCount).toBe(2);
+      expect(code.successCount).toBe(1);
+      expect(code.failureCount).toBe(1);
+      expect(code.successRate).toBe(0.5);
+      expect(code.totalCostUsd).toBeCloseTo(0.10, 4);
 
-      const researchPerf = perf.find((p) => p.workflow === "research")!;
-      expect(researchPerf.runCount).toBe(1);
-      expect(researchPerf.successRate).toBe(1);
-      expect(researchPerf.totalCostUsd).toBeCloseTo(0.03, 4);
+      const research = breakdown.find((w) => w.workflow === "research")!;
+      expect(research.runCount).toBe(1);
+      expect(research.successCount).toBe(1);
+      expect(research.successRate).toBe(1);
     });
+  });
 
-    it("excludes runs without workflow", () => {
-      runRepo.insert({ id: "r1", task: "t1", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
-      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "completed" });
+  describe("getFullMetrics()", () => {
+    it("returns all metric sections", () => {
+      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+      costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.05, timestamp: "2026-03-20T10:00:00Z" });
 
-      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
-      expect(perf.length).toBe(1);
-      expect(perf[0].workflow).toBe("code");
+      const metrics = analyticsRepo.getFullMetrics("2026-03-20T00:00:00Z");
+      expect(metrics).toHaveProperty("summary");
+      expect(metrics).toHaveProperty("costTrend");
+      expect(metrics).toHaveProperty("failureHotspots");
+      expect(metrics).toHaveProperty("retryPatterns");
+      expect(metrics).toHaveProperty("workflowBreakdown");
+      expect(metrics.summary.runCount).toBe(1);
+      expect(metrics.workflowBreakdown.length).toBe(1);
     });
   });
 });

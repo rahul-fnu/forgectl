@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerRoutes } from "../../src/daemon/routes.js";
 import type { RunQueue } from "../../src/daemon/queue.js";
-import type { AnalyticsRepository, AnalyticsSummary, CostTrendPoint, FailureHotspot, RetryPatterns, WorkflowPerformance } from "../../src/storage/repositories/analytics.js";
+import type { AnalyticsRepository, AnalyticsSummary, CostTrendPoint, FailureHotspot, RetryPattern, WorkflowBreakdown, FullMetrics } from "../../src/storage/repositories/analytics.js";
 
 function createMockQueue(): RunQueue {
   return {
@@ -17,8 +17,9 @@ function createMockAnalyticsRepo(overrides: Partial<{
   summary: AnalyticsSummary;
   costTrend: CostTrendPoint[];
   failureHotspots: FailureHotspot[];
-  retryPatterns: RetryPatterns;
-  workflowPerformance: WorkflowPerformance[];
+  retryPatterns: RetryPattern[];
+  workflowBreakdown: WorkflowBreakdown[];
+  fullMetrics: FullMetrics;
 }> = {}): AnalyticsRepository {
   const defaultSummary: AnalyticsSummary = {
     runCount: 10,
@@ -31,28 +32,39 @@ function createMockAnalyticsRepo(overrides: Partial<{
     topFailures: [{ mode: "lint_failure", count: 2 }],
   };
 
+  const defaultRetryPatterns: RetryPattern[] = [
+    { failureReason: "lint_failure", count: 3, avgAttempts: 2.1 },
+  ];
+
+  const defaultWorkflowBreakdown: WorkflowBreakdown[] = [
+    { workflow: "code", runCount: 7, successCount: 6, failureCount: 1, successRate: 0.857, totalCostUsd: 1.2, avgDurationMs: 25000 },
+    { workflow: "research", runCount: 3, successCount: 2, failureCount: 1, successRate: 0.667, totalCostUsd: 0.3, avgDurationMs: 40000 },
+  ];
+
+  const defaultCostTrend = overrides.costTrend ?? [
+    { date: "2026-03-20", totalCostUsd: 0.5, runCount: 3 },
+    { date: "2026-03-21", totalCostUsd: 1.0, runCount: 7 },
+  ];
+
+  const defaultHotspots = overrides.failureHotspots ?? [
+    { module: "src/auth", failureCount: 3, totalRuns: 5, failureRate: 0.6 },
+  ];
+
+  const defaultFullMetrics: FullMetrics = overrides.fullMetrics ?? {
+    summary: overrides.summary ?? defaultSummary,
+    costTrend: defaultCostTrend,
+    failureHotspots: defaultHotspots,
+    retryPatterns: overrides.retryPatterns ?? defaultRetryPatterns,
+    workflowBreakdown: overrides.workflowBreakdown ?? defaultWorkflowBreakdown,
+  };
+
   return {
     getSummary: vi.fn().mockReturnValue(overrides.summary ?? defaultSummary),
-    getCostTrend: vi.fn().mockReturnValue(overrides.costTrend ?? [
-      { date: "2026-03-20", totalCostUsd: 0.5, runCount: 3 },
-      { date: "2026-03-21", totalCostUsd: 1.0, runCount: 7 },
-    ]),
-    getFailureHotspots: vi.fn().mockReturnValue(overrides.failureHotspots ?? [
-      { module: "src/auth", failureCount: 3, totalRuns: 5, failureRate: 0.6 },
-    ]),
-    getRetryPatterns: vi.fn().mockReturnValue(overrides.retryPatterns ?? {
-      totalOutcomes: 10,
-      avgTotalTurns: 2.5,
-      avgLintIterations: 0.8,
-      avgReviewRounds: 1.2,
-      maxTotalTurns: 5,
-      runsWithRetries: 6,
-      retryRate: 0.6,
-    }),
-    getPerformanceByWorkflow: vi.fn().mockReturnValue(overrides.workflowPerformance ?? [
-      { workflow: "code", runCount: 7, successCount: 6, failureCount: 1, successRate: 0.857, avgDurationMs: 45000, totalCostUsd: 1.2, avgCostUsd: 0.171 },
-      { workflow: "research", runCount: 3, successCount: 2, failureCount: 1, successRate: 0.667, avgDurationMs: 20000, totalCostUsd: 0.3, avgCostUsd: 0.1 },
-    ]),
+    getCostTrend: vi.fn().mockReturnValue(defaultCostTrend),
+    getFailureHotspots: vi.fn().mockReturnValue(defaultHotspots),
+    getRetryPatterns: vi.fn().mockReturnValue(overrides.retryPatterns ?? defaultRetryPatterns),
+    getWorkflowBreakdown: vi.fn().mockReturnValue(overrides.workflowBreakdown ?? defaultWorkflowBreakdown),
+    getFullMetrics: vi.fn().mockReturnValue(defaultFullMetrics),
   };
 }
 
@@ -178,24 +190,25 @@ describe("Analytics API Routes", () => {
     });
   });
 
-  describe("GET /api/v1/analytics/retry-patterns", () => {
-    it("returns retry patterns object", async () => {
+  describe("GET /api/v1/metrics", () => {
+    it("returns full metrics with all sections", async () => {
       app = Fastify();
       const queue = createMockQueue();
       const analyticsRepo = createMockAnalyticsRepo();
       registerRoutes(app, queue, { analyticsRepo });
 
-      const res = await app.inject({ method: "GET", url: "/api/v1/analytics/retry-patterns" });
+      const res = await app.inject({ method: "GET", url: "/api/v1/metrics" });
       expect(res.statusCode).toBe(200);
 
       const body = JSON.parse(res.body);
-      expect(body).toHaveProperty("totalOutcomes", 10);
-      expect(body).toHaveProperty("avgTotalTurns", 2.5);
-      expect(body).toHaveProperty("avgLintIterations", 0.8);
-      expect(body).toHaveProperty("avgReviewRounds", 1.2);
-      expect(body).toHaveProperty("maxTotalTurns", 5);
-      expect(body).toHaveProperty("runsWithRetries", 6);
-      expect(body).toHaveProperty("retryRate", 0.6);
+      expect(body).toHaveProperty("summary");
+      expect(body).toHaveProperty("costTrend");
+      expect(body).toHaveProperty("failureHotspots");
+      expect(body).toHaveProperty("retryPatterns");
+      expect(body).toHaveProperty("workflowBreakdown");
+      expect(body.summary.runCount).toBe(10);
+      expect(body.retryPatterns[0].failureReason).toBe("lint_failure");
+      expect(body.workflowBreakdown.length).toBe(2);
     });
 
     it("passes since query param to repository", async () => {
@@ -204,8 +217,8 @@ describe("Analytics API Routes", () => {
       const analyticsRepo = createMockAnalyticsRepo();
       registerRoutes(app, queue, { analyticsRepo });
 
-      await app.inject({ method: "GET", url: "/api/v1/analytics/retry-patterns?since=2026-03-20T00:00:00Z" });
-      expect(analyticsRepo.getRetryPatterns).toHaveBeenCalledWith("2026-03-20T00:00:00Z");
+      await app.inject({ method: "GET", url: "/api/v1/metrics?since=2026-03-20T00:00:00Z" });
+      expect(analyticsRepo.getFullMetrics).toHaveBeenCalledWith("2026-03-20T00:00:00Z");
     });
 
     it("returns 503 when analytics repo not configured", async () => {
@@ -213,38 +226,7 @@ describe("Analytics API Routes", () => {
       const queue = createMockQueue();
       registerRoutes(app, queue, {});
 
-      const res = await app.inject({ method: "GET", url: "/api/v1/analytics/retry-patterns" });
-      expect(res.statusCode).toBe(503);
-    });
-  });
-
-  describe("GET /api/v1/analytics/performance", () => {
-    it("returns workflow performance array", async () => {
-      app = Fastify();
-      const queue = createMockQueue();
-      const analyticsRepo = createMockAnalyticsRepo();
-      registerRoutes(app, queue, { analyticsRepo });
-
-      const res = await app.inject({ method: "GET", url: "/api/v1/analytics/performance" });
-      expect(res.statusCode).toBe(200);
-
-      const body = JSON.parse(res.body);
-      expect(body).toBeInstanceOf(Array);
-      expect(body.length).toBe(2);
-      expect(body[0]).toHaveProperty("workflow");
-      expect(body[0]).toHaveProperty("runCount");
-      expect(body[0]).toHaveProperty("successRate");
-      expect(body[0]).toHaveProperty("avgDurationMs");
-      expect(body[0]).toHaveProperty("totalCostUsd");
-      expect(body[0]).toHaveProperty("avgCostUsd");
-    });
-
-    it("returns 503 when analytics repo not configured", async () => {
-      app = Fastify();
-      const queue = createMockQueue();
-      registerRoutes(app, queue, {});
-
-      const res = await app.inject({ method: "GET", url: "/api/v1/analytics/performance" });
+      const res = await app.inject({ method: "GET", url: "/api/v1/metrics" });
       expect(res.statusCode).toBe(503);
     });
   });

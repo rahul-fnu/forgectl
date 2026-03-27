@@ -845,6 +845,25 @@ async function executeWorkerAndHandle(
       }
     }
 
+    // Reactive dispatch: detect anomalies and create issues
+    if (outcomeDeps && config.reactive?.auto_create_issues !== false) {
+      try {
+        const { dispatchReactiveIssues } = await import("../analysis/reactive-dispatch.js");
+        const allOutcomes = outcomeDeps.outcomeRepo.findAll();
+        const reactiveConfig = {
+          auto_create_issues: config.reactive?.auto_create_issues ?? true,
+          max_issues_per_day: config.reactive?.max_issues_per_day ?? 5,
+        };
+        const created = await dispatchReactiveIssues(allOutcomes, tracker, reactiveConfig, logger);
+        if (created.length > 0) {
+          logger.info("dispatcher", `Created ${created.length} reactive issue(s): ${created.join(", ")}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("dispatcher", `Reactive dispatch failed: ${msg}`);
+      }
+    }
+
     // Record the branch for this issue (used for stacked PR bases)
     if (result.branch) {
       state.issueBranches.set(issue.id, result.branch);

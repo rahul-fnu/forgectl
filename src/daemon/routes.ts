@@ -23,6 +23,7 @@ import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { EventRepository } from "../storage/repositories/events.js";
+import { analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste } from "../analysis/outcome-analyzer.js";
 
 interface InlineContext {
   name: string;
@@ -848,6 +849,44 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     return { id: syntheticId, status: "dispatched" };
   });
 
+  // --- Analytics API ---
+
+  app.get("/api/v1/analytics/tool-usage", async (_request, reply) => {
+    if (!outcomeRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome repository not available" } };
+    }
+    return analyzeToolUsage(outcomeRepo.findAll());
+  });
+
+  app.get("/api/v1/analytics/failure-patterns", async (_request, reply) => {
+    if (!outcomeRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome repository not available" } };
+    }
+    return analyzeFailurePatterns(outcomeRepo.findAll());
+  });
+
+  app.get("/api/v1/analytics/token-waste", async (_request, reply) => {
+    if (!outcomeRepo || !costRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Outcome or cost repository not available" } };
+    }
+    const outcomes = outcomeRepo.findAll();
+    const costsByRunId = new Map<string, { inputTokens: number; outputTokens: number; costUsd: number }>();
+    for (const row of outcomes) {
+      const summary = costRepo.sumByRunId(row.id);
+      if (summary.recordCount > 0) {
+        costsByRunId.set(row.id, {
+          inputTokens: summary.totalInputTokens,
+          outputTokens: summary.totalOutputTokens,
+          costUsd: summary.totalCostUsd,
+        });
+      }
+    }
+    return analyzeTokenWaste(outcomes, costsByRunId);
+  });
+
   // --- Human review result ---
   const VALID_HUMAN_REVIEW_RESULTS = new Set(["rubber_stamp", "minor_changes", "major_rework", "rejected"]);
 
@@ -936,7 +975,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   );
 
   app.get<{ Querystring: { since?: string } }>(
-    "/api/v1/analytics/retry-patterns",
+    "/api/v1/metrics",
     async (request, reply) => {
       if (!analyticsRepo) {
         reply.code(503);
@@ -944,20 +983,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       }
 
       const since = resolveAnalyticsSince(request.query.since);
-      return analyticsRepo.getRetryPatterns(since);
-    },
-  );
-
-  app.get<{ Querystring: { since?: string } }>(
-    "/api/v1/analytics/performance",
-    async (request, reply) => {
-      if (!analyticsRepo) {
-        reply.code(503);
-        return analyticsError503;
-      }
-
-      const since = resolveAnalyticsSince(request.query.since);
-      return analyticsRepo.getPerformanceByWorkflow(since);
+      return analyticsRepo.getFullMetrics(since);
     },
   );
 }
