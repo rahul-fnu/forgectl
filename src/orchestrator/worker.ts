@@ -44,6 +44,8 @@ import type { EventRepository } from "../storage/repositories/events.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { generateRunSummary } from "../analysis/run-summary.js";
 import { UsageLimitDetector, UsageLimitError } from "../agent/usage-limit-detector.js";
+import { createSpan, endSpan } from "../tracing/context.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
 
 export interface WorkerResult {
   agentResult: AgentResult;

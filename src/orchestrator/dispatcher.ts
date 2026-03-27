@@ -42,6 +42,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UsageLimitError } from "../agent/usage-limit-detector.js";
 import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
+import { generateTraceId, createSpan, endSpan } from "../tracing/context.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
 
 /**
  * Extract a GitHub repo slug from an issue description.
@@ -88,6 +90,7 @@ export interface OutcomeDeps {
   outcomeRepo: OutcomeRepository;
   eventRepo?: EventRepository;
   snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
+  traceRepo?: TraceRepository;
 }
 
 /** Optional governance context for pre-execution approval gate. */
@@ -402,6 +405,17 @@ export async function dispatchIssue(
     slotManager.registerTopLevel(issue.id, workerInfo);
   }
 
+  // Generate trace context for this dispatch
+  const traceId = generateTraceId();
+  const traceRepo = outcomeDeps?.traceRepo;
+  const dispatchSpan = createSpan(traceId, "dispatch");
+  dispatchSpan.attributes.issueId = issue.id;
+  dispatchSpan.attributes.identifier = issue.identifier;
+  dispatchSpan.attributes.attempt = attempt;
+  if (traceRepo) {
+    try { traceRepo.insertSpan(endSpan(dispatchSpan, "ok")); } catch { /* best-effort */ }
+  }
+
   // Record dispatch metrics and emit SSE event
   metrics.recordDispatch(issue.id, issue.identifier);
   emitRunEvent({
@@ -442,6 +456,8 @@ export async function dispatchIssue(
     promotedFindings,
     slotManager,
     usageLimitRecovery,
+    undefined,
+    traceId,
   );
 }
 
@@ -466,6 +482,7 @@ async function executeWorkerAndHandle(
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
   triageAssessment?: ComplexityAssessment,
+  traceId?: string,
 ): Promise<void> {
   // Per-issue repo routing: detect repo from issue description and load profile overlay
   const issueRepo = extractRepoFromIssue(issue);
@@ -587,6 +604,7 @@ async function executeWorkerAndHandle(
         workflow: "orchestrated",
         status: "running",
         submittedAt: new Date().toISOString(),
+        traceId,
       });
       governanceWithRunId = { ...governance, runId };
 
@@ -625,6 +643,8 @@ async function executeWorkerAndHandle(
       governanceWithRunId?.costRepo,
       outcomeDeps?.eventRepo,
       governanceWithRunId?.runRepo,
+      traceId,
+      outcomeDeps?.traceRepo,
     );
 
     // Remove from running

@@ -25,6 +25,7 @@ export const runs = sqliteTable("runs", {
   complexityAssessment: text("complexity_assessment"), // JSON-serialized ComplexityAssessment
   summary: text("summary"), // JSON-serialized RunSummary
   resumeAfter: text("resume_after"), // ISO timestamp — earliest time to re-queue after usage limit pause
+  traceId: text("trace_id"),
 });
 
 export const delegations = sqliteTable("delegations", {
@@ -169,6 +170,18 @@ export const cooldownState = sqliteTable("cooldown_state", {
   enteredAt: text("entered_at"),
   resumeAt: text("resume_at"),
   probeCount: integer("probe_count").default(0),
+});
+
+export const traces = sqliteTable("traces", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  traceId: text("trace_id").notNull(),
+  spanId: text("span_id").notNull(),
+  parentSpanId: text("parent_span_id"),
+  name: text("name").notNull(),
+  startMs: integer("start_ms").notNull(),
+  endMs: integer("end_ms"),
+  status: text("status").notNull().default("running"),
+  attributes: text("attributes"), // JSON-serialized
 });
 
 export const reviewCalibration = sqliteTable(
