@@ -1,5 +1,5 @@
 import { sql, gte } from "drizzle-orm";
-import { runs, runCosts, runOutcomes } from "../schema.js";
+import { runs, runCosts, runOutcomes, runRetries } from "../schema.js";
 import type { AppDatabase } from "../database.js";
 
 export interface AnalyticsSummary {
@@ -26,10 +26,37 @@ export interface FailureHotspot {
   failureRate: number;
 }
 
+export interface RetryPattern {
+  failureReason: string;
+  count: number;
+  avgAttempts: number;
+}
+
+export interface WorkflowBreakdown {
+  workflow: string;
+  runCount: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  totalCostUsd: number;
+  avgDurationMs: number;
+}
+
+export interface FullMetrics {
+  summary: AnalyticsSummary;
+  costTrend: CostTrendPoint[];
+  failureHotspots: FailureHotspot[];
+  retryPatterns: RetryPattern[];
+  workflowBreakdown: WorkflowBreakdown[];
+}
+
 export interface AnalyticsRepository {
   getSummary(since: string): AnalyticsSummary;
   getCostTrend(since: string): CostTrendPoint[];
   getFailureHotspots(since: string): FailureHotspot[];
+  getRetryPatterns(since: string): RetryPattern[];
+  getWorkflowBreakdown(since: string): WorkflowBreakdown[];
+  getFullMetrics(since: string): FullMetrics;
 }
 
 export function createAnalyticsRepository(db: AppDatabase): AnalyticsRepository {
@@ -149,6 +176,79 @@ export function createAnalyticsRepository(db: AppDatabase): AnalyticsRepository 
 
       hotspots.sort((a, b) => b.failureCount - a.failureCount);
       return hotspots.slice(0, 10);
+    },
+
+    getRetryPatterns(since: string): RetryPattern[] {
+      const rows = db
+        .select({
+          failureReason: runRetries.failureReason,
+          count: sql<number>`COUNT(DISTINCT ${runRetries.runId})`,
+          avgAttempts: sql<number>`AVG(${runRetries.attempt})`,
+        })
+        .from(runRetries)
+        .innerJoin(runs, sql`${runRetries.runId} = ${runs.id}`)
+        .where(sql`${runs.submittedAt} >= ${since} AND ${runRetries.failureReason} IS NOT NULL`)
+        .groupBy(runRetries.failureReason)
+        .orderBy(sql`COUNT(DISTINCT ${runRetries.runId}) DESC`)
+        .limit(10)
+        .all();
+
+      return rows.map((r) => ({
+        failureReason: r.failureReason!,
+        count: r.count,
+        avgAttempts: r.avgAttempts,
+      }));
+    },
+
+    getWorkflowBreakdown(since: string): WorkflowBreakdown[] {
+      const rows = db
+        .select({
+          workflow: runs.workflow,
+          runCount: sql<number>`COUNT(*)`,
+          successCount: sql<number>`SUM(CASE WHEN ${runs.status} = 'completed' THEN 1 ELSE 0 END)`,
+          failureCount: sql<number>`SUM(CASE WHEN ${runs.status} = 'failed' THEN 1 ELSE 0 END)`,
+          avgDurationMs: sql<number>`AVG(CASE WHEN ${runs.startedAt} IS NOT NULL AND ${runs.completedAt} IS NOT NULL THEN (julianday(${runs.completedAt}) - julianday(${runs.startedAt})) * 86400000 ELSE NULL END)`,
+        })
+        .from(runs)
+        .where(sql`${runs.submittedAt} >= ${since} AND ${runs.workflow} IS NOT NULL`)
+        .groupBy(runs.workflow)
+        .orderBy(sql`COUNT(*) DESC`)
+        .all();
+
+      const result: WorkflowBreakdown[] = [];
+      for (const row of rows) {
+        const wf = row.workflow ?? "unknown";
+        const costRow = db
+          .select({
+            totalCostUsd: sql<number>`COALESCE(SUM(CAST(${runCosts.costUsd} AS REAL)), 0)`,
+          })
+          .from(runCosts)
+          .innerJoin(runs, sql`${runCosts.runId} = ${runs.id}`)
+          .where(sql`${runs.workflow} = ${wf} AND ${runs.submittedAt} >= ${since}`)
+          .get();
+
+        result.push({
+          workflow: wf,
+          runCount: row.runCount,
+          successCount: row.successCount,
+          failureCount: row.failureCount,
+          successRate: row.runCount > 0 ? row.successCount / row.runCount : 0,
+          totalCostUsd: costRow?.totalCostUsd ?? 0,
+          avgDurationMs: row.avgDurationMs ?? 0,
+        });
+      }
+
+      return result;
+    },
+
+    getFullMetrics(since: string): FullMetrics {
+      return {
+        summary: this.getSummary(since),
+        costTrend: this.getCostTrend(since),
+        failureHotspots: this.getFailureHotspots(since),
+        retryPatterns: this.getRetryPatterns(since),
+        workflowBreakdown: this.getWorkflowBreakdown(since),
+      };
     },
   };
 }
