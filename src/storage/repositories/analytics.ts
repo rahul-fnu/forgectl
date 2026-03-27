@@ -26,10 +26,33 @@ export interface FailureHotspot {
   failureRate: number;
 }
 
+export interface RetryPatterns {
+  totalOutcomes: number;
+  avgTotalTurns: number;
+  avgLintIterations: number;
+  avgReviewRounds: number;
+  maxTotalTurns: number;
+  runsWithRetries: number;
+  retryRate: number;
+}
+
+export interface WorkflowPerformance {
+  workflow: string;
+  runCount: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  avgDurationMs: number;
+  totalCostUsd: number;
+  avgCostUsd: number;
+}
+
 export interface AnalyticsRepository {
   getSummary(since: string): AnalyticsSummary;
   getCostTrend(since: string): CostTrendPoint[];
   getFailureHotspots(since: string): FailureHotspot[];
+  getRetryPatterns(since: string): RetryPatterns;
+  getPerformanceByWorkflow(since: string): WorkflowPerformance[];
 }
 
 export function createAnalyticsRepository(db: AppDatabase): AnalyticsRepository {
@@ -149,6 +172,76 @@ export function createAnalyticsRepository(db: AppDatabase): AnalyticsRepository 
 
       hotspots.sort((a, b) => b.failureCount - a.failureCount);
       return hotspots.slice(0, 10);
+    },
+
+    getRetryPatterns(since: string): RetryPatterns {
+      const row = db
+        .select({
+          totalOutcomes: sql<number>`COUNT(*)`,
+          avgTotalTurns: sql<number>`COALESCE(AVG(${runOutcomes.totalTurns}), 0)`,
+          avgLintIterations: sql<number>`COALESCE(AVG(${runOutcomes.lintIterations}), 0)`,
+          avgReviewRounds: sql<number>`COALESCE(AVG(${runOutcomes.reviewRounds}), 0)`,
+          maxTotalTurns: sql<number>`COALESCE(MAX(${runOutcomes.totalTurns}), 0)`,
+          runsWithRetries: sql<number>`SUM(CASE WHEN ${runOutcomes.totalTurns} > 1 THEN 1 ELSE 0 END)`,
+        })
+        .from(runOutcomes)
+        .where(gte(runOutcomes.startedAt, since))
+        .get();
+
+      const totalOutcomes = row?.totalOutcomes ?? 0;
+      const runsWithRetries = row?.runsWithRetries ?? 0;
+
+      return {
+        totalOutcomes,
+        avgTotalTurns: row?.avgTotalTurns ?? 0,
+        avgLintIterations: row?.avgLintIterations ?? 0,
+        avgReviewRounds: row?.avgReviewRounds ?? 0,
+        maxTotalTurns: row?.maxTotalTurns ?? 0,
+        runsWithRetries,
+        retryRate: totalOutcomes > 0 ? runsWithRetries / totalOutcomes : 0,
+      };
+    },
+
+    getPerformanceByWorkflow(since: string): WorkflowPerformance[] {
+      const rows = db
+        .select({
+          workflow: runs.workflow,
+          runCount: sql<number>`COUNT(*)`,
+          successCount: sql<number>`SUM(CASE WHEN ${runs.status} = 'completed' THEN 1 ELSE 0 END)`,
+          failureCount: sql<number>`SUM(CASE WHEN ${runs.status} = 'failed' THEN 1 ELSE 0 END)`,
+          avgDurationMs: sql<number>`AVG(CASE WHEN ${runs.startedAt} IS NOT NULL AND ${runs.completedAt} IS NOT NULL THEN (julianday(${runs.completedAt}) - julianday(${runs.startedAt})) * 86400000 ELSE NULL END)`,
+        })
+        .from(runs)
+        .where(sql`${runs.workflow} IS NOT NULL AND ${runs.submittedAt} >= ${since}`)
+        .groupBy(runs.workflow)
+        .orderBy(sql`COUNT(*) DESC`)
+        .limit(20)
+        .all();
+
+      return rows.map((r) => {
+        const costRow = db
+          .select({
+            totalCostUsd: sql<number>`COALESCE(SUM(CAST(${runCosts.costUsd} AS REAL)), 0)`,
+          })
+          .from(runCosts)
+          .innerJoin(runs, sql`${runCosts.runId} = ${runs.id}`)
+          .where(sql`${runs.workflow} = ${r.workflow} AND ${runs.submittedAt} >= ${since}`)
+          .get();
+
+        const totalCostUsd = costRow?.totalCostUsd ?? 0;
+        const runCount = r.runCount;
+
+        return {
+          workflow: r.workflow!,
+          runCount,
+          successCount: r.successCount ?? 0,
+          failureCount: r.failureCount ?? 0,
+          successRate: runCount > 0 ? (r.successCount ?? 0) / runCount : 0,
+          avgDurationMs: r.avgDurationMs ?? 0,
+          totalCostUsd,
+          avgCostUsd: runCount > 0 ? totalCostUsd / runCount : 0,
+        };
+      });
     },
   };
 }

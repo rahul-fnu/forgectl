@@ -134,4 +134,81 @@ describe("storage/repositories/analytics", () => {
       expect(hotspots.length).toBeGreaterThan(0);
     });
   });
+
+  describe("getRetryPatterns()", () => {
+    it("returns zeros for empty database", () => {
+      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
+      expect(patterns.totalOutcomes).toBe(0);
+      expect(patterns.avgTotalTurns).toBe(0);
+      expect(patterns.avgLintIterations).toBe(0);
+      expect(patterns.avgReviewRounds).toBe(0);
+      expect(patterns.maxTotalTurns).toBe(0);
+      expect(patterns.runsWithRetries).toBe(0);
+      expect(patterns.retryRate).toBe(0);
+    });
+
+    it("calculates retry patterns from outcomes", () => {
+      outcomeRepo.insert({ id: "o1", status: "completed", totalTurns: 3, lintIterations: 1, reviewRounds: 1, startedAt: "2026-03-20T10:00:00Z" });
+      outcomeRepo.insert({ id: "o2", status: "completed", totalTurns: 1, lintIterations: 0, reviewRounds: 0, startedAt: "2026-03-20T11:00:00Z" });
+      outcomeRepo.insert({ id: "o3", status: "failed", totalTurns: 5, lintIterations: 2, reviewRounds: 2, startedAt: "2026-03-20T12:00:00Z" });
+
+      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
+      expect(patterns.totalOutcomes).toBe(3);
+      expect(patterns.avgTotalTurns).toBe(3);
+      expect(patterns.avgLintIterations).toBe(1);
+      expect(patterns.avgReviewRounds).toBe(1);
+      expect(patterns.maxTotalTurns).toBe(5);
+      expect(patterns.runsWithRetries).toBe(2);
+      expect(patterns.retryRate).toBeCloseTo(0.6667, 3);
+    });
+
+    it("respects since filter", () => {
+      outcomeRepo.insert({ id: "o1", status: "completed", totalTurns: 3, startedAt: "2026-03-19T10:00:00Z" });
+      outcomeRepo.insert({ id: "o2", status: "completed", totalTurns: 1, startedAt: "2026-03-21T10:00:00Z" });
+
+      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
+      expect(patterns.totalOutcomes).toBe(1);
+    });
+  });
+
+  describe("getPerformanceByWorkflow()", () => {
+    it("returns empty array for no data", () => {
+      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
+      expect(perf).toEqual([]);
+    });
+
+    it("groups performance by workflow", () => {
+      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed", startedAt: "2026-03-20T10:00:00Z", completedAt: "2026-03-20T10:05:00Z" });
+      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "failed", startedAt: "2026-03-20T11:00:00Z", completedAt: "2026-03-20T11:10:00Z" });
+      runRepo.insert({ id: "r3", task: "t3", workflow: "research", submittedAt: "2026-03-20T12:00:00Z", status: "completed", startedAt: "2026-03-20T12:00:00Z", completedAt: "2026-03-20T12:02:00Z" });
+      costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.10, timestamp: "2026-03-20T10:00:00Z" });
+      costRepo.insert({ runId: "r2", agentType: "claude-code", inputTokens: 2000, outputTokens: 1000, costUsd: 0.20, timestamp: "2026-03-20T11:00:00Z" });
+      costRepo.insert({ runId: "r3", agentType: "claude-code", inputTokens: 500, outputTokens: 200, costUsd: 0.03, timestamp: "2026-03-20T12:00:00Z" });
+
+      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
+      expect(perf.length).toBe(2);
+
+      const codePerf = perf.find((p) => p.workflow === "code")!;
+      expect(codePerf.runCount).toBe(2);
+      expect(codePerf.successCount).toBe(1);
+      expect(codePerf.failureCount).toBe(1);
+      expect(codePerf.successRate).toBe(0.5);
+      expect(codePerf.totalCostUsd).toBeCloseTo(0.30, 4);
+      expect(codePerf.avgCostUsd).toBeCloseTo(0.15, 4);
+
+      const researchPerf = perf.find((p) => p.workflow === "research")!;
+      expect(researchPerf.runCount).toBe(1);
+      expect(researchPerf.successRate).toBe(1);
+      expect(researchPerf.totalCostUsd).toBeCloseTo(0.03, 4);
+    });
+
+    it("excludes runs without workflow", () => {
+      runRepo.insert({ id: "r1", task: "t1", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "completed" });
+
+      const perf = analyticsRepo.getPerformanceByWorkflow("2026-03-20T00:00:00Z");
+      expect(perf.length).toBe(1);
+      expect(perf[0].workflow).toBe("code");
+    });
+  });
 });

@@ -2,7 +2,13 @@ import chalk from "chalk";
 import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createAnalyticsRepository } from "../storage/repositories/analytics.js";
-import type { AnalyticsSummary } from "../storage/repositories/analytics.js";
+import type {
+  AnalyticsSummary,
+  CostTrendPoint,
+  RetryPatterns,
+  FailureHotspot,
+  WorkflowPerformance,
+} from "../storage/repositories/analytics.js";
 
 interface StatsOptions {
   since?: string;
@@ -55,8 +61,41 @@ function formatSummary(summary: AnalyticsSummary, sinceLabel: string): void {
       console.log(`    ${f.mode.padEnd(30)} ${String(f.count).padStart(4)}`);
     }
   }
+}
 
-  console.log("");
+function formatCostTrend(trend: CostTrendPoint[]): void {
+  if (trend.length === 0) return;
+  console.log(chalk.bold("\nCost Trend (daily):"));
+  for (const point of trend) {
+    console.log(`  ${point.date}  $${point.totalCostUsd.toFixed(4).padStart(10)}  ${String(point.runCount).padStart(3)} runs`);
+  }
+}
+
+function formatRetryPatterns(patterns: RetryPatterns): void {
+  if (patterns.totalOutcomes === 0) return;
+  console.log(chalk.bold("\nRetry Patterns:"));
+  console.log(`  Total outcomes:      ${patterns.totalOutcomes}`);
+  console.log(`  Runs with retries:   ${patterns.runsWithRetries} (${(patterns.retryRate * 100).toFixed(1)}%)`);
+  console.log(`  Avg total turns:     ${patterns.avgTotalTurns.toFixed(1)}`);
+  console.log(`  Avg lint iterations: ${patterns.avgLintIterations.toFixed(1)}`);
+  console.log(`  Avg review rounds:   ${patterns.avgReviewRounds.toFixed(1)}`);
+  console.log(`  Max total turns:     ${patterns.maxTotalTurns}`);
+}
+
+function formatFailureHotspots(hotspots: FailureHotspot[]): void {
+  if (hotspots.length === 0) return;
+  console.log(chalk.bold("\nValidation Failure Hotspots:"));
+  for (const h of hotspots) {
+    console.log(`  ${h.module.padEnd(30)} ${String(h.failureCount).padStart(3)} failures / ${String(h.totalRuns).padStart(3)} runs  (${(h.failureRate * 100).toFixed(1)}%)`);
+  }
+}
+
+function formatWorkflowPerformance(workflows: WorkflowPerformance[]): void {
+  if (workflows.length === 0) return;
+  console.log(chalk.bold("\nPerformance by Workflow:"));
+  for (const w of workflows) {
+    console.log(`  ${w.workflow.padEnd(20)} ${String(w.runCount).padStart(4)} runs  ${(w.successRate * 100).toFixed(1)}% success  ${formatDuration(w.avgDurationMs).padStart(8)} avg  $${w.avgCostUsd.toFixed(4)}/run`);
+  }
 }
 
 export async function statsCommand(opts: StatsOptions): Promise<void> {
@@ -70,11 +109,26 @@ export async function statsCommand(opts: StatsOptions): Promise<void> {
     const sinceISO = sinceDate.toISOString();
 
     const summary = analyticsRepo.getSummary(sinceISO);
+    const costTrend = analyticsRepo.getCostTrend(sinceISO);
+    const retryPatterns = analyticsRepo.getRetryPatterns(sinceISO);
+    const failureHotspots = analyticsRepo.getFailureHotspots(sinceISO);
+    const workflowPerf = analyticsRepo.getPerformanceByWorkflow(sinceISO);
 
     if (opts.json) {
-      console.log(JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify({
+        summary,
+        costTrend,
+        retryPatterns,
+        failureHotspots,
+        workflowPerformance: workflowPerf,
+      }, null, 2));
     } else {
       formatSummary(summary, `last ${sinceDuration}`);
+      formatCostTrend(costTrend);
+      formatRetryPatterns(retryPatterns);
+      formatFailureHotspots(failureHotspots);
+      formatWorkflowPerformance(workflowPerf);
+      console.log("");
     }
   } finally {
     closeDatabase(db);

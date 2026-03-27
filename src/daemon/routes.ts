@@ -934,4 +934,30 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       return analyticsRepo.getFailureHotspots(since);
     },
   );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/retry-patterns",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getRetryPatterns(since);
+    },
+  );
+
+  app.get<{ Querystring: { since?: string } }>(
+    "/api/v1/analytics/performance",
+    async (request, reply) => {
+      if (!analyticsRepo) {
+        reply.code(503);
+        return analyticsError503;
+      }
+
+      const since = resolveAnalyticsSince(request.query.since);
+      return analyticsRepo.getPerformanceByWorkflow(since);
+    },
+  );
 }

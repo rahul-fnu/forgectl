@@ -7,6 +7,7 @@ import { runMigrations } from "../../src/storage/migrator.js";
 import { createRunRepository } from "../../src/storage/repositories/runs.js";
 import { createCostRepository } from "../../src/storage/repositories/costs.js";
 import { createAnalyticsRepository } from "../../src/storage/repositories/analytics.js";
+import { createOutcomeRepository } from "../../src/storage/repositories/outcomes.js";
 
 describe("stats CLI formatting", () => {
   let db: AppDatabase;
@@ -46,6 +47,36 @@ describe("stats CLI formatting", () => {
     expect(typeof parsed.successRate).toBe("number");
     expect(typeof parsed.totalCostUsd).toBe("number");
     expect(Array.isArray(parsed.topFailures)).toBe(true);
+  });
+
+  it("full --json output includes all analytics sections", () => {
+    const runRepo = createRunRepository(db);
+    const costRepo = createCostRepository(db);
+    const analyticsRepo = createAnalyticsRepository(db);
+    const outcomeRepo = createOutcomeRepository(db);
+
+    runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed", startedAt: "2026-03-20T10:00:00Z", completedAt: "2026-03-20T10:05:00Z" });
+    costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.05, timestamp: "2026-03-20T10:00:00Z" });
+    outcomeRepo.insert({ id: "o1", status: "completed", totalTurns: 2, lintIterations: 1, reviewRounds: 0, startedAt: "2026-03-20T10:00:00Z" });
+
+    const sinceISO = "2026-03-20T00:00:00Z";
+    const result = {
+      summary: analyticsRepo.getSummary(sinceISO),
+      costTrend: analyticsRepo.getCostTrend(sinceISO),
+      retryPatterns: analyticsRepo.getRetryPatterns(sinceISO),
+      failureHotspots: analyticsRepo.getFailureHotspots(sinceISO),
+      workflowPerformance: analyticsRepo.getPerformanceByWorkflow(sinceISO),
+    };
+
+    const parsed = JSON.parse(JSON.stringify(result));
+    expect(parsed).toHaveProperty("summary");
+    expect(parsed).toHaveProperty("costTrend");
+    expect(parsed).toHaveProperty("retryPatterns");
+    expect(parsed).toHaveProperty("failureHotspots");
+    expect(parsed).toHaveProperty("workflowPerformance");
+    expect(parsed.retryPatterns).toHaveProperty("totalOutcomes");
+    expect(parsed.retryPatterns).toHaveProperty("retryRate");
+    expect(Array.isArray(parsed.workflowPerformance)).toBe(true);
   });
 
   it("summary values are correct for mixed run statuses", () => {
