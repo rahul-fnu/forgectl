@@ -22,6 +22,7 @@ import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { EventRepository } from "../storage/repositories/events.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
 
 interface InlineContext {
   name: string;
@@ -38,6 +39,7 @@ interface RouteServices {
   outcomeRepo?: OutcomeRepository;
   budgetConfig?: BudgetConfig;
   eventRepo?: EventRepository;
+  traceRepo?: TraceRepository;
   authToken?: string;
 }
 
@@ -51,6 +53,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
   const outcomeRepo = services.outcomeRepo;
   const budgetConfig = services.budgetConfig;
   const eventRepo = services.eventRepo;
+  const traceRepo = services.traceRepo;
   const authToken = services.authToken;
 
   // Health check
@@ -883,4 +886,19 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       return { status: "updated", id, human_review_result };
     },
   );
+
+  // --- Trace API ---
+  app.get<{ Params: { traceId: string } }>("/api/v1/traces/:traceId", async (request, reply) => {
+    if (!traceRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Trace repository not available" } };
+    }
+
+    const spans = traceRepo.findByTraceId(request.params.traceId);
+    if (spans.length === 0) {
+      reply.code(404);
+      return { error: { code: "NOT_FOUND", message: `Trace '${request.params.traceId}' not found` } };
+    }
+    return spans;
+  });
 }
