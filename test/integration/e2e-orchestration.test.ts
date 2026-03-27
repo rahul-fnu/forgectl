@@ -543,12 +543,12 @@ describe("E2E Orchestration", () => {
         makeIssue({ id: "12", identifier: "#12", created_at: "2026-01-03T00:00:00Z" }),
       ];
 
-      // Both initial dispatches hang so we can assert slot state synchronously
-      let resolveA!: (v: ReturnType<typeof makeSuccessResult>) => void;
-      const promiseA = new Promise<ReturnType<typeof makeSuccessResult>>((r) => { resolveA = r; });
+      // Both dispatches initially hang; we resolve issue-a after asserting both are claimed
+      let resolveA!: (v: WorkerResult) => void;
+      const promiseA = new Promise<WorkerResult>((r) => { resolveA = r; });
       shared.executeWorkerMock
-        .mockReturnValueOnce(promiseA)           // issue-a hangs until we resolve
-        .mockReturnValueOnce(new Promise(() => {})); // issue-b hangs forever
+        .mockReturnValueOnce(promiseA) // issue-a (deferred)
+        .mockReturnValueOnce(new Promise(() => {})); // issue-b hangs
 
       // Dispatch first two
       const firstBatch = issues.slice(0, 2);
@@ -558,8 +558,10 @@ describe("E2E Orchestration", () => {
 
       expect(state.claimed.size).toBe(2);
 
-      // Now resolve issue-a so it completes and releases from running
+      // Now resolve issue-a so it completes
       resolveA(makeSuccessResult());
+
+      // Wait for issue-a to complete (releases from running map)
       await vi.waitFor(() => {
         expect(state.running.has("10")).toBe(false);
       }, { timeout: 2000 });
