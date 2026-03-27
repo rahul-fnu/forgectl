@@ -499,7 +499,7 @@ describe("E2E Orchestration", () => {
   });
 
   describe("Concurrent dispatch respects slot limits", () => {
-    it("only dispatches up to available slots", () => {
+    it("only dispatches up to available slots", async () => {
       config = makeConfig({ maxAgents: 2 });
       const slotManager = new SlotManager(2);
 
@@ -543,10 +543,12 @@ describe("E2E Orchestration", () => {
         makeIssue({ id: "12", identifier: "#12", created_at: "2026-01-03T00:00:00Z" }),
       ];
 
-      // First dispatch: issue-a completes quickly, issue-b stays running
+      // Both initial dispatches hang so we can assert slot state synchronously
+      let resolveA!: (v: ReturnType<typeof makeSuccessResult>) => void;
+      const promiseA = new Promise<ReturnType<typeof makeSuccessResult>>((r) => { resolveA = r; });
       shared.executeWorkerMock
-        .mockResolvedValueOnce(makeSuccessResult()) // issue-a
-        .mockReturnValueOnce(new Promise(() => {})); // issue-b hangs
+        .mockReturnValueOnce(promiseA)           // issue-a hangs until we resolve
+        .mockReturnValueOnce(new Promise(() => {})); // issue-b hangs forever
 
       // Dispatch first two
       const firstBatch = issues.slice(0, 2);
@@ -556,7 +558,8 @@ describe("E2E Orchestration", () => {
 
       expect(state.claimed.size).toBe(2);
 
-      // Wait for issue-a to complete (releases from running map, but claim stays via continuation)
+      // Now resolve issue-a so it completes and releases from running
+      resolveA(makeSuccessResult());
       await vi.waitFor(() => {
         expect(state.running.has("10")).toBe(false);
       }, { timeout: 2000 });

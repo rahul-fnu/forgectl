@@ -571,7 +571,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
   // 5. Parallel execution with slot limits across diamond DAGs
   // -----------------------------------------------------------------------
   describe("Parallel execution respects slot limits", () => {
-    it("dispatches both roots in parallel when 4 slots available", () => {
+    it("dispatches both roots in parallel when 4 slots available", async () => {
       config = makeConfig({ maxAgents: 4 });
       const issues = buildIssueSet();
       const terminalIds = new Set<string>();
@@ -593,7 +593,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
       expect(state.claimed.has("C1")).toBe(true);
     });
 
-    it("dispatches 4 mid-layer issues in parallel after roots complete", () => {
+    it("dispatches 4 mid-layer issues in parallel after roots complete", async () => {
       config = makeConfig({ maxAgents: 4 });
       const issues = buildIssueSet();
 
@@ -620,7 +620,7 @@ describe("Extensive E2E — 10 issues, 2 repos, diamond DAGs", () => {
       expect(state.claimed.has("C3")).toBe(true);
     });
 
-    it("limits to 2 slots when maxAgents=2", () => {
+    it("limits to 2 slots when maxAgents=2", async () => {
       config = makeConfig({ maxAgents: 2 });
       const issues = buildIssueSet();
       const terminalIds = new Set<string>(["A1", "C1"]);
