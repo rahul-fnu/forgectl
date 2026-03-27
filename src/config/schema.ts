@@ -253,6 +253,13 @@ export const ConfigSchema = z.object({
     labels: z.array(z.string()).default(["scheduled-qa"]),
   }).optional(),
 
+  reactive: z.object({
+    enabled: z.boolean().default(false),
+    repeated_failure_threshold: z.number().int().min(1).default(3),
+    cost_spike_multiplier: z.number().positive().default(3),
+    success_rate_floor: z.number().min(0).max(1).default(0.7),
+  }).optional(),
+
   team: z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),
