@@ -8,6 +8,7 @@ import { createAnalyticsRepository, type AnalyticsRepository } from "../../src/s
 import { createRunRepository, type RunRepository } from "../../src/storage/repositories/runs.js";
 import { createCostRepository, type CostRepository } from "../../src/storage/repositories/costs.js";
 import { createOutcomeRepository, type OutcomeRepository } from "../../src/storage/repositories/outcomes.js";
+import { createRetryRepository, type RetryRepository } from "../../src/storage/repositories/retries.js";
 
 describe("storage/repositories/analytics", () => {
   let db: AppDatabase;
@@ -16,6 +17,7 @@ describe("storage/repositories/analytics", () => {
   let runRepo: RunRepository;
   let costRepo: CostRepository;
   let outcomeRepo: OutcomeRepository;
+  let retryRepo: RetryRepository;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "forgectl-analytics-test-"));
@@ -25,6 +27,7 @@ describe("storage/repositories/analytics", () => {
     runRepo = createRunRepository(db);
     costRepo = createCostRepository(db);
     outcomeRepo = createOutcomeRepository(db);
+    retryRepo = createRetryRepository(db);
   });
 
   afterEach(() => {
@@ -132,6 +135,78 @@ describe("storage/repositories/analytics", () => {
 
       const hotspots = analyticsRepo.getFailureHotspots("2026-03-20T00:00:00Z");
       expect(hotspots.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("getRetryPatterns()", () => {
+    it("returns empty array for no data", () => {
+      const patterns = analyticsRepo.getRetryPatterns("2026-03-20T00:00:00Z");
+      expect(patterns).toEqual([]);
+    });
+
+    it("groups retries by failure reason", () => {
+      runRepo.insert({ id: "r1", task: "t1", submittedAt: "2026-03-20T10:00:00Z", status: "failed" });
+      runRepo.insert({ id: "r2", task: "t2", submittedAt: "2026-03-20T11:00:00Z", status: "failed" });
+      retryRepo.insert({ runId: "r1", attempt: 1, failureReason: "lint_failure" });
+      retryRepo.insert({ runId: "r1", attempt: 2, failureReason: "lint_failure" });
+      retryRepo.insert({ runId: "r2", attempt: 1, failureReason: "test_failure" });
+
+      const patterns = analyticsRepo.getRetryPatterns("2026-01-01T00:00:00Z");
+      expect(patterns.length).toBe(2);
+
+      const lint = patterns.find((p) => p.failureReason === "lint_failure")!;
+      expect(lint).toBeDefined();
+      expect(lint.count).toBe(1);
+      expect(lint.avgAttempts).toBeCloseTo(1.5, 1);
+
+      const test = patterns.find((p) => p.failureReason === "test_failure")!;
+      expect(test).toBeDefined();
+      expect(test.count).toBe(1);
+    });
+  });
+
+  describe("getWorkflowBreakdown()", () => {
+    it("returns empty array for no data", () => {
+      const breakdown = analyticsRepo.getWorkflowBreakdown("2026-03-20T00:00:00Z");
+      expect(breakdown).toEqual([]);
+    });
+
+    it("groups runs by workflow", () => {
+      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+      runRepo.insert({ id: "r2", task: "t2", workflow: "code", submittedAt: "2026-03-20T11:00:00Z", status: "failed" });
+      runRepo.insert({ id: "r3", task: "t3", workflow: "research", submittedAt: "2026-03-20T12:00:00Z", status: "completed" });
+      costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.10, timestamp: "2026-03-20T10:00:00Z" });
+
+      const breakdown = analyticsRepo.getWorkflowBreakdown("2026-03-20T00:00:00Z");
+      expect(breakdown.length).toBe(2);
+
+      const code = breakdown.find((w) => w.workflow === "code")!;
+      expect(code.runCount).toBe(2);
+      expect(code.successCount).toBe(1);
+      expect(code.failureCount).toBe(1);
+      expect(code.successRate).toBe(0.5);
+      expect(code.totalCostUsd).toBeCloseTo(0.10, 4);
+
+      const research = breakdown.find((w) => w.workflow === "research")!;
+      expect(research.runCount).toBe(1);
+      expect(research.successCount).toBe(1);
+      expect(research.successRate).toBe(1);
+    });
+  });
+
+  describe("getFullMetrics()", () => {
+    it("returns all metric sections", () => {
+      runRepo.insert({ id: "r1", task: "t1", workflow: "code", submittedAt: "2026-03-20T10:00:00Z", status: "completed" });
+      costRepo.insert({ runId: "r1", agentType: "claude-code", inputTokens: 1000, outputTokens: 500, costUsd: 0.05, timestamp: "2026-03-20T10:00:00Z" });
+
+      const metrics = analyticsRepo.getFullMetrics("2026-03-20T00:00:00Z");
+      expect(metrics).toHaveProperty("summary");
+      expect(metrics).toHaveProperty("costTrend");
+      expect(metrics).toHaveProperty("failureHotspots");
+      expect(metrics).toHaveProperty("retryPatterns");
+      expect(metrics).toHaveProperty("workflowBreakdown");
+      expect(metrics.summary.runCount).toBe(1);
+      expect(metrics.workflowBreakdown.length).toBe(1);
     });
   });
 });

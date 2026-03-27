@@ -237,11 +237,19 @@ export async function runValidationLoop(
       runId: plan.runId,
       type: "agent_retry",
       timestamp: new Date().toISOString(),
-      data: { attempt, failedSteps: failedSteps.map(s => s.name) },
+      data: { attempt, failedSteps: failedSteps.map(s => s.step.name) },
     });
     logger.info("agent", "Agent fixing validation failures...");
     const fixResult = await invokeAgent(
-      container, adapter, feedback, agentOptions, agentEnv, `fix-${attempt}`
+      container, adapter, feedback, agentOptions, agentEnv, `fix-${attempt}`,
+      (chunk, stream) => {
+        emitRunEvent({
+          runId: plan.runId,
+          type: "agent_output",
+          timestamp: new Date().toISOString(),
+          data: { stream, chunk, phase: "validation_fix", attempt },
+        });
+      },
     );
 
     if (fixResult.exitCode !== 0) {
@@ -331,6 +339,7 @@ export async function runLintGate(
   agentOptions: AgentOptions,
   agentEnv: string[],
   logger: Logger,
+  onAgentOutput?: (chunk: string, stream: "stdout" | "stderr") => void,
 ): Promise<LintGateResult> {
   if (lintSteps.length === 0) {
     return { passed: true, lintIterations: 0, stepResults: [] };
@@ -398,7 +407,8 @@ export async function runLintGate(
 
     logger.info("agent", "Agent fixing lint failures...");
     const fixResult = await invokeAgent(
-      container, adapter, feedback, agentOptions, agentEnv, `lint-fix-${iteration}`
+      container, adapter, feedback, agentOptions, agentEnv, `lint-fix-${iteration}`,
+      onAgentOutput,
     );
 
     if (fixResult.exitCode !== 0) {
