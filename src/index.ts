@@ -133,6 +133,12 @@ program
   .description("Show the structured summary for a run")
   .action(summaryCommand);
 
+// forgectl trace
+program
+  .command("trace <runId>")
+  .description("Show waterfall view of trace spans for a run")
+  .action(traceCommand);
+
 // forgectl costs
 program
   .command("costs")
@@ -586,6 +592,7 @@ import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStat
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
+import { traceCommand } from "./cli/trace.js";
 
 const repoCmd = program
   .command("repo")

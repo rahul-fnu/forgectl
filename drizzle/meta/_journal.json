@@ -134,6 +134,13 @@
       "when": 1774160400000,
       "tag": "0016_cooldown_state_table",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1774246800000,
+      "tag": "0017_spans_table",
+      "breakpoints": true
     }
   ]
 }
