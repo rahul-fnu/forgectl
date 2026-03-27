@@ -334,7 +334,6 @@ export async function dispatchIssue(
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
-  alertManager?: import("../alerting/manager.js").AlertManager,
 ): Promise<void> {
   // --- Pre-dispatch triage gate: score complexity before claiming ---
   const triageResult = await triageIssue(issue, state, config);
@@ -409,8 +408,19 @@ export async function dispatchIssue(
   // Generate trace context for this dispatch
   const traceId = generateTraceId();
   const dispatchSpan = createSpan(traceId, "dispatch");
+  const finishedDispatchSpan = endSpan(dispatchSpan, "ok");
   if (governance?.traceRepo) {
-    try { governance.traceRepo.insertSpan(endSpan(dispatchSpan, "ok")); } catch { /* best-effort */ }
+    try {
+      governance.traceRepo.insert({
+        traceId: finishedDispatchSpan.traceId,
+        spanId: finishedDispatchSpan.spanId,
+        parentSpanId: finishedDispatchSpan.parentSpanId,
+        operationName: finishedDispatchSpan.name,
+        startMs: finishedDispatchSpan.startMs,
+        durationMs: (finishedDispatchSpan.endMs ?? Date.now()) - finishedDispatchSpan.startMs,
+        status: finishedDispatchSpan.status,
+      });
+    } catch { /* best-effort */ }
   }
 
   // Record dispatch metrics and emit SSE event
@@ -601,6 +611,7 @@ async function executeWorkerAndHandle(
         workflow: "orchestrated",
         status: "running",
         submittedAt: new Date().toISOString(),
+        traceId,
       });
       governanceWithRunId = { ...governance, runId };
 
@@ -639,7 +650,9 @@ async function executeWorkerAndHandle(
       governanceWithRunId?.costRepo,
       outcomeDeps?.eventRepo,
       governanceWithRunId?.runRepo,
-      alertManager,
+      governanceWithRunId?.traceRepo,
+      traceId,
+      undefined, // alertManager
     );
 
     // Remove from running

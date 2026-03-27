@@ -21,7 +21,8 @@ import { dispatchIssue as dispatchIssueImpl, type GovernanceOpts } from "./dispa
 import { startScheduledQA, type ScheduledQADeps } from "./scheduled-qa.js";
 import { createUsageLimitRecovery, type UsageLimitRecovery } from "./usage-limit-recovery.js";
 import type { CooldownRepository } from "../storage/repositories/cooldown.js";
-import { AlertManager } from "../alerting/manager.js";
+import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import { ReactiveMetricsLoop } from "../analysis/metrics-loop.js";
 
 /** GitHub context passed from webhook handler through to dispatcher. */
 export interface GitHubContext {
@@ -53,6 +54,8 @@ export interface OrchestratorOptions {
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
   /** Cooldown state repository for persisting usage limit cooldown across restarts. */
   cooldownRepo?: CooldownRepository;
+  /** Outcome repository for reactive metrics loop. */
+  outcomeRepo?: OutcomeRepository;
 }
 
 /**
@@ -79,8 +82,9 @@ export class Orchestrator {
   private readonly validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string };
   private promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[];
   private readonly cooldownRepo?: CooldownRepository;
+  private readonly outcomeRepo?: OutcomeRepository;
   private usageLimitRecovery: UsageLimitRecovery | null = null;
-  private readonly alertManager: AlertManager;
+  private metricsLoop: ReactiveMetricsLoop | null = null;
   private githubContext?: GitHubContext;
   private stopScheduler: (() => void) | null = null;
   private stopQA: (() => void) | null = null;
@@ -107,7 +111,7 @@ export class Orchestrator {
     this.validationConfig = opts.validationConfig;
     this.promotedFindings = opts.promotedFindings;
     this.cooldownRepo = opts.cooldownRepo;
-    this.alertManager = new AlertManager(opts.config.alerting ?? {});
+    this.outcomeRepo = opts.outcomeRepo;
   }
 
   /**
@@ -155,7 +159,6 @@ export class Orchestrator {
       promotedFindings: this.promotedFindings,
       cooldownRepo: this.cooldownRepo,
       usageLimitRecovery: this.usageLimitRecovery ?? undefined,
-      alertManager: this.alertManager,
     };
     this.stopScheduler = startScheduler(this.deps);
 
@@ -170,6 +173,28 @@ export class Orchestrator {
       };
       this.stopQA = startScheduledQA(qaDeps);
       this.logger.info("orchestrator", `Scheduled QA started (interval=${this.config.scheduled_qa.interval_ms}ms)`);
+    }
+
+    // Start Reactive Metrics Loop if enabled and outcomeRepo is available
+    if (this.config.reactive?.enabled && this.outcomeRepo) {
+      this.metricsLoop = new ReactiveMetricsLoop(
+        {
+          enabled: true,
+          poll_interval_ms: this.config.reactive.poll_interval_ms ?? 300_000,
+          auto_create_issues: this.config.reactive.auto_create_issues ?? true,
+          max_issues_per_day: this.config.reactive.max_issues_per_day ?? 5,
+          repeated_failure_threshold: this.config.reactive.repeated_failure_threshold ?? 3,
+          cost_spike_multiplier: this.config.reactive.cost_spike_multiplier ?? 3,
+          success_rate_floor: this.config.reactive.success_rate_floor ?? 0.7,
+        },
+        {
+          outcomeRepo: this.outcomeRepo,
+          tracker: this.tracker,
+          logger: this.logger,
+        },
+      );
+      this.metricsLoop.start();
+      this.logger.info("orchestrator", `Reactive metrics loop started (interval=${this.config.reactive.poll_interval_ms ?? 300_000}ms)`);
     }
 
     this.running = true;
@@ -234,6 +259,10 @@ export class Orchestrator {
     // Stop Scheduled QA
     this.stopQA?.();
     this.stopQA = null;
+
+    // Stop Reactive Metrics Loop
+    this.metricsLoop?.stop();
+    this.metricsLoop = null;
 
     // Close usage limit recovery timers
     this.usageLimitRecovery?.close();
@@ -372,7 +401,6 @@ export class Orchestrator {
       this.promotedFindings,
       this.slotManager,
       this.usageLimitRecovery ?? undefined,
-      this.alertManager,
     );
   }
 

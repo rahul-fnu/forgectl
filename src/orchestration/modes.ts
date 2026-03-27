@@ -2,12 +2,31 @@ import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { ExecutionResult, DurabilityDeps } from "./single.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
+import type { TraceRepository } from "../storage/repositories/traces.js";
 import { executeSingleAgent } from "./single.js";
 import { executeReviewMode } from "./review.js";
+import { generateTraceId, createSpan, endSpan } from "../tracing/context.js";
+import type { Span } from "../tracing/context.js";
 
 /** Optional outcome logging dependency. */
 export interface OutcomeDeps {
   outcomeRepo?: OutcomeRepository;
+  traceRepo?: TraceRepository;
+}
+
+function persistSpan(traceRepo: TraceRepository | undefined, span: Span): void {
+  if (!traceRepo) return;
+  try {
+    traceRepo.insert({
+      traceId: span.traceId,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      operationName: span.name,
+      startMs: span.startMs,
+      durationMs: (span.endMs ?? Date.now()) - span.startMs,
+      status: span.status,
+    });
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -22,6 +41,15 @@ export async function executeRun(
 ): Promise<ExecutionResult> {
   const startedAt = new Date().toISOString();
   let result: ExecutionResult;
+
+  const traceRepo = outcomeDeps?.traceRepo;
+  const traceId = generateTraceId();
+  const rootSpan = createSpan(traceId, "run", null);
+
+  // Store traceId on run record if runRepo is available
+  if (deps.runRepo) {
+    try { deps.runRepo.setTraceId(plan.runId, traceId); } catch { /* best-effort */ }
+  }
 
   switch (plan.orchestration.mode) {
     case "single":
@@ -38,6 +66,8 @@ export async function executeRun(
       result = await executeSingleAgent(plan, logger, noCleanup, deps);
       break;
   }
+
+  persistSpan(traceRepo, endSpan(rootSpan, result.success ? "ok" : "error"));
 
   if (outcomeDeps?.outcomeRepo) {
     try {
