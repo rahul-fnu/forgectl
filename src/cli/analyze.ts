@@ -2,8 +2,10 @@ import chalk from "chalk";
 import { createDatabase, closeDatabase } from "../storage/database.js";
 import { runMigrations } from "../storage/migrator.js";
 import { createOutcomeRepository } from "../storage/repositories/outcomes.js";
+import { createEventRepository } from "../storage/repositories/events.js";
 import { createReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 import { analyzeOutcomes, compareContextOutcomes, buildCalibrationReport, generateImprovementSuggestions, buildReviewQualityReport, analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste, type AnalysisReport, type ContextComparisonReport, type CalibrationReport, type ImprovementSuggestion, type ReviewQualityReport, type ToolUsageReport, type FailurePatternsReport, type TokenWasteReport } from "../analysis/outcome-analyzer.js";
+import { extractToolUsage, extractFailurePatterns, detectTokenWaste, getStuckPoints, type ToolUsageReport as EventToolUsageReport, type FailureSignature, type TokenWasteReport as EventTokenWasteReport, type StuckPoint } from "../analysis/behavior.js";
 import { createCostRepository } from "../storage/repositories/costs.js";
 import { createReviewMetricsRepository } from "../storage/repositories/review-metrics.js";
 import type { TrackerAdapter } from "../tracker/types.js";
@@ -210,6 +212,55 @@ function formatTokenWaste(report: TokenWasteReport): void {
   console.log("");
 }
 
+function formatEventToolUsage(report: EventToolUsageReport): void {
+  if (report.totalCalls === 0) return;
+
+  console.log(chalk.bold("  Event-Level Tool Distribution:"));
+  for (const t of report.byTool) {
+    const pctStr = `${(t.pct * 100).toFixed(1)}%`;
+    console.log(`    ${t.tool.padEnd(25)} ${String(t.count).padStart(6)}  (${pctStr})`);
+  }
+  console.log("");
+}
+
+function formatFailureSignatures(signatures: FailureSignature[]): void {
+  if (signatures.length === 0) return;
+
+  console.log(chalk.bold("  Failure Signatures (from events):"));
+  for (const s of signatures.slice(0, 10)) {
+    const runsStr = s.runIds.length <= 3
+      ? s.runIds.join(", ")
+      : `${s.runIds.slice(0, 3).join(", ")} +${s.runIds.length - 3} more`;
+    console.log(`    ${s.signature.padEnd(40)} ${String(s.count).padStart(4)}  runs: ${runsStr}`);
+  }
+  console.log("");
+}
+
+function formatEventStuckPoints(stuckPoints: StuckPoint[]): void {
+  if (stuckPoints.length === 0) return;
+
+  console.log(chalk.bold("  Timing-Based Stuck Points:"));
+  for (const sp of stuckPoints.slice(0, 10)) {
+    const durStr = sp.durationMs >= 60000
+      ? `${(sp.durationMs / 60000).toFixed(1)}m`
+      : `${(sp.durationMs / 1000).toFixed(1)}s`;
+    console.log(`    ${sp.runId.padEnd(30)} event=${sp.type.padEnd(15)} gap=${durStr}`);
+  }
+  console.log("");
+}
+
+function formatEventTokenWaste(report: EventTokenWasteReport): void {
+  if (report.totalTokens === 0) return;
+
+  console.log(chalk.bold("  Event-Level Token Waste:"));
+  console.log(`    Total tokens:      ${report.totalTokens}`);
+  console.log(`    Wasted tokens:     ${report.wastedTokens} (${(report.wasteRatio * 100).toFixed(1)}%)`);
+  if (report.revertedSegments > 0) {
+    console.log(`    Reverted segments: ${report.revertedSegments}`);
+  }
+  console.log("");
+}
+
 function formatSuggestions(suggestions: ImprovementSuggestion[]): void {
   if (suggestions.length === 0) {
     console.log(chalk.yellow("\n  No improvement suggestions generated (need more outcome data)."));
@@ -296,6 +347,28 @@ export async function analyzeCommand(opts: AnalyzeCommandOptions): Promise<void>
     }
     const tokenWaste = analyzeTokenWaste(allRows, costsByRunId);
     formatTokenWaste(tokenWaste);
+
+    // Event-level behavior analysis (from run_events table)
+    const eventRepo = createEventRepository(db);
+    const allEventRows = allRows.flatMap(row => eventRepo.findByRunId(row.id));
+    if (allEventRows.length > 0) {
+      console.log(chalk.bold("\nEvent-Level Behavior Analysis"));
+
+      const eventToolUsage = extractToolUsage(allEventRows);
+      formatEventToolUsage(eventToolUsage);
+
+      const failureSignatures = extractFailurePatterns(allEventRows);
+      formatFailureSignatures(failureSignatures);
+
+      const eventStuckPoints = getStuckPoints(allEventRows);
+      formatEventStuckPoints(eventStuckPoints);
+
+      const totalCosts = costRepo.sumAll();
+      if (totalCosts.recordCount > 0) {
+        const eventWaste = detectTokenWaste(allEventRows, totalCosts);
+        formatEventTokenWaste(eventWaste);
+      }
+    }
 
     if (opts.suggest) {
       const suggestions = generateImprovementSuggestions(report);
