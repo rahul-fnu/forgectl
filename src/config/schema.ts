@@ -267,6 +267,11 @@ export const ConfigSchema = z.object({
     size: z.number().int().min(2).max(5),
   }).optional(),
 
+  planner: z.object({
+    decomposition_model: z.string().default("claude-haiku-4-5-20251001"),
+    max_sub_issues: z.number().int().min(1).max(50).default(10),
+  }).default({}),
+
   alerting: AlertingConfigSchema,
 
   project: z.object({
