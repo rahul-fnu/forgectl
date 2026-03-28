@@ -146,6 +146,57 @@ describe("POST /api/v1/dispatch", () => {
     expect(body.error.code).toBe("NOT_CONFIGURED");
   });
 
+  it("decomposes a complex prompt with multiple sub-tasks", async () => {
+    app = Fastify();
+    const queue = createMockQueue();
+    const orchestrator = createMockOrchestrator();
+    registerRoutes(app, queue, { orchestrator });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/dispatch",
+      payload: {
+        title: "Implement user dashboard features",
+        description:
+          "1. Add user profile page with avatar upload\n2. Create activity feed showing recent actions\n3. Build notification settings panel\n4. Add dark mode toggle to settings",
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe("decomposed");
+    expect(body.parentIssue).toMatch(/^dispatch-/);
+    expect(Array.isArray(body.childIssues)).toBe(true);
+    expect(body.childIssues.length).toBe(4);
+    for (const childId of body.childIssues) {
+      expect(childId).toContain("-sub-");
+    }
+
+    // Each child issue should be dispatched
+    expect(orchestrator.dispatchIssue).toHaveBeenCalledTimes(4);
+  });
+
+  it("dispatches short simple prompts directly without decomposing", async () => {
+    app = Fastify();
+    const queue = createMockQueue();
+    const orchestrator = createMockOrchestrator();
+    registerRoutes(app, queue, { orchestrator });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/dispatch",
+      payload: { title: "Fix typo in README" },
+    });
+
+    expect(res.statusCode).toBe(202);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe("dispatched");
+    expect(body.id).toMatch(/^dispatch-/);
+    expect(body.childIssues).toBeUndefined();
+
+    expect(orchestrator.dispatchIssue).toHaveBeenCalledTimes(1);
+  });
+
   it("defaults description to empty string when omitted", async () => {
     app = Fastify();
     const queue = createMockQueue();
