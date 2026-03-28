@@ -268,6 +268,11 @@ export const ConfigSchema = z.object({
   }).optional(),
 
   alerting: AlertingConfigSchema,
+
+  project: z.object({
+    auto_create: z.boolean().default(false),
+    github_org: z.string().optional(),
+  }).default({}),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;
