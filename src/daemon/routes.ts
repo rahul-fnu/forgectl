@@ -24,6 +24,7 @@ import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { EventRepository } from "../storage/repositories/events.js";
 import { analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste } from "../analysis/outcome-analyzer.js";
+import { shouldDecompose, decomposeToIssues } from "../planner/decompose-to-issues.js";
 
 interface InlineContext {
   name: string;
@@ -824,6 +825,27 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       return { error: { code: "BAD_REQUEST", message: "title is required" } };
     }
 
+    const desc = description ?? "";
+
+    if (shouldDecompose(title, desc)) {
+      const { parentIssue, childIssues } = decomposeToIssues(title, desc, {
+        repo,
+        priority: priority ?? null,
+        labels,
+      });
+
+      for (const child of childIssues) {
+        void orchestrator.dispatchIssue(child);
+      }
+
+      reply.code(202);
+      return {
+        status: "decomposed",
+        parentIssue: parentIssue.identifier,
+        childIssues: childIssues.map((c) => c.identifier),
+      };
+    }
+
     const now = new Date().toISOString();
     const syntheticId = `dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -831,7 +853,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       id: syntheticId,
       identifier: syntheticId,
       title,
-      description: description ?? "",
+      description: desc,
       state: "open",
       priority: priority ?? null,
       labels: labels ?? [],
