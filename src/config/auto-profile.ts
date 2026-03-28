@@ -135,15 +135,30 @@ function extractPyprojectDeps(content: string): string[] {
   return deps;
 }
 
+function installCommand(stack: DetectedStack): string {
+  switch (stack) {
+    case "node":
+    case "typescript":
+      return "npm install";
+    case "python":
+      return "pip install -e '.[dev]' 2>/dev/null || pip install -r requirements.txt 2>/dev/null || true";
+    case "go":
+      return "go mod download";
+    case "rust":
+      return "cargo fetch";
+  }
+}
+
 export function buildProfileYaml(
   repoSlug: string,
   detection: StackDetectionResult,
 ): string {
+  const install = installCommand(detection.stack);
   const profile: Record<string, unknown> = {
     workspace: {
       hooks: {
         after_create: `git clone --depth 1 https://{{GITHUB_TOKEN}}@github.com/${repoSlug}.git .`,
-        before_run: "git checkout main && git pull",
+        before_run: `git checkout main && git pull && ${install}`,
       },
     },
     tracker: {
@@ -169,7 +184,10 @@ export function buildProfileYaml(
 export async function autoGenerateProfile(
   repoSlug: string,
 ): Promise<Partial<ForgectlConfig> | null> {
-  const repoUrl = `https://github.com/${repoSlug}.git`;
+  const token = process.env.GITHUB_TOKEN;
+  const repoUrl = token
+    ? `https://${token}@github.com/${repoSlug}.git`
+    : `https://github.com/${repoSlug}.git`;
   const tmpDir = join(tmpdir(), `forgectl-autodetect-${Date.now()}`);
 
   try {
