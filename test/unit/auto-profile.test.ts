@@ -1,89 +1,161 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { checkGitHubAppAccess, autoGenerateProfile } from "../../src/config/auto-profile.js";
-import { Logger } from "../../src/logging/logger.js";
+import { tmpdir } from "node:os";
+import { detectStackFromDir, buildProfileYaml, type StackDetectionResult } from "../../src/config/auto-profile.js";
 
-const TEST_HOME = join(process.cwd(), "test-tmp-auto-profile");
-
-describe("auto-profile", () => {
-  let logger: Logger;
+describe("detectStackFromDir", () => {
+  let dir: string;
 
   beforeEach(() => {
-    mkdirSync(join(TEST_HOME, ".forgectl", "repos"), { recursive: true });
-    vi.stubEnv("HOME", TEST_HOME);
-    logger = new Logger(false);
-    vi.spyOn(logger, "info").mockImplementation(() => {});
-    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    dir = mkdtempSync(join(tmpdir(), "forgectl-test-"));
   });
 
   afterEach(() => {
-    rmSync(TEST_HOME, { recursive: true, force: true });
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  describe("checkGitHubAppAccess", () => {
-    it("returns true when app is installed (200)", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
-      const result = await checkGitHubAppAccess("owner", "repo", "tok", logger);
-      expect(result).toBe(true);
-    });
+  it("detects TypeScript from package.json + tsconfig.json", () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { build: "tsc", test: "vitest", lint: "eslint .", typecheck: "tsc --noEmit" },
+      }),
+    );
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
 
-    it("returns false when app is not installed (404)", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
-      const result = await checkGitHubAppAccess("owner", "repo", "tok", logger);
-      expect(result).toBe(false);
-    });
-
-    it("returns false on network error", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
-      const result = await checkGitHubAppAccess("owner", "repo", "tok", logger);
-      expect(result).toBe(false);
-    });
-
-    it("returns false on unexpected status code", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
-      const result = await checkGitHubAppAccess("owner", "repo", "tok", logger);
-      expect(result).toBe(false);
-    });
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("typescript");
+    expect(result!.image).toBe("forgectl/code:latest");
+    expect(result!.validationSteps).toEqual([
+      { name: "build", command: "npm run build" },
+      { name: "lint", command: "npm run lint" },
+      { name: "typecheck", command: "npm run typecheck" },
+      { name: "test", command: "npm test" },
+    ]);
   });
 
-  describe("autoGenerateProfile", () => {
-    it("generates profile and reports app installed", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
-      const result = await autoGenerateProfile("owner/myrepo", "tok", logger);
-      expect(result.appInstalled).toBe(true);
-      expect(result.repoSlug).toBe("owner/myrepo");
-      const profilePath = join(TEST_HOME, ".forgectl", "repos", "myrepo.yaml");
-      expect(existsSync(profilePath)).toBe(true);
-      const content = readFileSync(profilePath, "utf-8");
-      expect(content).toContain("owner/myrepo");
-    });
+  it("detects Node (no tsconfig)", () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "jest" } }),
+    );
 
-    it("posts comment when app not installed and tracker provided", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
-      const tracker = { postComment: vi.fn().mockResolvedValue(undefined) } as any;
-      const result = await autoGenerateProfile("owner/myrepo", "tok", logger, {
-        tracker,
-        issueId: "42",
-        appName: "my-app",
-      });
-      expect(result.appInstalled).toBe(false);
-      expect(tracker.postComment).toHaveBeenCalledWith(
-        "42",
-        expect.stringContaining("https://github.com/apps/my-app/installations/new"),
-      );
-    });
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("node");
+    expect(result!.validationSteps).toEqual([{ name: "test", command: "npm test" }]);
+  });
 
-    it("does not overwrite existing profile", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
-      const profilePath = join(TEST_HOME, ".forgectl", "repos", "myrepo.yaml");
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync(profilePath, "existing: true\n", "utf-8");
-      await autoGenerateProfile("owner/myrepo", "tok", logger);
-      const content = readFileSync(profilePath, "utf-8");
-      expect(content).toBe("existing: true\n");
-    });
+  it("detects Python from pyproject.toml", () => {
+    writeFileSync(
+      join(dir, "pyproject.toml"),
+      `[project]\ndependencies = [\n  "pytest>=7.0",\n  "ruff",\n  "mypy"\n]\n`,
+    );
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("python");
+    expect(result!.image).toBe("forgectl/code-python312:latest");
+    expect(result!.validationSteps).toEqual([
+      { name: "lint", command: "ruff check ." },
+      { name: "typecheck", command: "mypy ." },
+      { name: "test", command: "pytest" },
+    ]);
+  });
+
+  it("detects Python from requirements.txt", () => {
+    writeFileSync(join(dir, "requirements.txt"), "pytest>=7.0\nrequests\n");
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("python");
+    expect(result!.validationSteps).toEqual([{ name: "test", command: "pytest" }]);
+  });
+
+  it("detects Go from go.mod", () => {
+    writeFileSync(join(dir, "go.mod"), "module example.com/mymod\n\ngo 1.21\n");
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("go");
+    expect(result!.image).toBe("forgectl/code-go:latest");
+    expect(result!.validationSteps).toEqual([{ name: "test", command: "go test ./..." }]);
+  });
+
+  it("detects Go with golangci-lint config", () => {
+    writeFileSync(join(dir, "go.mod"), "module example.com/mymod\n\ngo 1.21\n");
+    writeFileSync(join(dir, ".golangci.yml"), "linters:\n  enable:\n    - gosec\n");
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("go");
+    expect(result!.validationSteps).toEqual([
+      { name: "lint", command: "golangci-lint run" },
+      { name: "test", command: "go test ./..." },
+    ]);
+  });
+
+  it("detects Rust from Cargo.toml", () => {
+    writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "mylib"\nversion = "0.1.0"\n');
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("rust");
+    expect(result!.image).toBe("forgectl/code-rust:latest");
+    expect(result!.validationSteps).toEqual([
+      { name: "clippy", command: "cargo clippy -- -D warnings" },
+      { name: "test", command: "cargo test" },
+    ]);
+  });
+
+  it("returns null for empty directory", () => {
+    const result = detectStackFromDir(dir);
+    expect(result).toBeNull();
+  });
+
+  it("picks first detected stack when multiple present (Node wins over Python)", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "jest" } }));
+    writeFileSync(join(dir, "requirements.txt"), "pytest\n");
+
+    const result = detectStackFromDir(dir);
+    expect(result).not.toBeNull();
+    expect(result!.stack).toBe("node");
+  });
+});
+
+describe("buildProfileYaml", () => {
+  it("generates valid profile YAML", () => {
+    const detection: StackDetectionResult = {
+      stack: "typescript",
+      image: "forgectl/code:latest",
+      validationSteps: [
+        { name: "build", command: "npm run build" },
+        { name: "test", command: "npm test" },
+      ],
+    };
+
+    const yamlStr = buildProfileYaml("owner/myrepo", detection);
+
+    expect(yamlStr).toContain("owner/myrepo");
+    expect(yamlStr).toContain("forgectl/code:latest");
+    expect(yamlStr).toContain("git clone");
+    expect(yamlStr).toContain("git checkout main && git pull");
+    expect(yamlStr).toContain("npm run build");
+    expect(yamlStr).toContain("npm test");
+  });
+
+  it("omits validation when no steps detected", () => {
+    const detection: StackDetectionResult = {
+      stack: "go",
+      image: "forgectl/code-go:latest",
+      validationSteps: [],
+    };
+
+    const yamlStr = buildProfileYaml("owner/goapp", detection);
+
+    expect(yamlStr).not.toContain("validation");
+    expect(yamlStr).toContain("owner/goapp");
   });
 });
