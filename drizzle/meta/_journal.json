@@ -141,6 +141,13 @@
       "when": 1774246800000,
       "tag": "0017_spans_table",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1774333200000,
+      "tag": "0018_add_trace_id_to_runs",
+      "breakpoints": true
     }
   ]
 }
