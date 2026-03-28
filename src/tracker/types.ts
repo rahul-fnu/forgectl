@@ -52,6 +52,12 @@ export interface TrackerAdapter {
   /** Create a new issue in the tracker. Returns the created issue's identifier. */
   createIssue?(title: string, description: string, labels?: string[]): Promise<string>;
 
+  /** Create a sub-issue under a parent. Returns the created issue's identifier. */
+  createSubIssue?(title: string, description: string, parentId: string): Promise<string>;
+
+  /** Create a blocking relation: blockingIssueId blocks blockedIssueId. */
+  createBlockingRelation?(blockingIssueId: string, blockedIssueId: string): Promise<void>;
+
   /** Create a pull request for a branch. Returns the PR URL, or undefined if not supported. */
   createPullRequest?(branch: string, title: string, body: string): Promise<string | undefined>;
 

@@ -17,11 +17,15 @@ export {
   decomposeToIssues,
   buildDecompositionPrompt,
   parseDecompositionResponse,
+  shouldDecompose,
+  decomposeDispatch,
 } from "./decompose-to-issues.js";
 export type {
   DecomposeInput,
   DecomposeResult,
   DecompositionLLMResult,
+  DispatchDecomposeOptions,
+  DispatchDecomposeResult,
   IssueCreator,
   LLMCallFn,
 } from "./decompose-to-issues.js";

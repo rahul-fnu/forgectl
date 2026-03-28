@@ -1,4 +1,84 @@
 import type { ForgectlConfig } from "../config/schema.js";
+import type { TrackerIssue } from "../tracker/types.js";
+
+/**
+ * Heuristic: should this prompt be decomposed into sub-issues?
+ * Detects numbered lists (2+) or bullet lists (3+) in the combined title+description.
+ */
+export function shouldDecompose(title: string, description: string): boolean {
+  const text = `${title}\n${description}`;
+  const numbered = text.match(/^\s*\d+\.\s+/gm);
+  if (numbered && numbered.length >= 2) return true;
+  const bullets = text.match(/^\s*[-*]\s+/gm);
+  if (bullets && bullets.length >= 3) return true;
+  return false;
+}
+
+export interface DispatchDecomposeOptions {
+  repo?: string;
+  priority: string | null;
+  labels?: string[];
+}
+
+export interface DispatchDecomposeResult {
+  parentIssue: TrackerIssue;
+  childIssues: TrackerIssue[];
+}
+
+/**
+ * Local (no-LLM) decomposition for the dispatch endpoint.
+ * Parses numbered list items from the description and creates synthetic TrackerIssues.
+ * Child issues are chained sequentially via blocked_by.
+ */
+export function decomposeDispatch(
+  title: string,
+  description: string,
+  opts: DispatchDecomposeOptions,
+): DispatchDecomposeResult {
+  const items = description.match(/^\s*\d+\.\s+.+/gm) ?? [];
+  const childTitles = items.map((item) => item.replace(/^\s*\d+\.\s+/, "").trim());
+
+  const now = new Date().toISOString();
+  const parentId = `dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+  const parentIssue: TrackerIssue = {
+    id: parentId,
+    identifier: parentId,
+    title,
+    description,
+    state: "open",
+    priority: opts.priority,
+    labels: opts.labels ?? [],
+    assignees: [],
+    url: "",
+    created_at: now,
+    updated_at: now,
+    blocked_by: [],
+    metadata: { source: "dispatch", ...(opts.repo ? { repo: opts.repo } : {}) },
+  };
+
+  const childIssues: TrackerIssue[] = childTitles.map((childTitle, i) => {
+    const childId = `${parentId}-sub-${i}`;
+    const prevId = i > 0 ? `${parentId}-sub-${i - 1}` : undefined;
+    return {
+      id: childId,
+      identifier: childId,
+      title: childTitle,
+      description: `Sub-task of: ${title}`,
+      state: "open",
+      priority: opts.priority,
+      labels: opts.labels ?? [],
+      assignees: [],
+      url: "",
+      created_at: now,
+      updated_at: now,
+      blocked_by: prevId ? [prevId] : [],
+      metadata: { source: "dispatch", parentId, ...(opts.repo ? { repo: opts.repo } : {}) },
+    };
+  });
+
+  return { parentIssue, childIssues };
+}
 
 /**
  * Structured decomposition result from the LLM.
