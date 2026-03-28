@@ -86,6 +86,7 @@ export class Orchestrator {
   private usageLimitRecovery: UsageLimitRecovery | null = null;
   private metricsLoop: ReactiveMetricsLoop | null = null;
   private githubContext?: GitHubContext;
+  private addRepoFn?: (slug: string) => boolean;
   private stopScheduler: (() => void) | null = null;
   private stopQA: (() => void) | null = null;
   private running = false;
@@ -454,5 +455,25 @@ export class Orchestrator {
       this.tickInProgress = false;
     }
     return true;
+  }
+
+  /**
+   * Register the callback used to add a repo to the merge daemon's poll list.
+   * Called by the daemon server after merge daemon initialization.
+   */
+  setAddRepo(fn: (slug: string) => boolean): void {
+    this.addRepoFn = fn;
+  }
+
+  /**
+   * Dynamically add a repo to the merge daemon's processor list without restart.
+   * Returns true if the repo was added, false if it was already present.
+   */
+  addRepo(slug: string): boolean {
+    if (!this.addRepoFn) {
+      this.logger.warn("orchestrator", `addRepo called but merge daemon not initialized`);
+      return false;
+    }
+    return this.addRepoFn(slug);
   }
 }
