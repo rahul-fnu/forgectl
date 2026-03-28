@@ -67,7 +67,10 @@ export async function loadRepoOverlay(repoSlug: string): Promise<Partial<Forgect
   // Try repo name (after /) as profile name
   const repoName = repoSlug.split("/")[1];
   const profilePath = join(home, ".forgectl", "repos", `${repoName}.yaml`);
-  if (!existsSync(profilePath)) return null;
+  if (!existsSync(profilePath)) {
+    const { autoGenerateProfile } = await import("../config/auto-profile.js");
+    return autoGenerateProfile(repoSlug);
+  }
 
   try {
     const { loadRepoProfile } = await import("../config/loader.js");
