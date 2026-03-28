@@ -588,6 +588,7 @@ imagesCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
 import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand, kgConventionsCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
@@ -619,6 +620,26 @@ repoCmd
   .command("show <name>")
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
+
+// forgectl project — interactive project setup
+const projectCmd = program
+  .command("project")
+  .description("Add and manage projects (auto-detects stack from repo)");
+
+projectCmd
+  .command("add <url>")
+  .description("Clone a repo, detect stack, and generate a profile")
+  .action(projectAddCommand);
+
+projectCmd
+  .command("list")
+  .description("List configured projects with stack info")
+  .action(projectListCommand);
+
+projectCmd
+  .command("show <name>")
+  .description("Show the full profile for a project")
+  .action(projectShowCommand);
 
 // forgectl kg — knowledge graph commands
 const kgCmd = program
