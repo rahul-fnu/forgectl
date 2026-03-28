@@ -469,7 +469,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         const reviewFindingsRepo = createReviewFindingsRepository(db);
 
         // Create a processor per repo
-        const processors = allRepos.map(repoSlug => {
+        const processors: InstanceType<typeof PRProcessor>[] = allRepos.map(repoSlug => {
           const [o, r] = repoSlug.split("/");
           return new PRProcessor({
             owner: o, repo: r, token: mdToken,
@@ -481,6 +481,27 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
             validationCommands: daemonConfig?.validation_commands ?? [],
           }, daemonLogger, reviewMetricsRepo, reviewFindingsRepo);
         });
+
+        const addMergeDaemonRepo = (slug: string): boolean => {
+          if (repoSet.has(slug)) return false;
+          repoSet.add(slug);
+          const [o, r] = slug.split("/");
+          processors.push(new PRProcessor({
+            owner: o, repo: r, token: lastProcessorToken,
+            rawToken,
+            branchPattern: daemonConfig?.branch_pattern ?? "forge/*",
+            ciTimeoutMs: daemonConfig?.ci_timeout_ms ?? 2_700_000,
+            enableReview: daemonConfig?.enable_review ?? true,
+            enableBuildFix: daemonConfig?.enable_build_fix ?? true,
+            validationCommands: daemonConfig?.validation_commands ?? [],
+          }, daemonLogger, reviewMetricsRepo, reviewFindingsRepo));
+          daemonLogger.info("merge-daemon", `Dynamically added repo ${slug} to poll list`);
+          return true;
+        };
+
+        if (orchestrator) {
+          orchestrator.setAddRepo(addMergeDaemonRepo);
+        }
 
         let lastProcessorToken = mdToken;
         const mergePollLoop = async (): Promise<void> => {
