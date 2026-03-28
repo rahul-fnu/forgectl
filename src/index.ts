@@ -588,6 +588,7 @@ imagesCmd
 
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
 import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand, kgConventionsCommand } from "./cli/kg.js";
 import { taskNewCommand, taskValidateCommand, taskShowCommand, taskListCommand } from "./cli/task.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
@@ -620,32 +621,25 @@ repoCmd
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
 
-// forgectl project — alias for repo (auto-bootstrap convenience)
+// forgectl project — interactive project setup
 const projectCmd = program
   .command("project")
-  .description("Manage projects (alias for repo)");
+  .description("Add and manage projects (auto-detects stack from repo)");
+
+projectCmd
+  .command("add <url>")
+  .description("Clone a repo, detect stack, and generate a profile")
+  .action(projectAddCommand);
 
 projectCmd
   .command("list")
-  .description("List configured project profiles")
-  .action(repoListCommand);
-
-projectCmd
-  .command("add <name>")
-  .description("Add a project profile (GitHub or Linear)")
-  .option("--tracker-repo <owner/repo>", "GitHub repo (owner/repo)")
-  .option("--linear", "Create a Linear tracker profile")
-  .option("--team-id <uuid>", "Linear team ID (repeatable)", (v: string, prev: string[]) => [...prev, v], [] as string[])
-  .option("--project-id <uuid>", "Linear project ID (optional)")
-  .option("--webhook-secret <secret>", "Linear webhook signing secret")
-  .option("--labels <labels>", "Comma-separated tracker labels")
-  .option("--token <token>", "Token or env var reference (e.g. $GH_TOKEN, $gh, $linear)")
-  .action(repoAddCommand);
+  .description("List configured projects with stack info")
+  .action(projectListCommand);
 
 projectCmd
   .command("show <name>")
-  .description("Show merged config for a project profile")
-  .action(repoShowCommand);
+  .description("Show the full profile for a project")
+  .action(projectShowCommand);
 
 // forgectl kg — knowledge graph commands
 const kgCmd = program
