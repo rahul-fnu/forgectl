@@ -24,7 +24,7 @@ import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { EventRepository } from "../storage/repositories/events.js";
 import { analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste } from "../analysis/outcome-analyzer.js";
-import { shouldDecompose, decomposeToIssues } from "../planner/decompose-to-issues.js";
+import { shouldDecompose, decomposeDispatch } from "../planner/decompose-to-issues.js";
 
 interface InlineContext {
   name: string;
@@ -828,7 +828,7 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     const desc = description ?? "";
 
     if (shouldDecompose(title, desc)) {
-      const { parentIssue, childIssues } = decomposeToIssues(title, desc, {
+      const { parentIssue, childIssues } = decomposeDispatch(title, desc, {
         repo,
         priority: priority ?? null,
         labels,

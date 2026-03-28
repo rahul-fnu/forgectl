@@ -493,6 +493,29 @@ export function createLinearAdapter(
       return issue?.identifier ?? result.lastSyncId.toString();
     },
 
+    async createSubIssue(title: string, description: string, parentId: string): Promise<string> {
+      await initMappings();
+      const teamId = teamIds[0];
+
+      const result = await client.createIssue({
+        teamId,
+        title,
+        description,
+        parentId,
+        ...(config.project_id ? { projectId: config.project_id } : {}),
+      });
+      const issue = await result.issue;
+      return issue?.identifier ?? result.lastSyncId.toString();
+    },
+
+    async createBlockingRelation(blockingIssueId: string, blockedIssueId: string): Promise<void> {
+      await client.createIssueRelation({
+        issueId: blockingIssueId,
+        relatedIssueId: blockedIssueId,
+        type: "blocks" as never,
+      });
+    },
+
     async updateLabels(
       issueId: string,
       add: string[],
