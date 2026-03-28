@@ -44,6 +44,7 @@ import { UsageLimitError } from "../agent/usage-limit-detector.js";
 import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
 import { generateTraceId, createSpan, endSpan } from "../tracing/context.js";
 import type { TraceRepository } from "../storage/repositories/traces.js";
+import { detectNewProject, handleNewProjectIssue } from "../project/create.js";
 
 /**
  * Extract a GitHub repo slug from an issue description.
@@ -338,6 +339,16 @@ export async function dispatchIssue(
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
 ): Promise<void> {
+  // --- New-project detection: route to creation flow if detected ---
+  const newProjectDetection = detectNewProject(issue);
+  if (newProjectDetection.isNewProject) {
+    const handled = await handleNewProjectIssue(issue, newProjectDetection, tracker, config, logger);
+    if (handled) {
+      return;
+    }
+    // If not handled (disabled, repo exists, etc.), fall through to normal dispatch
+  }
+
   // --- Pre-dispatch triage gate: score complexity before claiming ---
   const triageResult = await triageIssue(issue, state, config);
 
