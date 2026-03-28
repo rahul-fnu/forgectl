@@ -620,6 +620,33 @@ repoCmd
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
 
+// forgectl project — alias for repo (auto-bootstrap convenience)
+const projectCmd = program
+  .command("project")
+  .description("Manage projects (alias for repo)");
+
+projectCmd
+  .command("list")
+  .description("List configured project profiles")
+  .action(repoListCommand);
+
+projectCmd
+  .command("add <name>")
+  .description("Add a project profile (GitHub or Linear)")
+  .option("--tracker-repo <owner/repo>", "GitHub repo (owner/repo)")
+  .option("--linear", "Create a Linear tracker profile")
+  .option("--team-id <uuid>", "Linear team ID (repeatable)", (v: string, prev: string[]) => [...prev, v], [] as string[])
+  .option("--project-id <uuid>", "Linear project ID (optional)")
+  .option("--webhook-secret <secret>", "Linear webhook signing secret")
+  .option("--labels <labels>", "Comma-separated tracker labels")
+  .option("--token <token>", "Token or env var reference (e.g. $GH_TOKEN, $gh, $linear)")
+  .action(repoAddCommand);
+
+projectCmd
+  .command("show <name>")
+  .description("Show merged config for a project profile")
+  .action(repoShowCommand);
+
 // forgectl kg — knowledge graph commands
 const kgCmd = program
   .command("kg")

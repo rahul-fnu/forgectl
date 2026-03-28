@@ -23,7 +23,6 @@ import { getBudgetStatus } from "../agent/budget.js";
 import type { BudgetConfig } from "../agent/budget.js";
 import type { TrackerIssue } from "../tracker/types.js";
 import type { EventRepository } from "../storage/repositories/events.js";
-import type { TraceRepository } from "../storage/repositories/traces.js";
 import { analyzeToolUsage, analyzeFailurePatterns, analyzeTokenWaste } from "../analysis/outcome-analyzer.js";
 
 interface InlineContext {
