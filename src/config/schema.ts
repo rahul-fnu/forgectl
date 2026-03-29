@@ -272,6 +272,14 @@ export const ConfigSchema = z.object({
     max_sub_issues: z.number().int().min(1).max(50).default(10),
   }).default({}),
 
+  discord: z.object({
+    token: z.string(),
+    daemon_url: z.string().default("http://127.0.0.1:4856"),
+    daemon_token: z.string().optional(),
+    allowed_channel_ids: z.array(z.string()).optional(),
+    notification_channel_id: z.string().optional(),
+  }).optional(),
+
   alerting: AlertingConfigSchema,
 
   project: z.object({
