@@ -49,6 +49,8 @@ import type { AlertEvent } from "../alerting/types.js";
 import { createSpan, endSpan } from "../tracing/context.js";
 import type { Span } from "../tracing/context.js";
 import type { TraceRepository } from "../storage/repositories/traces.js";
+import { detectClarificationNeed, extractQuestion } from "../discord/clarify.js";
+import type { ClarificationCallback } from "../discord/clarify.js";
 
 function persistSpan(traceRepo: TraceRepository | undefined, span: Span): void {
   if (!traceRepo) return;
@@ -285,6 +287,7 @@ export async function executeWorker(
   traceRepo?: TraceRepository,
   traceId?: string,
   alertManager?: AlertManager,
+  discordClarification?: ClarificationCallback,
 ): Promise<WorkerResult> {
   // 1. Ensure workspace exists
   // With max_concurrent_agents > 1, use per-issue workspaces to avoid conflicts.
@@ -440,6 +443,7 @@ export async function executeWorker(
           data: { stream, chunk },
         });
       },
+      onClarification: discordClarification,
     });
 
     // 6.5. Record pre-agent HEAD so we can detect agent changes later
@@ -477,6 +481,30 @@ export async function executeWorker(
       const detection = detector.checkOutput(combined);
       if (detection) {
         throw new UsageLimitError(detection);
+      }
+    }
+
+    // --- Clarification detection from agent output ---
+    if (discordClarification && agentResult.status !== "failed") {
+      const combined = `${agentResult.stdout}\n${agentResult.stderr}`;
+      const clarificationLine = detectClarificationNeed(combined);
+      if (clarificationLine) {
+        const question = extractQuestion(combined, clarificationLine);
+        logger.info("worker", `Clarification needed for ${issue.identifier}: ${clarificationLine}`);
+        emitRunEvent({
+          runId: plan.runId,
+          type: "clarification_requested",
+          timestamp: new Date().toISOString(),
+          data: { question },
+        });
+        const answer = await discordClarification(question);
+        if (answer) {
+          logger.info("worker", `Clarification received for ${issue.identifier}, re-invoking agent`);
+          const clarificationPrompt = `${fullPrompt}\n\n## Clarification from user\n\n${answer}`;
+          agentResult = await session.invoke(clarificationPrompt);
+        } else {
+          logger.info("worker", `No clarification received for ${issue.identifier}, proceeding with best judgment`);
+        }
       }
     }
 

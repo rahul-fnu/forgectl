@@ -1,161 +1,212 @@
-import type { RunEvent } from "../logging/events.js";
+import type { RunResult } from "../github/comments.js";
+import type { AlertEvent, AlertEventType } from "../alerting/types.js";
+import type { ChildStatus } from "../github/sub-issue-rollup.js";
 
-export interface EmbedField {
-  name: string;
-  value: string;
-  inline?: boolean;
-}
+const COLOR_MAP: Record<AlertEventType, number> = {
+  run_completed: 0x2eb886,
+  run_failed: 0xa30200,
+  cost_ceiling_hit: 0xdaa038,
+  usage_limit_detected: 0xdaa038,
+  review_escalated: 0xdaa038,
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  agent_executing: "Agent executing",
+  validating: "Validation",
+  collecting_output: "Output collection",
+};
 
 export interface DiscordEmbed {
   title?: string;
   description?: string;
   color?: number;
-  fields?: EmbedField[];
+  fields?: Array<{ name: string; value: string; inline?: boolean }>;
   footer?: { text: string };
   timestamp?: string;
-  url?: string;
 }
 
-const COLOR_SUCCESS = 0x2eb886;
-const COLOR_FAILURE = 0xa30200;
-const COLOR_WARNING = 0xdaa038;
-const COLOR_INFO = 0x2f80ed;
-const COLOR_PROGRESS = 0x808080;
-
-export function buildTaskSubmittedEmbed(runId: string, task: string): DiscordEmbed {
+export function buildAlertEmbed(event: AlertEvent): DiscordEmbed {
+  const color = COLOR_MAP[event.type] ?? 0x808080;
+  const fields: DiscordEmbed["fields"] = [
+    { name: "Event", value: event.type, inline: true },
+    { name: "Run", value: event.runId, inline: true },
+  ];
+  if (event.issueIdentifier) {
+    fields.push({ name: "Issue", value: event.issueIdentifier, inline: true });
+  }
   return {
-    title: "Task Dispatched",
-    description: task.length > 4000 ? task.slice(0, 4000) + "..." : task,
-    color: COLOR_INFO,
-    fields: [{ name: "Run ID", value: `\`${runId}\``, inline: true }],
-    timestamp: new Date().toISOString(),
+    title: "forgectl Alert",
+    description: event.message,
+    color,
+    fields,
+    footer: { text: "forgectl" },
+    timestamp: event.timestamp,
   };
 }
 
-export function buildCompletedEmbed(runId: string, data: Record<string, unknown>): DiscordEmbed {
-  const fields: EmbedField[] = [
-    { name: "Run ID", value: `\`${runId}\``, inline: true },
-    { name: "Status", value: "Completed", inline: true },
+export function buildProgressEmbed(
+  runId: string,
+  completedStages: string[],
+  status: string,
+  validationAttempt?: number,
+  error?: string,
+): DiscordEmbed {
+  const lines: string[] = [];
+  const stages = ["agent_executing", "validating", "collecting_output"] as const;
+
+  for (const stage of stages) {
+    const label = STAGE_LABELS[stage];
+    const checked = completedStages.includes(stage);
+    let displayLabel = label;
+    if (stage === "validating" && validationAttempt) {
+      displayLabel = `${label} (attempt ${validationAttempt})`;
+    }
+    lines.push(`${checked ? "✅" : "⬜"} ${displayLabel}`);
+  }
+
+  if (error) {
+    lines.push(`\n**Error:** ${error}`);
+  }
+
+  let color = 0x5865f2; // blurple
+  if (status === "completed") color = 0x2eb886;
+  else if (status === "failed") color = 0xa30200;
+
+  return {
+    title: `Run \`${runId}\``,
+    description: lines.join("\n"),
+    color,
+    footer: { text: `Status: ${status}` },
+  };
+}
+
+export function buildResultEmbed(result: RunResult, prUrl?: string): DiscordEmbed {
+  const color = result.status === "success" ? 0x2eb886 : 0xa30200;
+  const emoji = result.status === "success" ? "✅" : "❌";
+  const statusText = result.status === "success" ? "Completed" : "Failed";
+
+  const fields: DiscordEmbed["fields"] = [
+    { name: "Duration", value: result.duration, inline: true },
   ];
 
-  if (data.filesChanged !== undefined) {
-    fields.push({ name: "Files Changed", value: String(data.filesChanged), inline: true });
+  if (result.workflow) {
+    fields.push({ name: "Workflow", value: result.workflow, inline: true });
   }
-  if (data.prUrl) {
-    fields.push({ name: "Pull Request", value: String(data.prUrl) });
+  if (result.agent) {
+    fields.push({ name: "Agent", value: result.agent, inline: true });
   }
-  if (data.branch) {
-    fields.push({ name: "Branch", value: `\`${data.branch}\``, inline: true });
+  if (result.cost?.estimated_usd) {
+    fields.push({ name: "Cost", value: `$${result.cost.estimated_usd}`, inline: true });
   }
-  if (data.costUsd !== undefined) {
-    fields.push({ name: "Cost", value: `$${Number(data.costUsd).toFixed(4)}`, inline: true });
+  if (result.cost?.input_tokens || result.cost?.output_tokens) {
+    const tokens = `In: ${result.cost?.input_tokens ?? 0} / Out: ${result.cost?.output_tokens ?? 0}`;
+    fields.push({ name: "Tokens", value: tokens, inline: true });
+  }
+  if (prUrl) {
+    fields.push({ name: "PR", value: prUrl, inline: false });
+  }
+  if (result.validationResults && result.validationResults.length > 0) {
+    const valLines = result.validationResults.map(
+      (v) => `${v.passed ? "✅" : "❌"} ${v.step}`,
+    );
+    fields.push({ name: "Validation", value: valLines.join("\n"), inline: false });
   }
 
   return {
-    title: "Run Completed",
-    color: COLOR_SUCCESS,
+    title: `${emoji} ${statusText}`,
+    description: `Run \`${result.runId}\``,
+    color,
     fields,
-    timestamp: new Date().toISOString(),
+    footer: { text: "forgectl" },
   };
 }
 
-export function buildFailedEmbed(runId: string, data: Record<string, unknown>): DiscordEmbed {
-  const fields: EmbedField[] = [
-    { name: "Run ID", value: `\`${runId}\``, inline: true },
-    { name: "Status", value: "Failed", inline: true },
+export function buildSubIssueProgressEmbed(
+  parentTitle: string,
+  children: ChildStatus[],
+): DiscordEmbed {
+  const EMOJI: Record<ChildStatus["state"], string> = {
+    completed: "✅",
+    in_progress: "⏳",
+    pending: "⬜",
+    failed: "❌",
+    blocked: "⛔",
+  };
+
+  const lines = children.map((child) => {
+    let line = `${EMOJI[child.state]} [${child.title}](${child.url})`;
+    if (child.state === "failed" && child.errorSummary) {
+      line += ` \u2014 ${child.errorSummary}`;
+    }
+    return line;
+  });
+
+  const completed = children.filter((c) => c.state === "completed").length;
+
+  return {
+    title: `Sub-Issue Progress: ${parentTitle}`,
+    description: lines.join("\n"),
+    color: 0x5865f2,
+    footer: { text: `Progress: ${completed}/${children.length} complete` },
+  };
+}
+
+export function buildStatusEmbed(
+  runs: Array<{ id: string; status: string; task?: string; startedAt?: string }>,
+): DiscordEmbed {
+  if (runs.length === 0) {
+    return {
+      title: "forgectl Status",
+      description: "No active runs.",
+      color: 0x808080,
+    };
+  }
+
+  const lines = runs.map((r) => {
+    const task = r.task ? ` — ${r.task.slice(0, 60)}` : "";
+    return `**${r.id}** \`${r.status}\`${task}`;
+  });
+
+  return {
+    title: "forgectl Status",
+    description: lines.join("\n"),
+    color: 0x5865f2,
+    footer: { text: `${runs.length} run(s)` },
+  };
+}
+
+export function buildStatsEmbed(stats: {
+  totalRuns: number;
+  succeeded: number;
+  failed: number;
+  avgDurationMs?: number;
+  totalCostUsd?: number;
+}): DiscordEmbed {
+  const successRate =
+    stats.totalRuns > 0
+      ? ((stats.succeeded / stats.totalRuns) * 100).toFixed(1)
+      : "0.0";
+
+  const fields: DiscordEmbed["fields"] = [
+    { name: "Total Runs", value: String(stats.totalRuns), inline: true },
+    { name: "Succeeded", value: String(stats.succeeded), inline: true },
+    { name: "Failed", value: String(stats.failed), inline: true },
+    { name: "Success Rate", value: `${successRate}%`, inline: true },
   ];
 
-  if (data.error) {
-    fields.push({ name: "Error", value: String(data.error).slice(0, 1024) });
+  if (stats.avgDurationMs !== undefined) {
+    const avgSec = (stats.avgDurationMs / 1000).toFixed(1);
+    fields.push({ name: "Avg Duration", value: `${avgSec}s`, inline: true });
+  }
+  if (stats.totalCostUsd !== undefined) {
+    fields.push({ name: "Total Cost", value: `$${stats.totalCostUsd.toFixed(2)}`, inline: true });
   }
 
   return {
-    title: "Run Failed",
-    color: COLOR_FAILURE,
+    title: "forgectl Stats",
+    description: `Success rate: **${successRate}%** across ${stats.totalRuns} runs`,
+    color: 0x5865f2,
     fields,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-export function buildProgressEmbed(runId: string, event: RunEvent): DiscordEmbed {
-  let description = "";
-  const data = event.data;
-
-  switch (event.type) {
-    case "phase":
-      description = `Phase: **${data.phase ?? "unknown"}**`;
-      break;
-    case "validation_step_started":
-      description = `Validation: \`${data.name ?? data.command ?? "step"}\``;
-      break;
-    case "validation_step_completed":
-      description = data.passed
-        ? `Validation passed: \`${data.name ?? "step"}\``
-        : `Validation failed: \`${data.name ?? "step"}\``;
-      break;
-    case "agent_started":
-      description = "Agent started working...";
-      break;
-    case "retry":
-      description = `Retrying (attempt ${data.attempt ?? "?"})`;
-      break;
-    case "cost":
-      description = `Cost update: $${Number(data.costUsd ?? 0).toFixed(4)}`;
-      break;
-    default:
-      description = data.message ? String(data.message) : event.type;
-  }
-
-  return {
-    description,
-    color: COLOR_PROGRESS,
-    footer: { text: `${runId} | ${event.type}` },
-  };
-}
-
-export function buildClarificationEmbed(runId: string, question: string): DiscordEmbed {
-  return {
-    title: "Clarification Needed",
-    description: question.length > 4000 ? question.slice(0, 4000) + "..." : question,
-    color: COLOR_WARNING,
-    fields: [{ name: "Run ID", value: `\`${runId}\``, inline: true }],
-    footer: { text: "Reply in this thread to answer" },
-    timestamp: new Date().toISOString(),
-  };
-}
-
-export function buildReviewEmbed(runId: string, data: Record<string, unknown>): DiscordEmbed {
-  const fields: EmbedField[] = [
-    { name: "Run ID", value: `\`${runId}\``, inline: true },
-  ];
-
-  if (data.round !== undefined) {
-    fields.push({ name: "Review Round", value: String(data.round), inline: true });
-  }
-  if (data.comments !== undefined) {
-    fields.push({ name: "Comments", value: String(data.comments), inline: true });
-  }
-
-  return {
-    title: "Review Result",
-    color: COLOR_INFO,
-    fields,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-export function buildStatsEmbed(stats: Record<string, unknown>): DiscordEmbed {
-  const fields: EmbedField[] = [];
-
-  if (stats.totalRuns !== undefined) fields.push({ name: "Total Runs", value: String(stats.totalRuns), inline: true });
-  if (stats.successRate !== undefined) fields.push({ name: "Success Rate", value: `${(Number(stats.successRate) * 100).toFixed(1)}%`, inline: true });
-  if (stats.totalCost !== undefined) fields.push({ name: "Total Cost", value: `$${Number(stats.totalCost).toFixed(2)}`, inline: true });
-  if (stats.avgDuration !== undefined) fields.push({ name: "Avg Duration", value: String(stats.avgDuration), inline: true });
-
-  return {
-    title: "Analytics Summary",
-    color: COLOR_INFO,
-    fields,
-    timestamp: new Date().toISOString(),
+    footer: { text: "forgectl" },
   };
 }

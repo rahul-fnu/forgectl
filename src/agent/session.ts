@@ -1,5 +1,6 @@
 import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "./types.js";
+import type { ClarificationCallback } from "../discord/clarify.js";
 import { getAgentAdapter } from "./registry.js";
 import { OneShotSession } from "./oneshot-session.js";
 import { AppServerSession } from "./appserver-session.js";
@@ -41,6 +42,8 @@ export interface AgentSessionOptions {
   onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
   /** When true and agent is codex, use AppServerSession for persistent multi-turn sessions. */
   useAppServer?: boolean;
+  /** Callback invoked when the agent needs clarification from the user. */
+  onClarification?: ClarificationCallback;
 }
 
 /**
