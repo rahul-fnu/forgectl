@@ -283,6 +283,13 @@ export const ConfigSchema = z.object({
 
   alerting: AlertingConfigSchema,
 
+  discord: z.object({
+    enabled: z.boolean().default(false),
+    bot_token: z.string().default(""),
+    guild_id: z.string().default(""),
+    channel_ids: z.array(z.string()).default([]),
+  }).default({}),
+
   project: z.object({
     auto_create: z.boolean().default(false),
     github_org: z.string().optional(),

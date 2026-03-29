@@ -5,49 +5,108 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
-  type Interaction,
   type Message,
-  type ThreadChannel,
+  type ChatInputCommandInteraction,
 } from "discord.js";
-import { ThreadManager } from "./thread-manager.js";
-import {
-  buildProgressEmbed,
-  buildResultEmbed,
-  buildStatusEmbed,
-  buildStatsEmbed,
-  buildSubIssueProgressEmbed,
-} from "./embeds.js";
-import { runEvents } from "../logging/events.js";
-import type { RunEvent } from "../logging/events.js";
+import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
-import type { RunResult } from "../github/comments.js";
-import type { ChildStatus } from "../github/sub-issue-rollup.js";
-
-export interface DiscordBotConfig {
-  botToken: string;
-  channelId: string;
-  applicationId?: string;
-}
 
 export interface DiscordBotDeps {
+  config: ForgectlConfig;
   logger: Logger;
-  getActiveRuns: () => Array<{ id: string; status: string; task?: string; startedAt?: string }>;
-  getStats: () => { totalRuns: number; succeeded: number; failed: number; avgDurationMs?: number; totalCostUsd?: number };
-  dispatchTask: (task: string) => Promise<string>;
-  resumeRun?: (runId: string, input: string) => { resumed: boolean; error?: string };
+  daemonPort: number;
+  daemonToken: string;
+}
+
+export interface DispatchResult {
+  status: string;
+  id?: string;
+  parentIssueId?: string;
+  childIssues?: string[];
+}
+
+const REPO_URL_REGEX = /https?:\/\/github\.com\/[\w.\-]+\/[\w.\-]+/;
+const REPO_NAME_REGEX = /repo:\s*([\w.\-]+\/[\w.\-]+)/i;
+
+export function extractRepo(text: string): string | undefined {
+  const urlMatch = text.match(REPO_URL_REGEX);
+  if (urlMatch) {
+    const url = urlMatch[0];
+    const parts = url.replace(/https?:\/\/github\.com\//, "").split("/");
+    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+  }
+  const nameMatch = text.match(REPO_NAME_REGEX);
+  if (nameMatch) return nameMatch[1];
+  return undefined;
+}
+
+export function truncateTitle(text: string, maxLen = 50): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + "…";
+}
+
+export async function dispatchTask(
+  task: string,
+  repo: string | undefined,
+  daemonPort: number,
+  daemonToken: string,
+): Promise<DispatchResult> {
+  const body: Record<string, unknown> = { title: truncateTitle(task), description: task };
+  if (repo) body.repo = repo;
+
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/dispatch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${daemonToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Dispatch failed (${res.status}): ${text}`);
+  }
+
+  return (await res.json()) as DispatchResult;
+}
+
+export async function fetchStatus(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch status.";
+  const runs = (await res.json()) as Array<{ id: string; status: string; issueId?: string }>;
+  if (runs.length === 0) return "No active runs.";
+  return runs
+    .slice(0, 10)
+    .map((r) => `• \`${r.id}\` — ${r.status}`)
+    .join("\n");
+}
+
+export async function fetchStats(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/summary`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch stats.";
+  const data = (await res.json()) as Record<string, unknown>;
+  return "```json\n" + JSON.stringify(data, null, 2) + "\n```";
 }
 
 export class DiscordBot {
   private client: Client;
-  private threadManager: ThreadManager | null = null;
-  private config: DiscordBotConfig;
-  private deps: DiscordBotDeps;
-  private started = false;
-  private eventCleanup: (() => void) | null = null;
+  private threadMap = new Map<string, string>();
+  private config: ForgectlConfig;
+  private logger: Logger;
+  private daemonPort: number;
+  private daemonToken: string;
 
-  constructor(config: DiscordBotConfig, deps: DiscordBotDeps) {
-    this.config = config;
-    this.deps = deps;
+  constructor(deps: DiscordBotDeps) {
+    this.config = deps.config;
+    this.logger = deps.logger;
+    this.daemonPort = deps.daemonPort;
+    this.daemonToken = deps.daemonToken;
+
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -55,259 +114,159 @@ export class DiscordBot {
         GatewayIntentBits.MessageContent,
       ],
     });
-  }
 
-  async start(): Promise<void> {
-    if (this.started) return;
-
-    this.client.on(Events.ClientReady, () => {
-      this.deps.logger.info("discord", `Bot logged in as ${this.client.user?.tag}`);
-      this.threadManager = new ThreadManager(this.client, this.config.channelId);
-    });
-
-    this.client.on(Events.MessageCreate, (message) => {
-      void this.handleMessage(message);
+    this.client.on(Events.MessageCreate, (msg: Message) => {
+      void this.handleMessage(msg);
     });
 
     this.client.on(Events.InteractionCreate, (interaction) => {
-      void this.handleInteraction(interaction);
+      if (interaction.isChatInputCommand()) {
+        void this.handleSlashCommand(interaction as ChatInputCommandInteraction);
+      }
     });
+  }
 
-    await this.client.login(this.config.botToken);
-    this.subscribeToRunEvents();
-
-    if (this.config.applicationId) {
-      await this.registerSlashCommands();
+  async start(): Promise<void> {
+    const token = this.resolveBotToken();
+    if (!token) {
+      this.logger.warn("discord", "No bot token configured, Discord bot not started");
+      return;
     }
 
-    this.started = true;
+    await this.registerSlashCommands(token);
+    await this.client.login(token);
+    this.logger.info("discord", `Discord bot logged in as ${this.client.user?.tag ?? "unknown"}`);
   }
 
   async stop(): Promise<void> {
-    if (!this.started) return;
-    if (this.eventCleanup) {
-      this.eventCleanup();
-      this.eventCleanup = null;
-    }
     this.client.destroy();
-    this.started = false;
   }
 
-  private async registerSlashCommands(): Promise<void> {
-    if (!this.config.applicationId) return;
+  getClient(): Client {
+    return this.client;
+  }
+
+  getThreadMap(): Map<string, string> {
+    return this.threadMap;
+  }
+
+  private resolveBotToken(): string {
+    const cfgToken = this.config.discord?.bot_token;
+    if (cfgToken) return cfgToken;
+    return process.env.DISCORD_BOT_TOKEN ?? "";
+  }
+
+  private isListenChannel(channelId: string): boolean {
+    const ids = this.config.discord?.channel_ids;
+    if (!ids || ids.length === 0) return true;
+    return ids.includes(channelId);
+  }
+
+  async handleMessage(msg: Message): Promise<void> {
+    if (msg.author.bot) return;
+    if (!this.isListenChannel(msg.channelId)) return;
+
+    const task = msg.content.trim();
+    if (!task) return;
+
+    const repo = extractRepo(task);
+    const threadName = `Working on: ${truncateTitle(task)}`;
+
+    try {
+      const thread = await msg.startThread({ name: threadName });
+
+      const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
+
+      if (result.status === "decomposed" && result.childIssues) {
+        const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
+        await thread.send(`Task decomposed into sub-issues:\n${issueList}`);
+        if (result.parentIssueId) {
+          this.threadMap.set(thread.id, result.parentIssueId);
+        }
+      } else {
+        await thread.send(`Task dispatched! Run ID: \`${result.id}\``);
+        if (result.id) {
+          this.threadMap.set(thread.id, result.id);
+        }
+      }
+    } catch (err) {
+      this.logger.error("discord", `Failed to handle message: ${err}`);
+      try {
+        await msg.reply(`Failed to dispatch task: ${err instanceof Error ? err.message : String(err)}`);
+      } catch { /* ignore reply failure */ }
+    }
+  }
+
+  private async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    const sub = interaction.options.getSubcommand(false);
+
+    if (sub === "status") {
+      await interaction.deferReply();
+      const status = await fetchStatus(this.daemonPort, this.daemonToken);
+      await interaction.editReply(status);
+      return;
+    }
+
+    if (sub === "stats") {
+      await interaction.deferReply();
+      const stats = await fetchStats(this.daemonPort, this.daemonToken);
+      await interaction.editReply(stats);
+      return;
+    }
+
+    // Default: dispatch a task
+    const task = interaction.options.getString("task");
+    if (!task) {
+      await interaction.reply("Please provide a task description.");
+      return;
+    }
+
+    await interaction.deferReply();
+    try {
+      const repo = extractRepo(task);
+      const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
+
+      if (result.status === "decomposed" && result.childIssues) {
+        const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
+        await interaction.editReply(`Task decomposed into sub-issues:\n${issueList}`);
+      } else {
+        await interaction.editReply(`Task dispatched! Run ID: \`${result.id}\``);
+      }
+    } catch (err) {
+      await interaction.editReply(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async registerSlashCommands(token: string): Promise<void> {
+    const guildId = this.config.discord?.guild_id;
+    if (!guildId) return;
 
     const commands = [
       new SlashCommandBuilder()
         .setName("forge")
-        .setDescription("forgectl commands")
+        .setDescription("Interact with forgectl")
         .addSubcommand((sub) =>
-          sub.setName("status").setDescription("Show current runs"),
+          sub.setName("run").setDescription("Dispatch a task").addStringOption((opt) =>
+            opt.setName("task").setDescription("Task description").setRequired(true),
+          ),
         )
-        .addSubcommand((sub) =>
-          sub.setName("stats").setDescription("Show analytics"),
-        ),
+        .addSubcommand((sub) => sub.setName("status").setDescription("Show current runs"))
+        .addSubcommand((sub) => sub.setName("stats").setDescription("Show analytics summary")),
     ];
 
-    const rest = new REST().setToken(this.config.botToken);
+    const rest = new REST({ version: "10" }).setToken(token);
     try {
-      await rest.put(Routes.applicationCommands(this.config.applicationId), {
+      await rest.put(Routes.applicationGuildCommands(this.client.application?.id ?? "", guildId), {
         body: commands.map((c) => c.toJSON()),
       });
-      this.deps.logger.info("discord", "Slash commands registered");
     } catch (err) {
-      this.deps.logger.warn("discord", `Failed to register slash commands: ${err}`);
+      this.logger.warn("discord", `Failed to register slash commands: ${err}`);
     }
   }
+}
 
-  private async handleMessage(message: Message): Promise<void> {
-    if (message.author.bot) return;
-    if (message.channel.id !== this.config.channelId && !message.channel.isThread()) return;
-
-    // Handle replies in threads — forward as clarification input
-    if (message.channel.isThread()) {
-      const thread = message.channel as ThreadChannel;
-      const runId = this.findRunIdByThreadId(thread.id);
-      if (runId && this.deps.resumeRun) {
-        const result = this.deps.resumeRun(runId, message.content);
-        if (result.resumed) {
-          await message.reply("Reply forwarded to agent.");
-        } else if (result.error) {
-          await message.reply(`Could not forward reply: ${result.error}`);
-        }
-      }
-      return;
-    }
-
-    // Handle new task messages in the main channel
-    const content = message.content.trim();
-    if (!content) return;
-
-    try {
-      const runId = await this.deps.dispatchTask(content);
-      if (!this.threadManager) return;
-
-      const thread = await this.threadManager.getOrCreateThread(
-        runId,
-        `forge: ${content.slice(0, 80)}`,
-      );
-      await thread.send(`Task dispatched — run \`${runId}\``);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.deps.logger.error("discord", `Failed to dispatch task: ${errMsg}`);
-      try {
-        await message.reply(`Failed to dispatch task: ${errMsg}`);
-      } catch {
-        // rate limit or permissions
-      }
-    }
-  }
-
-  private async handleInteraction(interaction: Interaction): Promise<void> {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== "forge") return;
-
-    const sub = interaction.options.getSubcommand();
-    try {
-      if (sub === "status") {
-        const runs = this.deps.getActiveRuns();
-        const embed = buildStatusEmbed(runs);
-        await interaction.reply({ embeds: [embed] });
-      } else if (sub === "stats") {
-        const stats = this.deps.getStats();
-        const embed = buildStatsEmbed(stats);
-        await interaction.reply({ embeds: [embed] });
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.deps.logger.error("discord", `Slash command error: ${errMsg}`);
-      try {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: `Error: ${errMsg}`, ephemeral: true });
-        } else {
-          await interaction.reply({ content: `Error: ${errMsg}`, ephemeral: true });
-        }
-      } catch {
-        // Swallow interaction error
-      }
-    }
-  }
-
-  private subscribeToRunEvents(): void {
-    const handler = (event: RunEvent) => {
-      void this.handleRunEvent(event);
-    };
-    runEvents.on("run", handler);
-    this.eventCleanup = () => {
-      runEvents.off("run", handler);
-    };
-  }
-
-  private async handleRunEvent(event: RunEvent): Promise<void> {
-    if (!this.threadManager) return;
-
-    try {
-      switch (event.type) {
-        case "started":
-        case "dispatch": {
-          const title = (event.data.task as string) ?? (event.data.identifier as string) ?? event.runId;
-          await this.threadManager.getOrCreateThread(event.runId, `forge: ${title.slice(0, 80)}`);
-          const embed = buildProgressEmbed(event.runId, [], "started");
-          await this.threadManager.sendEmbed(event.runId, embed);
-          break;
-        }
-
-        case "phase": {
-          const stage = event.data.phase as string;
-          const completed = (event.data.completedStages as string[]) ?? [stage];
-          const attempt = event.data.validationAttempt as number | undefined;
-          const embed = buildProgressEmbed(event.runId, completed, "running", attempt);
-          await this.threadManager.sendEmbed(event.runId, embed);
-          break;
-        }
-
-        case "agent_output": {
-          const output = event.data.output as string;
-          if (output) {
-            const truncated = output.length > 1900 ? output.slice(0, 1900) + "..." : output;
-            await this.threadManager.sendMessage(event.runId, `\`\`\`\n${truncated}\n\`\`\``);
-          }
-          break;
-        }
-
-        case "prompt": {
-          const question = event.data.question as string;
-          if (question) {
-            await this.threadManager.sendMessage(
-              event.runId,
-              `**Clarification needed:**\n> ${question}\n\nReply in this thread to respond.`,
-            );
-          }
-          break;
-        }
-
-        case "completed": {
-          const result: RunResult = {
-            runId: event.runId,
-            status: "success",
-            duration: (event.data.duration as string) ?? "unknown",
-            cost: event.data.cost as RunResult["cost"],
-            workflow: event.data.workflow as string | undefined,
-            agent: event.data.agent as string | undefined,
-            validationResults: event.data.validationResults as RunResult["validationResults"],
-          };
-          const prUrl = event.data.prUrl as string | undefined;
-          const embed = buildResultEmbed(result, prUrl);
-          await this.threadManager.sendEmbed(event.runId, embed);
-          break;
-        }
-
-        case "failed": {
-          const result: RunResult = {
-            runId: event.runId,
-            status: "failure",
-            duration: (event.data.duration as string) ?? "unknown",
-            cost: event.data.cost as RunResult["cost"],
-          };
-          const embed = buildResultEmbed(result);
-          await this.threadManager.sendEmbed(event.runId, embed);
-          break;
-        }
-
-        case "validation_step_completed": {
-          const step = event.data.step as string;
-          const passed = event.data.passed as boolean;
-          const icon = passed ? "✅" : "❌";
-          await this.threadManager.sendMessage(
-            event.runId,
-            `${icon} Validation: **${step}** ${passed ? "passed" : "failed"}`,
-          );
-          break;
-        }
-      }
-    } catch (err) {
-      this.deps.logger.warn("discord", `Failed to handle run event ${event.type}: ${err}`);
-    }
-  }
-
-  async postSubIssueProgress(
-    parentRunId: string,
-    parentTitle: string,
-    children: ChildStatus[],
-  ): Promise<void> {
-    if (!this.threadManager) return;
-    const embed = buildSubIssueProgressEmbed(parentTitle, children);
-    await this.threadManager.sendEmbed(parentRunId, embed);
-  }
-
-  private findRunIdByThreadId(threadId: string): string | undefined {
-    if (!this.threadManager) return undefined;
-    // Reverse lookup from thread manager
-    // ThreadManager stores runId -> threadId, we need threadId -> runId
-    // Access the internal map via the public getter
-    return this.threadManager.findRunByThread(threadId);
-  }
-
-  getThreadManager(): ThreadManager | null {
-    return this.threadManager;
-  }
+export async function startDiscordBot(deps: DiscordBotDeps): Promise<DiscordBot> {
+  const bot = new DiscordBot(deps);
+  await bot.start();
+  return bot;
 }

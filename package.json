@@ -27,7 +27,7 @@
     "better-sqlite3": "^12.6.2",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.16.3",
     "dockerode": "^4.0.2",
     "drizzle-orm": "^0.45.1",
     "fastify": "^5.7.4",
