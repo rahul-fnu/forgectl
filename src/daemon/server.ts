@@ -213,6 +213,81 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     eventRepo,
   });
 
+  // Import resumeRun for Discord and GitHub integrations
+  const { resumeRun: resumeRunFn } = await import("../durability/pause.js");
+
+  // Discord bot initialization (optional, only when config.discord is present)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let discordBot: any = null;
+  if (config.discord) {
+    try {
+      const { DiscordBot } = await import("../discord/bot.js");
+      discordBot = new DiscordBot(
+        {
+          botToken: config.discord.bot_token,
+          channelId: config.discord.channel_id,
+          applicationId: config.discord.application_id,
+        },
+        {
+          logger: daemonLogger,
+          getActiveRuns: () => {
+            if (runRepo) {
+              const active = [
+                ...runRepo.findByStatus("running"),
+                ...runRepo.findByStatus("queued"),
+              ];
+              return active.map((r) => ({
+                id: r.id,
+                status: r.status,
+                task: r.task ?? undefined,
+                startedAt: r.startedAt ?? undefined,
+              }));
+            }
+            return queue.list()
+              .filter((r) => r.status === "running" || r.status === "queued")
+              .map((r) => ({
+                id: r.id,
+                status: r.status,
+                task: r.options.task,
+                startedAt: r.startedAt,
+              }));
+          },
+          getStats: () => {
+            if (runRepo) {
+              const all = runRepo.list();
+              const succeeded = all.filter((r) => r.status === "completed").length;
+              const failed = all.filter((r) => r.status === "failed").length;
+              return { totalRuns: all.length, succeeded, failed };
+            }
+            const all = queue.list();
+            const succeeded = all.filter((r) => r.status === "completed").length;
+            const failed = all.filter((r) => r.status === "failed").length;
+            return { totalRuns: all.length, succeeded, failed };
+          },
+          dispatchTask: async (task: string) => {
+            const id = `forge-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            queue.submit(id, { task });
+            return id;
+          },
+          resumeRun: (runId: string, input: string) => {
+            if (!runRepo) return { resumed: false, error: "Run repository not available" };
+            try {
+              resumeRunFn(runRepo, runId, input);
+              return { resumed: true };
+            } catch (resumeErr) {
+              return { resumed: false, error: resumeErr instanceof Error ? resumeErr.message : "Resume failed" };
+            }
+          },
+        },
+      );
+      await discordBot.start();
+      daemonLogger.info("daemon", "Discord bot initialized");
+    } catch (err) {
+      daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);
+      discordBot = null;
+    }
+  }
+
   // GitHub App initialization (optional, only when config.github_app is present)
   let ghAppService: Awaited<ReturnType<typeof import("../github/app.js").createGitHubAppService>> | null = null;
   if (config.github_app) {
@@ -220,7 +295,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const { createGitHubAppService } = await import("../github/app.js");
       const { registerGitHubRoutes } = await import("../github/routes.js");
       const { registerWebhookHandlers } = await import("../github/webhooks.js");
-      const { resumeRun } = await import("../durability/pause.js");
 
       ghAppService = createGitHubAppService({
         appId: config.github_app.app_id,
@@ -261,7 +335,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
             return issueCtx?.owner === owner && issueCtx?.repo === repo && issueCtx?.issueNumber === issueNumber;
           });
         },
-        resumeRun,
+        resumeRun: resumeRunFn,
         subIssueCache,
       });
 

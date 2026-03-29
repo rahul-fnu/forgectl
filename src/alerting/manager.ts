@@ -1,6 +1,7 @@
 import type { AlertEvent, AlertingConfig } from "./types.js";
 import { dispatchWebhook } from "./webhook.js";
 import { dispatchSlack } from "./slack.js";
+import { dispatchDiscord } from "./discord.js";
 
 export class AlertManager {
   private config: AlertingConfig;
@@ -25,6 +26,14 @@ export class AlertManager {
     if (this.config.slack_webhook_url) {
       promises.push(
         dispatchSlack(this.config.slack_webhook_url, event).catch(() => {
+          // fire-and-forget: swallow errors
+        }),
+      );
+    }
+
+    if (this.config.discord_webhook_url) {
+      promises.push(
+        dispatchDiscord(this.config.discord_webhook_url, event).catch(() => {
           // fire-and-forget: swallow errors
         }),
       );
