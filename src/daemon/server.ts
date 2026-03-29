@@ -559,10 +559,30 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
+  // Discord bot initialization (when discord.enabled is true)
+  let discordBot: Awaited<ReturnType<typeof import("../discord/bot.js").startDiscordBot>> | null = null;
+  if (config.discord?.enabled) {
+    try {
+      const { startDiscordBot } = await import("../discord/bot.js");
+      discordBot = await startDiscordBot({
+        config,
+        logger: daemonLogger,
+        daemonPort: port,
+        daemonToken,
+      });
+      daemonLogger.info("daemon", "Discord bot started");
+    } catch (err) {
+      daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);
+    }
+  }
+
   const shutdown = async () => {
     clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
     watcher?.stop();
+    if (discordBot) {
+      await discordBot.stop();
+    }
     if (orchestrator) {
       await orchestrator.stop();
     }
