@@ -133,6 +133,12 @@ export const WebhookTargetSchema = z.object({
   secret: z.string().optional(),
 });
 
+export const ChannelRepoMappingSchema = z.object({
+  channel_id: z.string(),
+  repo: z.string(),
+  workflow: z.string().optional(),
+});
+
 export const DiscordConfigSchema = z.object({
   enabled: z.boolean().default(false),
   bot_token: z.string().default(""),
@@ -140,6 +146,7 @@ export const DiscordConfigSchema = z.object({
   guild_id: z.string().default(""),
   channel_id: z.string().optional(),
   channel_ids: z.array(z.string()).default([]),
+  channel_repos: z.array(ChannelRepoMappingSchema).default([]),
   application_id: z.string().optional(),
   daemon_url: z.string().optional(),
   daemon_token: z.string().optional(),
@@ -148,6 +155,7 @@ export const DiscordConfigSchema = z.object({
   status_channel_name: z.string().default("forgectl-status"),
   digest_cron: z.string().default("0 9 * * *"),
   alerts_enabled: z.boolean().default(true),
+  reaction_controls: z.boolean().default(true),
 }).default({});
 
 export const AlertingConfigSchema = z.object({
