@@ -166,14 +166,9 @@ program
   .option("-p, --port <port>", "daemon port", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
   .option("-c, --config <path>", "Config file path")
-  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
-  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
-    if (opts.config && opts.repo) {
-      console.error("Error: --config and --repo are mutually exclusive");
-      process.exit(1);
-    }
+  .action(async (opts: { port: string; foreground?: boolean; config?: string }) => {
     const port = parseInt(opts.port, 10);
-    const configPath = resolveConfigOption(opts);
+    const configPath = opts.config ? resolve(opts.config) : undefined;
 
     if (isDaemonRunning()) {
       const pid = readPid();
@@ -185,7 +180,7 @@ program
       const { startDaemon } = await import("./daemon/server.js");
       await startDaemon(port, true, configPath);
     } else {
-      const extraArgs = buildConfigArgs(opts);
+      const extraArgs = opts.config ? ["--config", resolve(opts.config)] : [];
       const child = spawn(process.execPath, [process.argv[1], "orchestrate", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
@@ -208,14 +203,9 @@ program
   .option("-p, --port <number>", "Port to listen on", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
   .option("-c, --config <path>", "Config file path")
-  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
-  .action(async (opts: { port: string; foreground?: boolean; config?: string; repo?: string }) => {
-    if (opts.config && opts.repo) {
-      console.error("Error: --config and --repo are mutually exclusive");
-      process.exit(1);
-    }
+  .action(async (opts: { port: string; foreground?: boolean; config?: string }) => {
     const port = parseInt(opts.port, 10);
-    const configPath = resolveConfigOption(opts);
+    const configPath = opts.config ? resolve(opts.config) : undefined;
 
     if (isDaemonRunning()) {
       const pid = readPid();
@@ -228,7 +218,7 @@ program
       await startDaemon(port, false, configPath);
     } else {
       // Spawn detached background process
-      const extraArgs = buildConfigArgs(opts);
+      const extraArgs = opts.config ? ["--config", resolve(opts.config)] : [];
       const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
@@ -387,15 +377,10 @@ program
   .option("--foreground", "Run in foreground (don't detach)")
   .option("--ci-timeout <minutes>", "CI timeout in minutes", "45")
   .option("-c, --config <path>", "Config file path")
-  .option("-r, --repo <name>", "Repo profile name (~/.forgectl/repos/<name>.yaml)")
-  .action(async (opts: { port: string; foreground?: boolean; ciTimeout: string; config?: string; repo?: string }) => {
-    if (opts.config && opts.repo) {
-      console.error("Error: --config and --repo are mutually exclusive");
-      process.exit(1);
-    }
+  .action(async (opts: { port: string; foreground?: boolean; ciTimeout: string; config?: string }) => {
     const port = parseInt(opts.port, 10);
     const ciTimeoutMs = parseInt(opts.ciTimeout, 10) * 60 * 1000;
-    const configPath = resolveConfigOption(opts);
+    const configPath = opts.config ? resolve(opts.config) : undefined;
 
     if (isMergeDaemonRunning()) {
       const pid = readMergeDaemonPid();
@@ -407,7 +392,7 @@ program
       const { startMergeDaemon } = await import("./merge-daemon/server.js");
       await startMergeDaemon(port, ciTimeoutMs, configPath);
     } else {
-      const extraArgs = buildConfigArgs(opts);
+      const extraArgs = opts.config ? ["--config", resolve(opts.config)] : [];
       const child = spawn(process.execPath, [
         process.argv[1], "merge-daemon", "--foreground",
         "--port", String(port),
@@ -471,7 +456,6 @@ imagesCmd
   .action(imagesListCommand);
 
 // forgectl repo — manage per-repo config profiles
-import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";

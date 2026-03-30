@@ -335,8 +335,35 @@ export async function executeWorker(
     };
   }
 
+  // 2.7. Load per-repo config (forgectl.yaml) from workspace after clone
+  let effectiveConfig = config;
+  let effectiveValidationConfig = validationConfig;
+  try {
+    const { loadRepoConfig, mergeWithRepoConfig } = await import("../config/loader.js");
+    const repoConfig = loadRepoConfig(workspacePath);
+    if (repoConfig) {
+      effectiveConfig = mergeWithRepoConfig(config, repoConfig);
+      // Convert validate strings to ValidationStep objects if present
+      if (repoConfig.validate.length > 0) {
+        effectiveValidationConfig = {
+          steps: repoConfig.validate.map((cmd, i) => ({
+            name: `step-${i + 1}`,
+            command: cmd,
+            retries: 3,
+            description: "",
+          })),
+          on_failure: "abandon",
+        };
+      }
+      logger.info("worker", `Loaded per-repo config from ${workspacePath}/forgectl.yaml`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("worker", `Failed to load per-repo config: ${msg}`);
+  }
+
   // 3. Build RunPlan (with optional validationConfig and skills)
-  const plan = buildOrchestratedRunPlan(issue, config, workspacePath, promptTemplate, attempt, validationConfig, skills);
+  const plan = buildOrchestratedRunPlan(issue, effectiveConfig, workspacePath, promptTemplate, attempt, effectiveValidationConfig, skills);
 
   // Create root span for the entire worker execution
   const rootSpan = traceId ? createSpan(traceId, "run", null) : undefined;
