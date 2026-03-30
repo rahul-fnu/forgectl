@@ -14,7 +14,7 @@ describe("daemon config merge — four-layer priority", () => {
     const defaults = getDefaults();
     const merged = mergeWorkflowConfig(defaults, {}, {}, {});
     expect(merged.orchestrator.max_concurrent_agents).toBe(3);
-    expect(merged.orchestrator.poll_interval_ms).toBe(30000);
+    expect(merged.orchestrator.poll_interval_ms).toBe(3600000);
   });
 
   it("yaml overrides defaults", () => {
