@@ -61,6 +61,8 @@ export function buildPrompt(plan: RunPlan, _options?: PromptOptions): string {
     parts.push(_options.handoffContext);
   }
 
+  // CLAUDE.md-based context: the agent reads CLAUDE.md natively from the workspace.
+  // No additional context injection needed.
   parts.push(`## Task\n${plan.task}`);
 
   if (plan.validation.steps.length > 0) {

@@ -324,6 +324,10 @@ function scaleMemoryForTeam(baseMemory: string, teammateCount: number): string {
   return `${totalGB}g`;
 }
 
+/**
+ * Auto-detect workflow from CLI options and environment.
+ * Uses explicit workflow if provided, otherwise infers from context.
+ */
 function detectWorkflow(options: CLIOptions): string {
   if (options.workflow) return options.workflow;
   if (options.repo) return "code";
@@ -390,8 +394,20 @@ export function resolveRunPlan(
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 
   const workspaceDir = resolve(options.repo || ".");
+  // Auto-detect stack, image, and validation steps from the workspace
   const detected = workflowName === "code" && !config.container.image
     ? detectStack(workspaceDir)
+    : undefined;
+
+  // Auto-detect validation from per-repo config if available
+  const repoValidate = config.validate ?? [];
+  const autoDetectedValidation = repoValidate.length > 0
+    ? repoValidate.map((cmd, i) => ({
+        name: `step-${i + 1}`,
+        command: cmd,
+        retries: 3,
+        description: "",
+      }))
     : undefined;
 
   const resolvedNoTeam = options.team === false;
@@ -448,7 +464,7 @@ export function resolveRunPlan(
       inject: [],
     },
     validation: {
-      steps: detected?.defaultValidation ?? workflow.validation.steps,
+      steps: autoDetectedValidation ?? detected?.defaultValidation ?? workflow.validation.steps,
       lintSteps: workflow.validation.lint_steps ?? [],
       onFailure: workflow.validation.on_failure,
       maxSameFailures: workflow.validation.max_same_failures ?? 2,
