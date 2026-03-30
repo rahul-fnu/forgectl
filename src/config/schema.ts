@@ -135,8 +135,15 @@ export const WebhookTargetSchema = z.object({
 export const DiscordConfigSchema = z.object({
   enabled: z.boolean().default(false),
   bot_token: z.string().default(""),
+  token: z.string().optional(),
   guild_id: z.string().default(""),
+  channel_id: z.string().optional(),
   channel_ids: z.array(z.string()).default([]),
+  application_id: z.string().optional(),
+  daemon_url: z.string().optional(),
+  daemon_token: z.string().optional(),
+  allowed_channel_ids: z.array(z.string()).optional(),
+  notification_channel_id: z.string().optional(),
 }).default({});
 
 export const AlertingConfigSchema = z.object({

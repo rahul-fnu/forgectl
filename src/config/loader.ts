@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { resolve, join, basename } from "node:path";
 import yaml from "js-yaml";
 import { ConfigSchema, RepoConfigSchema, type ForgectlConfig, type RepoConfig } from "./schema.js";
 
@@ -42,6 +42,16 @@ export function findConfigFile(explicitPath?: string): string | null {
  * Returns defaults if no config file exists.
  */
 export function loadConfig(explicitPath?: string): ForgectlConfig {
+  // Support repo: sentinel prefix for loading repo profiles directly
+  if (explicitPath?.startsWith("repo:")) {
+    const profilePath = explicitPath.slice(5);
+    const raw = readFileSync(profilePath, "utf-8");
+    const overlay = yaml.load(raw) as Record<string, unknown> | null;
+    const base = ConfigSchema.parse({});
+    if (overlay == null || typeof overlay !== "object") return base;
+    return ConfigSchema.parse(deepMerge(base as unknown as Record<string, unknown>, overlay));
+  }
+
   const configPath = findConfigFile(explicitPath);
 
   if (!configPath) {
@@ -137,4 +147,60 @@ export function mergeWithRepoConfig(global: ForgectlConfig, repo: RepoConfig): F
   }
 
   return deepMerge(global, overrides);
+}
+
+function getReposDir(): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  return join(home, ".forgectl", "repos");
+}
+
+export interface RepoProfileEntry {
+  name: string;
+  trackerRepo?: string;
+  trackerKind?: string;
+}
+
+export function listRepoProfiles(): RepoProfileEntry[] {
+  const reposDir = getReposDir();
+  if (!existsSync(reposDir)) return [];
+
+  const files = readdirSync(reposDir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
+  return files.map(f => {
+    const name = basename(f).replace(/\.ya?ml$/, "");
+    try {
+      const raw = readFileSync(join(reposDir, f), "utf-8");
+      const parsed = yaml.load(raw) as Record<string, unknown> | null;
+      const tracker = parsed?.tracker as Record<string, unknown> | undefined;
+      return {
+        name,
+        trackerRepo: tracker?.repo as string | undefined,
+        trackerKind: tracker?.kind as string | undefined,
+      };
+    } catch {
+      return { name };
+    }
+  });
+}
+
+export function loadRepoProfile(name: string): ForgectlConfig {
+  const reposDir = getReposDir();
+  const profilePath = join(reposDir, `${name}.yaml`);
+  if (!existsSync(profilePath)) {
+    const ymlPath = join(reposDir, `${name}.yml`);
+    if (!existsSync(ymlPath)) {
+      throw new Error(`Repo profile not found: ${name}`);
+    }
+    return loadConfig(`repo:${ymlPath}`);
+  }
+  return loadConfig(`repo:${profilePath}`);
+}
+
+export function loadConfigWithOptions(opts: { config?: string; repo?: string }): ForgectlConfig {
+  if (opts.config && opts.repo) {
+    throw new Error("--config and --repo are mutually exclusive");
+  }
+  if (opts.repo) {
+    return loadRepoProfile(opts.repo);
+  }
+  return loadConfig(opts.config);
 }
