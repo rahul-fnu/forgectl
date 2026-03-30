@@ -127,11 +127,6 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(`\nIf any check fails, you will receive the error output. Read it carefully, identify the root cause, and fix it. Do not retry the same fix.\n`);
   }
 
-  // 8. Output instructions
-  if (plan.output.mode === "files") {
-    parts.push(`\nSave all output files to ${plan.output.path}\n`);
-  }
-
   return parts.join("\n");
 }
 

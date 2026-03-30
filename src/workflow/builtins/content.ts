@@ -29,7 +29,7 @@ Rules:
     max_same_failures: 2,
     on_repeated_failure: "abort",
   },
-  output: { mode: "files", path: "/output", collect: ["**/*.md", "**/*.html", "**/*.pdf", "**/*.docx"] },
+  output: { mode: "git", path: "/output", collect: ["**/*.md", "**/*.html", "**/*.pdf", "**/*.docx"] },
   review: {
     enabled: true,
     system: `You are a senior editor. Review this content for clarity, accuracy, and tone.

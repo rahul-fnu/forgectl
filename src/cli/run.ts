@@ -117,10 +117,8 @@ export async function runCommand(options: CLIOptions): Promise<void> {
       steps: result.validation.stepResults,
     },
     output: result.output
-      ? result.output.mode === "git"
-        ? { mode: "git", branch: result.output.branch }
-        : { mode: "files", dir: result.output.dir, files: result.output.files }
-      : { mode: plan.output.mode },
+      ? { mode: "git", branch: result.output.branch }
+      : { mode: "git" },
     entries: logger.getEntries(),
   };
   const logPath = saveRunLog(runLog, config.output.log_dir);

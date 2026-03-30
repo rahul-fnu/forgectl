@@ -32,7 +32,7 @@ Rules:
     max_same_failures: 2,
     on_repeated_failure: "abort",
   },
-  output: { mode: "files", path: "/output", collect: ["**/*.md", "**/*.pdf", "**/*.json"] },
+  output: { mode: "git", path: "/output", collect: ["**/*.md", "**/*.pdf", "**/*.json"] },
   review: {
     enabled: true,
     system: `You are a fact-checker and editor. Review this research report.

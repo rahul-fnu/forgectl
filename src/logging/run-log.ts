@@ -20,10 +20,8 @@ export interface RunLog {
     }>;
   };
   output: {
-    mode: "git" | "files";
+    mode: "git";
     branch?: string;
-    dir?: string;
-    files?: string[];
   };
   entries: LogEntry[];
 }
