@@ -1,182 +1,37 @@
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, basename } from "node:path";
 import type { RunPlan } from "../workflow/types.js";
 import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
-
-const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
-
-interface ContextArtifactSummary {
-  name: string;
-  type: "binary" | "large-text";
-  size: number;
-}
 
 export interface PromptOptions {
   promotedFindings?: ReviewFindingRow[];
 }
 
-export function buildPrompt(plan: RunPlan, options?: PromptOptions): string {
-  let promotedFindings: ReviewFindingRow[] | undefined;
-
-  if (options && "promotedFindings" in options) {
-    promotedFindings = options.promotedFindings;
-  }
-
+export function buildPrompt(plan: RunPlan, _options?: PromptOptions): string {
   const parts: string[] = [];
 
-  // 1. Build the conventions block for {{conventions}} placeholder
-  const conventionsBlock = buildConventionsBlock(promotedFindings);
+  parts.push(`## Task\n${plan.task}`);
 
-  // 2. System prompt with conventions injected
-  const systemPrompt = plan.context.system || plan.workflow.system;
-  if (systemPrompt.includes("{{conventions}}")) {
-    parts.push(systemPrompt.replace("{{conventions}}", conventionsBlock));
-  } else {
-    parts.push(systemPrompt);
-    if (conventionsBlock !== FALLBACK_CONVENTIONS) {
-      parts.push(`\n## Project conventions\n${conventionsBlock}\n`);
-    }
-  }
-
-  // 3. Context files (text inlined, binary/large summarized)
-  const artifacts: ContextArtifactSummary[] = [];
-  for (const file of plan.context.files) {
-    const absPath = resolve(file);
-    if (!existsSync(absPath)) continue;
-
-    try {
-      const data = readFileSync(absPath);
-      const classified = classifyContext(data);
-      if (classified.type === "text") {
-        parts.push(`\n--- Context: ${basename(file)} ---\n${classified.content}\n`);
-      } else {
-        artifacts.push({
-          name: basename(file),
-          type: classified.type,
-          size: classified.size,
-        });
-      }
-    } catch {
-      artifacts.push({
-        name: basename(file),
-        type: "binary",
-        size: 0,
-      });
-    }
-  }
-
-  if (artifacts.length > 0) {
-    parts.push("\n--- Context Artifacts Manifest ---");
-    parts.push("These artifacts were provided as files and were not inlined:");
-    for (const artifact of artifacts) {
-      parts.push(`- ${artifact.name} (${artifact.type}, ${artifact.size} bytes)`);
-    }
-    parts.push("Use artifact metadata and nearby text context when reasoning about these files.");
-  }
-
-  // 4. Available tools
-  if (plan.workflow.tools.length > 0) {
-    parts.push(`\n## Available tools\n${plan.workflow.tools.join(", ")}\n`);
-  }
-
-  // 5. The task
-  parts.push(`\n## Task\n${plan.task}\n`);
-
-  // 6. Validation instructions
   if (plan.validation.steps.length > 0) {
     const reproSteps = plan.validation.steps.filter((s) => s.before_fix === true);
     const verifySteps = plan.validation.steps.filter((s) => s.before_fix !== true);
 
     if (reproSteps.length > 0) {
-      parts.push(`\n## Reproduce\nThese checks should FAIL before your fix (proving the bug exists):`);
-      for (let i = 0; i < reproSteps.length; i++) {
-        const step = reproSteps[i];
-        parts.push(`${i + 1}. ${step.name}: \`${step.command}\` — ${step.description}`);
+      parts.push(`## Reproduce\nThese checks should FAIL before your fix:`);
+      for (const step of reproSteps) {
+        parts.push(`- ${step.name}: \`${step.command}\``);
       }
     }
 
-    parts.push(`\n## Verification\nThese checks must ALL pass when you are done:`);
-    for (let i = 0; i < verifySteps.length; i++) {
-      const step = verifySteps[i];
-      parts.push(`${i + 1}. ${step.name}: \`${step.command}\` — ${step.description}`);
+    if (verifySteps.length > 0) {
+      parts.push(`## Verification\nThese checks must ALL pass when you are done:`);
+      for (const step of verifySteps) {
+        parts.push(`- ${step.name}: \`${step.command}\``);
+      }
     }
-
-    parts.push(`\nIf any check fails, you will receive the error output. Read it carefully, identify the root cause, and fix it. Do not retry the same fix.\n`);
   }
 
-  // 7. Output instructions
   if (plan.output.mode === "files") {
-    parts.push(`\nSave all output files to ${plan.output.path}\n`);
+    parts.push(`Save all output files to ${plan.output.path}`);
   }
 
-  return parts.join("\n");
-}
-
-const FALLBACK_CONVENTIONS = `No project-specific conventions have been detected yet. Infer patterns from the existing code:
-- Look at 2-3 existing files similar to what you're creating to understand the style.
-- Match import ordering, error handling patterns, export style, and naming conventions.`;
-
-/**
- * Build the conventions block to replace {{conventions}} in the system prompt.
- * Uses promoted review findings when available.
- */
-function buildConventionsBlock(
-  promotedFindings?: ReviewFindingRow[],
-): string {
-  const lines: string[] = [];
-
-  // Promoted review findings
-  if (promotedFindings && promotedFindings.length > 0) {
-    lines.push("Additional conventions from code review history:");
-    for (const finding of promotedFindings) {
-      const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
-      lines.push(`- ${desc} (flagged ${finding.occurrenceCount} times)`);
-    }
-  }
-
-  if (lines.length === 0) {
-    return FALLBACK_CONVENTIONS;
-  }
-
-  return lines.join("\n");
-}
-
-function classifyContext(data: Buffer):
-  | { type: "text"; size: number; content: string }
-  | { type: "binary" | "large-text"; size: number } {
-  const size = data.byteLength;
-  const textLike = isTextLike(data);
-
-  if (!textLike) {
-    return { type: "binary", size };
-  }
-  if (size > MAX_INLINE_CONTEXT_BYTES) {
-    return { type: "large-text", size };
-  }
-
-  return {
-    type: "text",
-    size,
-    content: data.toString("utf-8"),
-  };
-}
-
-function isTextLike(data: Buffer): boolean {
-  if (data.byteLength === 0) return true;
-
-  const sampleSize = Math.min(data.byteLength, 4096);
-  let suspicious = 0;
-
-  for (let i = 0; i < sampleSize; i++) {
-    const byte = data[i];
-    if (byte === 0) return false;
-
-    const isTabOrNewline = byte === 9 || byte === 10 || byte === 13;
-    const isPrintableAscii = byte >= 32 && byte <= 126;
-    if (!isTabOrNewline && !isPrintableAscii) {
-      suspicious += 1;
-    }
-  }
-
-  return suspicious / sampleSize < 0.15;
+  return parts.join("\n\n");
 }

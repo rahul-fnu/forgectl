@@ -1,11 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../../src/context/prompt.js";
 import type { RunPlan } from "../../src/workflow/types.js";
 
-function makePlan(contextFiles: string[]): RunPlan {
+function makePlan(): RunPlan {
   return {
     runId: "run-1",
     task: "test task",
@@ -27,7 +24,7 @@ function makePlan(contextFiles: string[]): RunPlan {
       resources: { memory: "4g", cpus: 2 },
     },
     input: { mode: "repo", sources: ["/repo"], mountPath: "/workspace", exclude: [] },
-    context: { system: "", files: contextFiles, inject: [] },
+    context: { system: "", files: ["/tmp/nonexistent.md"], inject: [] },
     validation: { steps: [], onFailure: "abandon" },
     output: { mode: "git", path: "/workspace", collect: [], hostDir: "/tmp/out" },
     orchestration: {
@@ -42,42 +39,12 @@ function makePlan(contextFiles: string[]): RunPlan {
   };
 }
 
-describe("buildPrompt binary/large context behavior", () => {
-  const dirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of dirs) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-    dirs.length = 0;
-  });
-
-  it("inlines text context and keeps binary as artifact manifest", () => {
-    const dir = mkdtempSync(join(tmpdir(), "forgectl-prompt-"));
-    dirs.push(dir);
-    const textPath = join(dir, "notes.md");
-    const binaryPath = join(dir, "diagram.png");
-    writeFileSync(textPath, "# Notes\nHello\n", "utf-8");
-    writeFileSync(binaryPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]));
-
-    const prompt = buildPrompt(makePlan([textPath, binaryPath]));
-    expect(prompt).toContain("--- Context: notes.md ---");
-    expect(prompt).toContain("Hello");
-    expect(prompt).toContain("Context Artifacts Manifest");
-    expect(prompt).toContain("diagram.png");
-    expect(prompt).toContain("binary");
-  });
-
-  it("does not inline large text files and lists them in artifact manifest", () => {
-    const dir = mkdtempSync(join(tmpdir(), "forgectl-prompt-large-"));
-    dirs.push(dir);
-    const largePath = join(dir, "large.md");
-    writeFileSync(largePath, "a".repeat(70 * 1024), "utf-8");
-
-    const prompt = buildPrompt(makePlan([largePath]));
-    expect(prompt).toContain("Context Artifacts Manifest");
-    expect(prompt).toContain("large.md");
-    expect(prompt).toContain("large-text");
-    expect(prompt).not.toContain("a".repeat(200));
+describe("buildPrompt simplified (no context file inlining)", () => {
+  it("does not inline context files — agent reads CLAUDE.md natively", () => {
+    const prompt = buildPrompt(makePlan());
+    expect(prompt).toContain("## Task");
+    expect(prompt).toContain("test task");
+    expect(prompt).not.toContain("Context:");
+    expect(prompt).not.toContain("Artifacts Manifest");
   });
 });
