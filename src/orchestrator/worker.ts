@@ -139,6 +139,7 @@ export function toRunResult(
 /**
  * Build a RunPlan adapted for orchestrated runs.
  * Uses WorkspaceManager paths instead of temp dirs.
+ * Auto-detects stack and validation from workspace when not explicitly configured.
  */
 export function buildOrchestratedRunPlan(
   issue: TrackerIssue,
@@ -159,9 +160,51 @@ export function buildOrchestratedRunPlan(
   const agentConfig = config.agent;
   const timeoutMs = parseDuration(agentConfig.timeout);
 
-  // Container image from config
+  // Container image from config — auto-detect from workspace if not set
   const containerConfig = config.container;
-  const image = containerConfig.image ?? "node:20";
+  let image = containerConfig.image ?? "node:20";
+
+  // Auto-detect validation from workspace when no explicit config provided
+  let effectiveValidation = validationConfig;
+  if (!effectiveValidation || effectiveValidation.steps.length === 0) {
+    // Use per-repo validate commands from 2-layer config
+    const repoValidate = config.validate ?? [];
+    if (repoValidate.length > 0) {
+      effectiveValidation = {
+        steps: repoValidate.map((cmd, i) => ({
+          name: `step-${i + 1}`,
+          command: cmd,
+          retries: 3,
+          description: "",
+        })),
+        on_failure: "abandon",
+      };
+    }
+  }
+
+  // Auto-detect stack from workspace for image selection
+  if (image === "node:20") {
+    try {
+      const { detectStackFromDir } = require("../config/auto-profile.js") as typeof import("../config/auto-profile.js");
+      const detection = detectStackFromDir(workspacePath);
+      if (detection) {
+        image = detection.image;
+        // Also use detected validation if none configured
+        if (!effectiveValidation || effectiveValidation.steps.length === 0) {
+          effectiveValidation = {
+            steps: detection.validationSteps.map(s => ({
+              ...s,
+              retries: 3,
+              description: "",
+            })),
+            on_failure: "abandon",
+          };
+        }
+      }
+    } catch {
+      // auto-detect is best-effort
+    }
+  }
 
   return {
     runId,
@@ -174,11 +217,11 @@ export function buildOrchestratedRunPlan(
       tools: [],
       system: "",
       validation: {
-        steps: validationConfig?.steps ?? [],
-        lint_steps: validationConfig?.lint_steps ?? [],
-        on_failure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
-        max_same_failures: validationConfig?.max_same_failures ?? 2,
-        on_repeated_failure: (validationConfig?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
+        steps: effectiveValidation?.steps ?? [],
+        lint_steps: effectiveValidation?.lint_steps ?? [],
+        on_failure: (effectiveValidation?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
+        max_same_failures: effectiveValidation?.max_same_failures ?? 2,
+        on_repeated_failure: (effectiveValidation?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
       },
       output: { mode: "git", path: "/workspace", collect: [] },
       review: { enabled: false, system: "" },
@@ -216,11 +259,11 @@ export function buildOrchestratedRunPlan(
       inject: [],
     },
     validation: {
-      steps: validationConfig?.steps ?? [],
-      lintSteps: validationConfig?.lint_steps ?? [],
-      onFailure: (validationConfig?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
-      maxSameFailures: validationConfig?.max_same_failures ?? 2,
-      onRepeatedFailure: (validationConfig?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
+      steps: effectiveValidation?.steps ?? [],
+      lintSteps: effectiveValidation?.lint_steps ?? [],
+      onFailure: (effectiveValidation?.on_failure as "abandon" | "output-wip" | "pause") ?? "abandon",
+      maxSameFailures: effectiveValidation?.max_same_failures ?? 2,
+      onRepeatedFailure: (effectiveValidation?.on_repeated_failure as "abort" | "change_strategy" | "escalate") ?? "abort",
     },
     output: {
       mode: "git",

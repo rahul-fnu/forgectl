@@ -20,3 +20,14 @@ export function mergeWorkflowConfig(
   }
   return result;
 }
+
+/**
+ * Simplified 2-layer config merge: global defaults + per-repo overrides.
+ * Per-repo config (from forgectl.yaml in the repo) takes precedence over global defaults.
+ */
+export function mergeConfigTwoLayer(
+  globalDefaults: ForgectlConfig,
+  repoOverrides: Partial<ForgectlConfig>,
+): ForgectlConfig {
+  return deepMerge(globalDefaults, repoOverrides);
+}
