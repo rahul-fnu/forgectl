@@ -104,7 +104,7 @@ export type ScheduleEntry = z.infer<typeof ScheduleEntrySchema>;
 export const OrchestratorConfigSchema = z.object({
   enabled: z.boolean().default(false),
   max_concurrent_agents: z.number().int().positive().default(3),
-  poll_interval_ms: z.number().int().positive().default(30000),
+  poll_interval_ms: z.number().int().positive().default(3600000), // 1 hour — webhooks handle real-time, polling is safety net
   stall_timeout_ms: z.number().int().positive().default(600000),
   max_retries: z.number().int().min(0).default(5),
   max_retry_backoff_ms: z.number().int().positive().default(300000),
