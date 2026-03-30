@@ -184,6 +184,16 @@ export const cooldownState = sqliteTable("cooldown_state", {
   probeCount: integer("probe_count").default(0),
 });
 
+export const channelRepos = sqliteTable("channel_repos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  channelId: text("channel_id").notNull().unique(),
+  channelName: text("channel_name").notNull(),
+  repoSlug: text("repo_slug").notNull(),
+  repoUrl: text("repo_url").notNull(),
+  stack: text("stack"),
+  createdAt: text("created_at").notNull(),
+});
+
 export const reviewCalibration = sqliteTable(
   "review_calibration",
   {

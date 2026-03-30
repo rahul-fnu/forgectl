@@ -212,6 +212,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
           logger: daemonLogger,
           daemonPort: port,
           daemonToken: daemonToken ?? "",
+          db,
         });
       await discordBot.start();
       daemonLogger.info("daemon", "Discord bot initialized");
@@ -598,6 +599,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         logger: daemonLogger,
         daemonPort: port,
         daemonToken,
+        db,
       });
       daemonLogger.info("daemon", "Discord bot started");
     } catch (err) {
