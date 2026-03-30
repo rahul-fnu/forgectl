@@ -33,7 +33,6 @@ import { WorkspaceManager } from "../workspace/manager.js";
 import { loadWorkflowFile } from "../workflow/workflow-file.js";
 import { WorkflowFileWatcher } from "../workflow/watcher.js";
 import { mergeWorkflowConfig } from "../workflow/merge.js";
-import { mapFrontMatterToConfig } from "../workflow/map-front-matter.js";
 import { ConfigSchema } from "../config/schema.js";
 import type { ValidatedWorkflowFile } from "../workflow/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
@@ -144,10 +143,9 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         /* no WORKFLOW.md, use defaults */
       }
 
-      // Four-layer config merge: defaults < yaml < front matter < CLI (CLI empty for now)
+      // Two-layer config merge: defaults < yaml
       const defaults = ConfigSchema.parse({});
-      const frontMatterAsConfig = wf ? mapFrontMatterToConfig(wf.config) : {};
-      const mergedConfig = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, frontMatterAsConfig, {});
+      const mergedConfig = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>);
 
       const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
       const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
@@ -177,8 +175,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         watcher = new WorkflowFileWatcher();
         void watcher.start(workflowPath, {
           onReload: (newWf: ValidatedWorkflowFile) => {
-            const newFmConfig = mapFrontMatterToConfig(newWf.config);
-            const newMerged = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, newFmConfig, {});
+            const newMerged = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>);
             orchestrator!.applyConfig(newMerged, newWf.promptTemplate);
             daemonLogger.info("daemon", "WORKFLOW.md reloaded, config updated");
           },

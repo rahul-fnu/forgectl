@@ -50,25 +50,17 @@ export function extractRepoFromIssue(issue: TrackerIssue): string | null {
 }
 
 /**
- * Load a repo profile overlay if one exists for the given repo slug.
- * Returns the profile-specific config fields (workspace hooks, tracker.repo, validation).
+ * Load per-repo config (forgectl.yaml) from a workspace directory after clone.
+ * Merges repo config into the global config and returns the effective config.
  */
-export async function loadRepoOverlay(repoSlug: string): Promise<Partial<ForgectlConfig> | null> {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  // Try repo name (after /) as profile name
-  const repoName = repoSlug.split("/")[1];
-  const profilePath = join(home, ".forgectl", "repos", `${repoName}.yaml`);
-  if (!existsSync(profilePath)) {
-    const { autoGenerateProfile } = await import("../config/auto-profile.js");
-    return autoGenerateProfile(repoSlug);
-  }
-
-  try {
-    const { loadRepoProfile } = await import("../config/loader.js");
-    return loadRepoProfile(repoName) as Partial<ForgectlConfig>;
-  } catch {
-    return null;
-  }
+export async function loadRepoConfigFromWorkspace(
+  workspaceDir: string,
+  config: ForgectlConfig,
+): Promise<ForgectlConfig> {
+  const { loadRepoConfig, mergeWithRepoConfig } = await import("../config/loader.js");
+  const repoConfig = loadRepoConfig(workspaceDir);
+  if (!repoConfig) return config;
+  return mergeWithRepoConfig(config, repoConfig);
 }
 
 /** GitHub context passed from webhook handler (octokit + repo). */
@@ -490,32 +482,17 @@ async function executeWorkerAndHandle(
   triageAssessment?: ComplexityAssessment,
   traceId?: string,
 ): Promise<void> {
-  // Per-issue repo routing: detect repo from issue description and load profile overlay
+  // Per-issue repo routing: detect repo from issue description
   const issueRepo = extractRepoFromIssue(issue);
   let effectiveConfig = config;
-  let effectiveWorkspaceManager = workspaceManager;
-  let effectiveValidationConfig = validationConfig;
+  const effectiveWorkspaceManager = workspaceManager;
+  const effectiveValidationConfig = validationConfig;
   let effectiveGithubContext = githubContext;
 
-  if (issueRepo && issueRepo !== config.tracker?.repo) {
-    const overlay = await loadRepoOverlay(issueRepo);
-    if (overlay) {
-      effectiveConfig = { ...config, ...overlay, orchestrator: config.orchestrator };
-      // Create a new WorkspaceManager with the profile's workspace hooks
-      if (overlay.workspace) {
-        const { WorkspaceManager: WM } = await import("../workspace/manager.js");
-        effectiveWorkspaceManager = new WM(overlay.workspace, logger);
-      }
-      if ((overlay as any).validation) {
-        effectiveValidationConfig = (overlay as any).validation as typeof validationConfig;
-      }
-      // Override PR target repo via githubContext
-      if (effectiveGithubContext && overlay.tracker?.repo) {
-        const [owner, repo] = overlay.tracker.repo.split("/");
-        effectiveGithubContext = { ...effectiveGithubContext, repo: { owner, repo } };
-      }
-      logger.info("dispatcher", `Using repo profile for ${issue.identifier}: ${issueRepo}`);
-    }
+  // Override PR target repo via githubContext if issue targets a different repo
+  if (issueRepo && issueRepo !== config.tracker?.repo && effectiveGithubContext) {
+    const [owner, repo] = issueRepo.split("/");
+    effectiveGithubContext = { ...effectiveGithubContext, repo: { owner, repo } };
   }
 
   const orchestratorConfig = effectiveConfig.orchestrator;

@@ -289,9 +289,23 @@ export const ConfigSchema = z.object({
     auto_create: z.boolean().default(false),
     github_org: z.string().optional(),
   }).default({}),
+
+  validate: z.array(z.string()).default([]),
 });
 
 export type ForgectlConfig = z.infer<typeof ConfigSchema>;
+
+/**
+ * Per-repo config schema for forgectl.yaml in repo root.
+ * Simple flat config: stack, validate commands, max_agents, branch_base.
+ */
+export const RepoConfigSchema = z.object({
+  stack: z.string().optional(),
+  validate: z.array(z.string()).default([]),
+  max_agents: z.number().int().positive().optional(),
+  branch_base: z.string().optional(),
+});
+export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
 export const WorkspaceConfigSchema = z.object({
   root: z.string().default("~/.forgectl/workspaces"),
