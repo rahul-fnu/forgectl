@@ -11,7 +11,6 @@ import { BoardEngine } from "../board/engine.js";
 import { BoardStore } from "../board/store.js";
 import { CreateCardSchema, TriggerCardSchema, UpdateCardSchema } from "../board/schema.js";
 import { PipelineRunService, PipelineValidationError } from "./pipeline-service.js";
-import type { PipelineDefinition } from "../pipeline/types.js";
 import type { Orchestrator } from "../orchestrator/index.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { resumeRun } from "../durability/pause.js";

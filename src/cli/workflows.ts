@@ -1,22 +1,16 @@
 import chalk from "chalk";
-import yaml from "js-yaml";
-import { listWorkflows, getWorkflow } from "../workflow/registry.js";
 
-export function workflowsCommand(action: string, name?: string): void {
+export function workflowsCommand(action: string, _name?: string): void {
   if (action === "list") {
-    const workflows = listWorkflows();
-    console.log(chalk.bold("\nAvailable workflows:\n"));
-    for (const w of workflows) {
-      console.log(`  ${chalk.cyan(w.name.padEnd(12))} ${w.description}`);
-    }
-    console.log(`\nUse ${chalk.cyan("forgectl workflows show <name>")} to see full definition.\n`);
+    console.log(chalk.bold("\nWorkflow registry has been removed.\n"));
+    console.log("  forgectl now auto-detects the stack from workspace markers.");
+    console.log("  Supported stacks: Node/TS (default), Python, Go, Rust.\n");
     return;
   }
 
-  if (action === "show" && name) {
-    const workflow = getWorkflow(name);
-    console.log(chalk.bold(`\nWorkflow: ${workflow.name}\n`));
-    console.log(yaml.dump(workflow, { lineWidth: 120, noRefs: true }));
+  if (action === "show") {
+    console.log(chalk.bold("\nWorkflow registry has been removed.\n"));
+    console.log("  forgectl now auto-detects the stack from workspace markers.\n");
     return;
   }
 }

@@ -1,8 +1,6 @@
 import chalk from "chalk";
 import { ImageCache } from "../container/cache.js";
-import { getWorkflow } from "../workflow/registry.js";
 import { formatDuration } from "../utils/duration.js";
-import { ensureImage } from "../container/builder.js";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -65,16 +63,6 @@ export async function cacheClearCommand(opts: {
   }
 }
 
-export async function cachePrebuildCommand(workflowName: string): Promise<void> {
-  const workflow = getWorkflow(workflowName);
-  console.log(`Building and caching image for workflow: ${chalk.cyan(workflow.name)}`);
-
-  await ensureImage({
-    imageName: workflow.container.image,
-    tools: workflow.tools,
-    networkMode: workflow.container.network.mode,
-    cacheEnabled: true,
-  });
-
-  console.log(chalk.green(`Image cached for workflow: ${workflow.name}`));
+export async function cachePrebuildCommand(_workflowName: string): Promise<void> {
+  console.log("Workflow registry has been removed. Use `forgectl images build` instead.");
 }

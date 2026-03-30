@@ -10,7 +10,9 @@ import { RunQueue } from "../../src/daemon/queue.js";
 import { createDatabase, closeDatabase } from "../../src/storage/database.js";
 import { runMigrations } from "../../src/storage/migrator.js";
 import { createRunRepository } from "../../src/storage/repositories/runs.js";
-import type { PipelineDefinition, PipelineRun } from "../../src/pipeline/types.js";
+// Pipeline types removed — using inline types for test stubs
+type PipelineDefinition = Record<string, unknown>;
+type PipelineRun = { id: string; pipeline: PipelineDefinition; status: string; nodes: Map<string, unknown>; startedAt: string; completedAt?: string };
 
 class FakePipelineService {
   private counter = 0;

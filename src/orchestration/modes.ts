@@ -4,7 +4,6 @@ import type { ExecutionResult, DurabilityDeps } from "./single.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import type { TraceRepository } from "../storage/repositories/traces.js";
 import { executeSingleAgent } from "./single.js";
-import { executeReviewMode } from "./review.js";
 import { generateTraceId, createSpan, endSpan } from "../tracing/context.js";
 import type { Span } from "../tracing/context.js";
 
@@ -56,7 +55,8 @@ export async function executeRun(
       result = await executeSingleAgent(plan, logger, noCleanup, deps);
       break;
     case "review":
-      result = await executeReviewMode(plan, logger, noCleanup);
+      logger.warn("orchestration", "Review mode removed, running as single agent");
+      result = await executeSingleAgent(plan, logger, noCleanup, deps);
       break;
     case "parallel":
       logger.warn("orchestration", "Parallel mode not yet implemented, running as single agent");

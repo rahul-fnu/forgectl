@@ -1,5 +1,3 @@
-import type { PipelineDefinition } from "../pipeline/types.js";
-
 export type TriggerMode = "manual" | "auto" | "scheduled";
 
 export interface BoardTemplateSource {
@@ -91,5 +89,5 @@ export interface BoardRegistry {
 }
 
 export interface LoadedTemplate {
-  pipeline: PipelineDefinition;
+  pipeline: Record<string, unknown>;
 }

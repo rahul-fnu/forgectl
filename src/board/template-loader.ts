@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { load as parseYaml } from "js-yaml";
-import { parsePipeline } from "../pipeline/parser.js";
-import type { PipelineDefaults, PipelineDefinition } from "../pipeline/types.js";
 import type { BoardTemplate, LoadedTemplate } from "./types.js";
 
 interface WorkflowMarkdown {
@@ -58,13 +56,13 @@ function parseWorkflowMarkdown(markdownPath: string): WorkflowMarkdown {
   return { frontMatter, body };
 }
 
-function defaultsFromFrontMatter(frontMatter: Record<string, unknown>): PipelineDefaults | undefined {
+function defaultsFromFrontMatter(frontMatter: Record<string, unknown>): Record<string, unknown> | undefined {
   const explicit = frontMatter.defaults;
   if (explicit && typeof explicit === "object") {
-    return explicit as PipelineDefaults;
+    return explicit as Record<string, unknown>;
   }
 
-  const defaults: PipelineDefaults = {};
+  const defaults: Record<string, unknown> = {};
   if (typeof frontMatter.workflow === "string") defaults.workflow = frontMatter.workflow;
   if (typeof frontMatter.agent === "string") defaults.agent = frontMatter.agent;
   if (typeof frontMatter.repo === "string") defaults.repo = frontMatter.repo;
@@ -84,41 +82,35 @@ export function loadTemplatePipeline(
     throw new Error(`Template source not found: ${templatePath}`);
   }
 
-  let pipeline: PipelineDefinition;
+  let pipeline: Record<string, unknown>;
 
   if (template.source.format === "yaml") {
-    pipeline = parsePipeline(templatePath);
+    const raw = readFileSync(templatePath, "utf-8");
+    pipeline = (parseYaml(raw) as Record<string, unknown>) ?? {};
   } else {
     const parsed = parseWorkflowMarkdown(templatePath);
     const frontMatter = parsed.frontMatter;
-    const pipelineRef = frontMatter.pipeline;
 
-    if (typeof pipelineRef === "string" && pipelineRef.length > 0) {
-      const pipelinePath = resolve(dirname(templatePath), pipelineRef);
-      pipeline = parsePipeline(pipelinePath);
-    } else {
-      const task = parsed.body || String(frontMatter.task || "").trim();
-      if (!task) {
-        throw new Error(`Workflow markdown ${templatePath} has no task body`);
-      }
-
-      const workflowName = typeof frontMatter.name === "string" && frontMatter.name.trim().length > 0
-        ? frontMatter.name.trim()
-        : `workflow-${Date.now()}`;
-
-      pipeline = {
-        name: workflowName,
-        description: typeof frontMatter.description === "string" ? frontMatter.description : undefined,
-        defaults: defaultsFromFrontMatter(frontMatter),
-        nodes: [
-          {
-            id: "task",
-            task,
-          },
-        ],
-      };
+    const task = parsed.body || String(frontMatter.task || "").trim();
+    if (!task) {
+      throw new Error(`Workflow markdown ${templatePath} has no task body`);
     }
 
+    const workflowName = typeof frontMatter.name === "string" && frontMatter.name.trim().length > 0
+      ? frontMatter.name.trim()
+      : `workflow-${Date.now()}`;
+
+    pipeline = {
+      name: workflowName,
+      description: typeof frontMatter.description === "string" ? frontMatter.description : undefined,
+      defaults: defaultsFromFrontMatter(frontMatter),
+      nodes: [
+        {
+          id: "task",
+          task,
+        },
+      ],
+    };
   }
 
   const mergedVars: Record<string, unknown> = {

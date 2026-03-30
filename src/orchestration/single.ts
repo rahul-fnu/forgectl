@@ -19,8 +19,6 @@ import { prepareSkillMounts } from "../skills/mount.js";
 import { runValidationLoop, runLintGate, type LintGateResult } from "../validation/runner.js";
 import { runReviewAgent, serializeReviewOutput } from "../validation/review-agent.js";
 import type { ReviewOutput } from "../validation/review-agent.js";
-import { invokeAgent } from "../agent/invoke.js";
-import { createLoopDetectorState, recordReviewComments } from "../agent/loop-detector.js";
 import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
@@ -45,7 +43,6 @@ export interface ReviewSummary {
   totalRounds: number;
   approved: boolean;
   approvedOnRound?: number;
-  comments?: import("./review.js").ReviewComment[];
   escalatedToHuman?: boolean;
   reviewCommentsJson?: string;
 }
@@ -334,85 +331,18 @@ export async function executeSingleAgent(
     );
     if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
-    // --- Phase: Review Agent with self-addressing loop (only after validation passes) ---
-    const MAX_REVIEW_SELF_ADDRESS_ROUNDS = 2;
+    // --- Phase: Review Agent (single pass, no self-addressing loop) ---
     let reviewOutput: ReviewOutput | undefined;
     let reviewRounds = 0;
     if (validationResult.passed) {
-      const reviewLoopState = createLoopDetectorState();
-
-      for (let round = 1; round <= MAX_REVIEW_SELF_ADDRESS_ROUNDS; round++) {
-        reviewRounds = round;
-        try {
-          reviewOutput = await runReviewAgent(
-            container, adapter, agentOptions, agentEnv, plan.task, logger,
-          );
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn("review-agent", `Review agent failed (non-blocking): ${msg}`);
-          break;
-        }
-
-        if (!reviewOutput) break;
-
-        // Check for MUST_FIX comments that need self-addressing
-        const mustFix = reviewOutput.comments.filter(c => c.severity === "MUST_FIX");
-        if (mustFix.length === 0) {
-          logger.info("review-agent", "No MUST_FIX comments — review passed");
-          break;
-        }
-
-        // Check for review loop (same comments repeated)
-        const loopCheck = recordReviewComments(reviewLoopState, reviewOutput.comments);
-        if (loopCheck) {
-          logger.error("review-agent", `Review loop detected: ${loopCheck.detail}`);
-          emitRunEvent({
-            runId: plan.runId, type: "loop_detected", timestamp: new Date().toISOString(),
-            data: { pattern: loopCheck.type, detail: loopCheck.detail, round },
-          });
-          break;
-        }
-
-        if (round >= MAX_REVIEW_SELF_ADDRESS_ROUNDS) {
-          logger.warn("review-agent", `${mustFix.length} MUST_FIX comment(s) remain after ${round} review rounds`);
-          break;
-        }
-
-        // Feed MUST_FIX + SHOULD_FIX comments back to the agent
-        const actionable = reviewOutput.comments.filter(c => c.severity === "MUST_FIX" || c.severity === "SHOULD_FIX");
-        const fixParts = [
-          `REVIEW COMMENTS (round ${round}) — address all items below:`,
-          "",
-        ];
-        for (const c of actionable) {
-          fixParts.push(`[${c.severity}] ${c.file}:${c.line} — ${c.comment}`);
-          if (c.suggested_fix) fixParts.push(`  Suggested fix: ${c.suggested_fix}`);
-          fixParts.push("");
-        }
-        fixParts.push("Fix all MUST_FIX and SHOULD_FIX issues. The reviewer will check again.");
-        const fixPrompt = fixParts.join("\n");
-
-        logger.info("review-agent", `Feeding ${actionable.length} actionable comments to agent (round ${round})...`);
-        await invokeAgent(container, adapter, fixPrompt, agentOptions, agentEnv, `review-fix-${round}`);
-
-        // Re-run lint gate + validation after fix
-        if (plan.validation.lintSteps.length > 0) {
-          const reLint = await runLintGate(
-            container, plan.validation.lintSteps, plan.input.mountPath,
-            adapter, agentOptions, agentEnv, logger, lintOnOutput,
-          );
-          if (!reLint.passed) {
-            logger.warn("review-agent", "Lint gate failed after review fix — stopping self-addressing");
-            break;
-          }
-        }
-        if (plan.validation.steps.length > 0) {
-          const reVal = await runValidationLoop(container, plan, adapter, agentOptions, agentEnv, logger);
-          if (!reVal.passed) {
-            logger.warn("review-agent", "Validation failed after review fix — stopping self-addressing");
-            break;
-          }
-        }
+      reviewRounds = 1;
+      try {
+        reviewOutput = await runReviewAgent(
+          container, adapter, agentOptions, agentEnv, plan.task, logger,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn("review-agent", `Review agent failed (non-blocking): ${msg}`);
       }
     }
     const reviewCommentsJson = reviewOutput ? serializeReviewOutput(reviewOutput) : undefined;

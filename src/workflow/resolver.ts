@@ -6,7 +6,7 @@ import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
 import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { ValidationStep } from "../config/schema.js";
-import { getWorkflow } from "./registry.js";
+import { WorkflowSchema } from "../config/schema.js";
 import { parseDuration } from "../utils/duration.js";
 import { parseMemory } from "../container/runner.js";
 
@@ -51,29 +51,6 @@ function scaleMemoryForTeam(baseMemory: string, teammateCount: number): string {
   return `${totalGB}g`;
 }
 
-/**
- * Auto-detect workflow from CLI inputs if not explicitly specified.
- */
-function detectWorkflow(options: CLIOptions): string {
-  if (options.workflow) return options.workflow;
-  if (options.repo) return "code";
-  if (options.input?.some(f => /\.(csv|tsv|json|parquet|xlsx)$/i.test(f))) return "data";
-  if (options.input?.some(f => /\.(md|txt|docx|doc)$/i.test(f))) return "content";
-  // Check if cwd is a git repo
-  try {
-    execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
-    // Auto-detect language-specific code workflow
-    const cwd = resolve(options.repo || ".");
-    const lang = detectLanguage(cwd);
-    if (lang === "python") return "code-python";
-    if (lang === "go") return "code-go";
-    if (lang === "rust") return "code-rust";
-    return "code";
-  } catch {
-    return "general";
-  }
-}
-
 interface LanguageDefaults {
   image: string;
   validation: ValidationStep[];
@@ -106,7 +83,6 @@ const LANGUAGE_DEFAULTS: Record<string, LanguageDefaults> = {
 
 /**
  * Detect the project language from marker files in the workspace directory.
- * Returns language key or undefined if no marker is found (defaults to Node).
  */
 function detectLanguage(workspaceDir: string): string | undefined {
   if (existsSync(resolve(workspaceDir, "pyproject.toml")) || existsSync(resolve(workspaceDir, "requirements.txt"))) {
@@ -119,6 +95,46 @@ function detectLanguage(workspaceDir: string): string | undefined {
     return "rust";
   }
   return undefined;
+}
+
+/**
+ * Auto-detect output mode from CLI inputs.
+ */
+function detectOutputMode(options: CLIOptions): "git" | "files" {
+  if (options.repo) return "git";
+  if (options.input?.some(f => /\.(csv|tsv|json|parquet|xlsx)$/i.test(f))) return "files";
+  if (options.input?.some(f => /\.(md|txt|docx|doc)$/i.test(f))) return "files";
+  try {
+    execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
+    return "git";
+  } catch {
+    return "files";
+  }
+}
+
+/**
+ * Auto-detect input mode from CLI inputs.
+ */
+function detectInputMode(options: CLIOptions): "repo" | "files" | "both" {
+  if (options.repo && options.input?.length) return "both";
+  if (options.input?.length) return "files";
+  return "repo";
+}
+
+/**
+ * Build a default WorkflowDefinition based on auto-detected stack.
+ */
+function buildDefaultWorkflow(options: CLIOptions): WorkflowDefinition {
+  const outputMode = detectOutputMode(options);
+  const inputMode = detectInputMode(options);
+
+  return WorkflowSchema.parse({
+    name: "auto",
+    description: "Auto-detected workflow",
+    container: { image: "forgectl/base" },
+    input: { mode: inputMode, mountPath: "/workspace" },
+    output: { mode: outputMode, path: "/workspace" },
+  });
 }
 
 /**
@@ -162,15 +178,15 @@ function resolveNetwork(
 }
 
 /**
- * Build a complete RunPlan from workflow definition + config + CLI options.
+ * Build a complete RunPlan from config + CLI options.
+ * Auto-detects stack from workspace markers — no workflow registry needed.
  */
 export function resolveRunPlan(
   config: ForgectlConfig,
   options: CLIOptions,
   workflowOverrides?: WorkflowOverrides,
 ): RunPlan {
-  const workflowName = detectWorkflow(options);
-  const baseWorkflow = getWorkflow(workflowName);
+  const baseWorkflow = buildDefaultWorkflow(options);
   const workflow: WorkflowDefinition = workflowOverrides
     ? {
         ...baseWorkflow,
@@ -181,11 +197,9 @@ export function resolveRunPlan(
   const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 
-  // Language auto-detection for code workflow (only when no explicit config image)
+  // Language auto-detection
   const workspaceDir = resolve(options.repo || ".");
-  const detectedLang = workflowName === "code" && !config.container.image
-    ? detectLanguage(workspaceDir)
-    : undefined;
+  const detectedLang = !config.container.image ? detectLanguage(workspaceDir) : undefined;
   const langDefaults = detectedLang ? LANGUAGE_DEFAULTS[detectedLang] : undefined;
 
   // Team config: CLI --team-size overrides workflow, --no-team disables entirely
@@ -205,7 +219,6 @@ export function resolveRunPlan(
   }
 
   // Determine review config
-  // Commander: --review sets review=true, --no-review sets review=false, neither sets review=undefined
   const reviewEnabled = options.review === true
     ? true
     : options.review === false

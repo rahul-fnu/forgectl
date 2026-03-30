@@ -32,12 +32,7 @@ import { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import { createTrackerAdapter } from "../tracker/registry.js";
 import { resolveToken } from "../tracker/token.js";
 import { WorkspaceManager } from "../workspace/manager.js";
-import { loadWorkflowFile } from "../workflow/workflow-file.js";
-import { WorkflowFileWatcher } from "../workflow/watcher.js";
-import { mergeWorkflowConfig } from "../workflow/merge.js";
-import { mapFrontMatterToConfig } from "../workflow/map-front-matter.js";
 import { ConfigSchema } from "../config/schema.js";
-import type { ValidatedWorkflowFile } from "../workflow/types.js";
 import type { ForgectlConfig } from "../config/schema.js";
 export async function startDaemon(port = 4856, enableOrchestrator = false, configPath?: string): Promise<void> {
   const app = Fastify({ logger: false });
@@ -127,7 +122,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   // Orchestrator initialization (when enabled or forced via CLI)
   let orchestrator: Orchestrator | null = null;
   let subIssueCache: SubIssueCache | undefined;
-  let watcher: WorkflowFileWatcher | null = null;
   const orchestratorEnabled = enableOrchestrator || config.orchestrator?.enabled;
   if (orchestratorEnabled && config.tracker) {
     try {
@@ -145,22 +139,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       const wsConfig = config.workspace ?? { root: "~/.forgectl/workspaces", hooks: {}, hook_timeout: "60s" };
       const workspaceManager = new WorkspaceManager(wsConfig, daemonLogger);
 
-      // Load WORKFLOW.md from cwd if it exists
-      const workflowPath = join(process.cwd(), "WORKFLOW.md");
-      let wf: ValidatedWorkflowFile | null = null;
-      try {
-        wf = await loadWorkflowFile(workflowPath);
-      } catch {
-        /* no WORKFLOW.md, use defaults */
-      }
-
-      // Four-layer config merge: defaults < yaml < front matter < CLI (CLI empty for now)
-      const defaults = ConfigSchema.parse({});
-      const frontMatterAsConfig = wf ? mapFrontMatterToConfig(wf.config) : {};
-      const mergedConfig = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, frontMatterAsConfig, {});
-
-      const { DEFAULT_PROMPT_TEMPLATE } = await import("../workflow/workflow-file.js");
-      const promptTemplate = wf?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE;
+      const mergedConfig = config;
+      const promptTemplate = "{{task}}";
 
       // Load promoted review conventions for injection into agent prompts
       const { createReviewFindingsRepository: createFindingsRepoForConventions } = await import("../storage/repositories/review-findings.js");
@@ -173,30 +153,10 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       orchestrator = new Orchestrator({
         tracker, workspaceManager, config: mergedConfig, promptTemplate, logger: daemonLogger,
         runRepo, costRepo, retryRepo,
-        autonomy: wf?.config?.autonomy,
-        autoApprove: wf?.config?.auto_approve,
         subIssueCache,
-        skills: wf?.config?.skills,
-        validationConfig: wf?.config?.validation,
         promotedFindings,
       });
       await orchestrator.start();
-
-      // Start file watcher for hot-reload (only if WORKFLOW.md exists)
-      if (wf) {
-        watcher = new WorkflowFileWatcher();
-        void watcher.start(workflowPath, {
-          onReload: (newWf: ValidatedWorkflowFile) => {
-            const newFmConfig = mapFrontMatterToConfig(newWf.config);
-            const newMerged = mergeWorkflowConfig(defaults, config as Partial<ForgectlConfig>, newFmConfig, {});
-            orchestrator!.applyConfig(newMerged, newWf.promptTemplate);
-            daemonLogger.info("daemon", "WORKFLOW.md reloaded, config updated");
-          },
-          onWarning: (msg: string) => {
-            daemonLogger.warn("daemon", msg);
-          },
-        });
-      }
     } catch (err) {
       daemonLogger.error("daemon", `Failed to start orchestrator: ${err}`);
     }
@@ -653,7 +613,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const shutdown = async () => {
     clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
-    watcher?.stop();
     if (discordBot) {
       await discordBot.stop();
     }

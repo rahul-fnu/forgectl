@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { BoardEngine } from "../../src/board/engine.js";
 import { BoardStore } from "../../src/board/store.js";
-import type { PipelineDefinition, PipelineRun } from "../../src/pipeline/types.js";
+// Pipeline types removed — using inline types for test stubs
+type PipelineDefinition = Record<string, unknown>;
+type PipelineRun = { id: string; pipeline: PipelineDefinition; status: string; nodes: Map<string, unknown>; startedAt: string; completedAt?: string };
 
 class FakePipelineService {
   private counter = 0;
