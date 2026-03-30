@@ -1,6 +1,7 @@
 import type { RunResult } from "../github/comments.js";
 import type { ChildStatus } from "../github/sub-issue-rollup.js";
 import type { RunEvent } from "../logging/events.js";
+import { REACTION_CONTROLS } from "./types.js";
 
 export type AlertEventType = "run_completed" | "run_failed" | "cost_ceiling_hit" | "usage_limit_detected" | "review_escalated" | "claude_md_update";
 
@@ -301,6 +302,23 @@ export function buildClarificationEmbed(runId: string, question: string): Discor
       { name: "Run ID", value: runId, inline: true },
     ],
     footer: { text: "Reply in this thread to answer the agent's question" },
+  };
+}
+
+export function buildReactionControlsHelp(): DiscordEmbed {
+  return {
+    title: "Reaction Controls",
+    description: "Use emoji reactions on task messages to control runs:",
+    color: 0x5865f2,
+    fields: [
+      { name: `${REACTION_CONTROLS.CANCEL} Cancel`, value: "Cancel the running task", inline: true },
+      { name: `${REACTION_CONTROLS.RETRY} Retry`, value: "Retry a failed task", inline: true },
+      { name: `${REACTION_CONTROLS.APPROVE} Approve`, value: "Approve a plan or paused task", inline: true },
+      { name: `${REACTION_CONTROLS.REJECT} Reject`, value: "Reject and cancel a plan", inline: true },
+      { name: `${REACTION_CONTROLS.PAUSE} Pause`, value: "Pause a running task", inline: true },
+      { name: `${REACTION_CONTROLS.LOGS} Logs`, value: "Show current run status", inline: true },
+    ],
+    footer: { text: "forgectl — reaction controls" },
   };
 }
 

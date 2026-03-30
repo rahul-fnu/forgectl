@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { extractRepo, truncateTitle, dispatchTask, cancelRun, fetchBudget, fetchRepos, formatDigest, DiscordBot, type DiscordBotDeps } from "../../src/discord/bot.js";
+import { extractRepo, truncateTitle, dispatchTask, cancelRun, retryRun, fetchBudget, fetchRepos, formatDigest, DiscordBot, type DiscordBotDeps } from "../../src/discord/bot.js";
 import { ConfigSchema } from "../../src/config/schema.js";
 import type { Logger } from "../../src/logging/logger.js";
 
@@ -30,7 +30,7 @@ describe("truncateTitle", () => {
     const long = "a".repeat(60);
     const result = truncateTitle(long);
     expect(result.length).toBe(51); // 50 chars + ellipsis
-    expect(result.endsWith("…")).toBe(true);
+    expect(result.endsWith("\u2026")).toBe(true);
   });
 
   it("returns exactly 50 chars unchanged", () => {
@@ -111,7 +111,6 @@ describe("DiscordBot", () => {
       content: "hello",
     } as any;
 
-    // Should return early without throwing
     await bot.handleMessage(msg);
   });
 
@@ -140,9 +139,10 @@ describe("DiscordBot", () => {
     const mockThread = {
       id: "thread-1",
       send: vi.fn(),
+      messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
     };
     const msg = {
-      author: { bot: false },
+      author: { bot: false, id: "user-1" },
       channelId: "ch1",
       content: "Fix the login bug in https://github.com/acme/app",
       startThread: vi.fn().mockResolvedValue(mockThread),
@@ -157,18 +157,22 @@ describe("DiscordBot", () => {
     await bot.handleMessage(msg);
 
     expect(msg.startThread).toHaveBeenCalledWith({
-      name: "Working on: Fix the login bug in https://github.com/acme/app",
+      name: "Task: Fix the login bug in https://github.com/acme/app",
     });
-    expect(mockThread.send).toHaveBeenCalledWith('Task dispatched! Run ID: `run-abc`');
+    expect(mockThread.send).toHaveBeenCalledWith(expect.stringContaining("run-abc"));
     expect(bot.getThreadMap().get("thread-1")).toBe("run-abc");
   });
 
   it("handles decomposed response", async () => {
     const bot = new DiscordBot(makeDeps());
 
-    const mockThread = { id: "thread-2", send: vi.fn() };
+    const mockThread = {
+      id: "thread-2",
+      send: vi.fn(),
+      messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
+    };
     const msg = {
-      author: { bot: false },
+      author: { bot: false, id: "user-1" },
       channelId: "ch1",
       content: "Build the entire feature",
       startThread: vi.fn().mockResolvedValue(mockThread),
@@ -195,7 +199,7 @@ describe("DiscordBot", () => {
     expect(bot.getThreadMap().get("thread-2")).toBe("parent-1");
   });
 
-  it("listens on all channels when channel_ids is empty", async () => {
+  it("listens on all channels when channel_ids is empty and no channel_repos", async () => {
     const deps = makeDeps({
       config: ConfigSchema.parse({
         discord: { enabled: true, bot_token: "t", guild_id: "g", channel_ids: [] },
@@ -203,9 +207,13 @@ describe("DiscordBot", () => {
     });
     const bot = new DiscordBot(deps);
 
-    const mockThread = { id: "t3", send: vi.fn() };
+    const mockThread = {
+      id: "t3",
+      send: vi.fn(),
+      messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
+    };
     const msg = {
-      author: { bot: false },
+      author: { bot: false, id: "user-1" },
       channelId: "any-random-channel",
       content: "do something",
       startThread: vi.fn().mockResolvedValue(mockThread),
@@ -218,6 +226,213 @@ describe("DiscordBot", () => {
 
     await bot.handleMessage(msg);
     expect(msg.startThread).toHaveBeenCalled();
+  });
+
+  describe("channel-repo mapping", () => {
+    it("resolves repo from channel_repos mapping", () => {
+      const deps = makeDeps({
+        config: ConfigSchema.parse({
+          discord: {
+            enabled: true,
+            bot_token: "t",
+            guild_id: "g",
+            channel_repos: [
+              { channel_id: "ch-frontend", repo: "acme/frontend" },
+              { channel_id: "ch-backend", repo: "acme/backend", workflow: "code-node" },
+            ],
+          },
+        }),
+      });
+      const bot = new DiscordBot(deps);
+
+      expect(bot.resolveRepoForChannel("ch-frontend", "fix a bug")).toBe("acme/frontend");
+      expect(bot.resolveRepoForChannel("ch-backend", "add endpoint")).toBe("acme/backend");
+    });
+
+    it("falls back to text extraction when no mapping exists", () => {
+      const deps = makeDeps({
+        config: ConfigSchema.parse({
+          discord: {
+            enabled: true,
+            bot_token: "t",
+            guild_id: "g",
+            channel_repos: [
+              { channel_id: "ch-frontend", repo: "acme/frontend" },
+            ],
+          },
+        }),
+      });
+      const bot = new DiscordBot(deps);
+
+      expect(bot.resolveRepoForChannel("ch-unknown", "fix https://github.com/other/repo")).toBe("other/repo");
+    });
+
+    it("returns undefined when no mapping and no repo in text", () => {
+      const bot = new DiscordBot(makeDeps());
+      expect(bot.resolveRepoForChannel("ch-random", "just a plain task")).toBeUndefined();
+    });
+
+    it("only listens on mapped channels when channel_repos is configured", async () => {
+      const deps = makeDeps({
+        config: ConfigSchema.parse({
+          discord: {
+            enabled: true,
+            bot_token: "t",
+            guild_id: "g",
+            channel_repos: [
+              { channel_id: "ch-frontend", repo: "acme/frontend" },
+            ],
+          },
+        }),
+      });
+      const bot = new DiscordBot(deps);
+
+      const msg = {
+        author: { bot: false, id: "user-1" },
+        channelId: "ch-unmapped",
+        content: "do something",
+        startThread: vi.fn(),
+      } as any;
+
+      await bot.handleMessage(msg);
+      expect(msg.startThread).not.toHaveBeenCalled();
+    });
+
+    it("dispatches from mapped channel with the mapped repo", async () => {
+      const deps = makeDeps({
+        config: ConfigSchema.parse({
+          discord: {
+            enabled: true,
+            bot_token: "t",
+            guild_id: "g",
+            channel_repos: [
+              { channel_id: "ch-frontend", repo: "acme/frontend" },
+            ],
+          },
+        }),
+      });
+      const bot = new DiscordBot(deps);
+
+      const mockThread = {
+        id: "thread-mapped",
+        send: vi.fn(),
+        messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
+      };
+      const msg = {
+        author: { bot: false, id: "user-1" },
+        channelId: "ch-frontend",
+        content: "fix the login page",
+        startThread: vi.fn().mockResolvedValue(mockThread),
+      } as any;
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: "run-mapped", status: "dispatched" }),
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await bot.handleMessage(msg);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.repo).toBe("acme/frontend");
+      expect(mockThread.send).toHaveBeenCalledWith(expect.stringContaining("[acme/frontend]"));
+    });
+
+    it("populates channelRepoMap from config", () => {
+      const deps = makeDeps({
+        config: ConfigSchema.parse({
+          discord: {
+            enabled: true,
+            bot_token: "t",
+            guild_id: "g",
+            channel_repos: [
+              { channel_id: "ch1", repo: "org/repo1" },
+              { channel_id: "ch2", repo: "org/repo2", workflow: "code-python" },
+            ],
+          },
+        }),
+      });
+      const bot = new DiscordBot(deps);
+      const map = bot.getChannelRepoMap();
+
+      expect(map.size).toBe(2);
+      expect(map.get("ch1")).toEqual({ repo: "org/repo1", workflow: undefined });
+      expect(map.get("ch2")).toEqual({ repo: "org/repo2", workflow: "code-python" });
+    });
+  });
+
+  describe("lifecycle tracking", () => {
+    it("creates lifecycle entry on task dispatch", async () => {
+      const bot = new DiscordBot(makeDeps());
+
+      const mockThread = {
+        id: "thread-lc",
+        send: vi.fn(),
+        messages: { fetch: vi.fn().mockResolvedValue(new Map()) },
+      };
+      const msg = {
+        author: { bot: false, id: "user-42" },
+        channelId: "ch1",
+        content: "implement dark mode",
+        startThread: vi.fn().mockResolvedValue(mockThread),
+      } as any;
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: "run-lc", status: "dispatched" }),
+      }));
+
+      await bot.handleMessage(msg);
+
+      const lifecycles = bot.getLifecycles();
+      const lc = lifecycles.get("thread-lc");
+      expect(lc).toBeDefined();
+      expect(lc!.runId).toBe("run-lc");
+      expect(lc!.task).toBe("implement dark mode");
+      expect(lc!.userId).toBe("user-42");
+      expect(lc!.status).toBe("dispatched");
+    });
+
+    it("updates lifecycle status", () => {
+      const bot = new DiscordBot(makeDeps());
+      const lifecycles = bot.getLifecycles();
+
+      lifecycles.set("thread-1", {
+        runId: "run-1",
+        threadId: "thread-1",
+        channelId: "ch1",
+        task: "test",
+        status: "dispatched",
+        userId: "user-1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      bot.updateLifecycleStatus("thread-1", "running");
+      expect(lifecycles.get("thread-1")!.status).toBe("running");
+    });
+
+    it("finds lifecycle by run ID", () => {
+      const bot = new DiscordBot(makeDeps());
+      const lifecycles = bot.getLifecycles();
+
+      lifecycles.set("thread-find", {
+        runId: "run-find",
+        threadId: "thread-find",
+        channelId: "ch1",
+        task: "test",
+        status: "running",
+        userId: "user-1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const found = bot.findLifecycleByRunId("run-find");
+      expect(found).toBeDefined();
+      expect(found!.threadId).toBe("thread-find");
+
+      expect(bot.findLifecycleByRunId("nonexistent")).toBeUndefined();
+    });
   });
 });
 
@@ -246,6 +461,34 @@ describe("cancelRun", () => {
     const result = await cancelRun("run-1", 4856, "tok");
     expect(result).toContain("Failed to cancel");
     expect(result).toContain("already completed");
+  });
+});
+
+describe("retryRun", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns success message on retry", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: "retried", runId: "run-1" }),
+    }));
+
+    const result = await retryRun("run-1", 4856, "tok");
+    expect(result).toBe("Run `run-1` retried.");
+  });
+
+  it("returns error message on failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      statusText: "Not Found",
+      json: async () => ({ error: { message: "Run not found" } }),
+    }));
+
+    const result = await retryRun("run-1", 4856, "tok");
+    expect(result).toContain("Failed to retry");
+    expect(result).toContain("not found");
   });
 });
 
@@ -345,9 +588,11 @@ describe("ConfigSchema discord section", () => {
     expect(config.discord.bot_token).toBe("");
     expect(config.discord.guild_id).toBe("");
     expect(config.discord.channel_ids).toEqual([]);
+    expect(config.discord.channel_repos).toEqual([]);
     expect(config.discord.status_channel_name).toBe("forgectl-status");
     expect(config.discord.digest_cron).toBe("0 9 * * *");
     expect(config.discord.alerts_enabled).toBe(true);
+    expect(config.discord.reaction_controls).toBe(true);
   });
 
   it("parses with discord enabled", () => {
@@ -373,5 +618,34 @@ describe("ConfigSchema discord section", () => {
     expect(config.discord.status_channel_name).toBe("my-status");
     expect(config.discord.digest_cron).toBe("0 18 * * *");
     expect(config.discord.alerts_enabled).toBe(false);
+  });
+
+  it("parses with channel_repos mappings", () => {
+    const config = ConfigSchema.parse({
+      discord: {
+        enabled: true,
+        bot_token: "abc",
+        guild_id: "g1",
+        channel_repos: [
+          { channel_id: "ch1", repo: "org/repo1" },
+          { channel_id: "ch2", repo: "org/repo2", workflow: "code-python" },
+        ],
+      },
+    });
+    expect(config.discord.channel_repos).toHaveLength(2);
+    expect(config.discord.channel_repos[0]).toEqual({ channel_id: "ch1", repo: "org/repo1" });
+    expect(config.discord.channel_repos[1]).toEqual({ channel_id: "ch2", repo: "org/repo2", workflow: "code-python" });
+  });
+
+  it("parses with reaction_controls disabled", () => {
+    const config = ConfigSchema.parse({
+      discord: {
+        enabled: true,
+        bot_token: "abc",
+        guild_id: "g1",
+        reaction_controls: false,
+      },
+    });
+    expect(config.discord.reaction_controls).toBe(false);
   });
 });
