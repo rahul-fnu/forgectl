@@ -7,10 +7,8 @@ import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { RetryRepository } from "../storage/repositories/retries.js";
-import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
-import type { ContextResult } from "../context/builder.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
@@ -21,20 +19,12 @@ import { executeWorker } from "./worker.js";
 import { createProgressComment } from "../github/comments.js";
 import { serializeReviewOutput } from "../validation/review-agent.js";
 import { emitRunEvent } from "../logging/events.js";
-import { needsPreApproval } from "../governance/autonomy.js";
 import { triageIssue, type ComplexityAssessment } from "./triage.js";
-import { enterPendingApproval } from "../governance/approval.js";
-import { evaluateAutoApprove } from "../governance/rules.js";
 import {
   upsertRollupComment,
   buildSubIssueProgressComment,
   allChildrenTerminal,
 } from "../github/sub-issue-rollup.js";
-import {
-  parseAgentAccessedFiles,
-  computeContextFeedback,
-  recordContextFeedback,
-} from "../context/learning.js";
 import { buildRichPRBody } from "../github/pr-description.js";
 import { formatRunComment, shouldPostComment } from "../tracker/linear-comments.js";
 import type { RunCommentData } from "../tracker/linear-comments.js";
@@ -89,22 +79,20 @@ export interface GitHubContext {
   repo: RepoContext;
 }
 
-/** Optional outcome logging dependencies. */
-export interface OutcomeDeps {
-  outcomeRepo: OutcomeRepository;
-  eventRepo?: EventRepository;
-  snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
-}
-
-/** Optional governance context for pre-execution approval gate. */
+/** Optional dependencies for run tracking (formerly GovernanceOpts). */
 export interface GovernanceOpts {
-  autonomy?: AutonomyLevel;
-  autoApprove?: AutoApproveRule;
   runRepo?: RunRepository;
   runId?: string;
   costRepo?: CostRepository;
   retryRepo?: RetryRepository;
   traceRepo?: TraceRepository;
+}
+
+/** Optional outcome logging dependencies. */
+export interface OutcomeDeps {
+  outcomeRepo: OutcomeRepository;
+  eventRepo?: EventRepository;
+  snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
 }
 
 /**
@@ -334,7 +322,6 @@ export async function dispatchIssue(
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
-  kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
@@ -473,7 +460,6 @@ export async function dispatchIssue(
     skills,
     validationConfig,
     outcomeDeps,
-    kgContext,
     promotedFindings,
     slotManager,
     usageLimitRecovery,
@@ -498,7 +484,6 @@ async function executeWorkerAndHandle(
   skills?: string[],
   validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
   outcomeDeps?: OutcomeDeps,
-  kgContext?: ContextResult,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   slotManager?: TwoTierSlotManager,
   usageLimitRecovery?: UsageLimitRecovery,
@@ -545,34 +530,6 @@ async function executeWorkerAndHandle(
       worker.lastActivityAt = Date.now();
     }
   };
-
-  // --- Pre-execution approval gate ---
-  const autonomy = governance?.autonomy ?? "full";
-  if (needsPreApproval(autonomy)) {
-    // Check auto-approve bypass
-    const autoApproveCtx = {
-      labels: issue.labels,
-      workflowName: promptTemplate, // best available workflow identifier
-    };
-    if (governance?.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
-      logger.info("dispatcher", `Auto-approved pre-gate for ${issue.identifier}`);
-    } else if (governance?.runRepo && governance?.runId) {
-      // Gate the run: enter pending_approval and return early
-      enterPendingApproval(governance.runRepo, governance.runId);
-      emitRunEvent({
-        runId: "orchestrator",
-        type: "approval_required",
-        timestamp: new Date().toISOString(),
-        data: { issueId: issue.id, identifier: issue.identifier, autonomy },
-      });
-      logger.info("dispatcher", `Run ${issue.identifier} requires pre-approval (autonomy=${autonomy})`);
-      state.running.delete(issue.id);
-      slotManager?.releaseTopLevel(issue.id);
-      return;
-    } else {
-      logger.warn("dispatcher", `Pre-approval needed for ${issue.identifier} but no runRepo available, proceeding`);
-    }
-  }
 
   // --- Construct GitHubDeps if GitHub context is available ---
   let githubDeps: GitHubDeps | undefined;
@@ -657,7 +614,7 @@ async function executeWorkerAndHandle(
       githubDeps,
       governanceWithRunId,
       skills,
-      kgContext,
+      undefined, // kgContext removed
       outcomeDeps?.snapshotRepo,
       promotedFindings,
       tracker,
@@ -766,32 +723,6 @@ async function executeWorkerAndHandle(
       });
     }
 
-    // Record learning feedback: files from KG context → outcome_files table
-    if (kgContext && kgContext.includedFiles.length > 0) {
-      try {
-        const { createKGDatabase, recordOutcomeFiles } = await import("../kg/storage.js");
-        const storagePath = config.storage?.db_path ?? "~/.forgectl/forgectl.db";
-        const dir = storagePath.replace(/\/[^/]+$/, "").replace(/^~/, process.env.HOME || "/tmp");
-        const kgDbPath = `${dir}/kg.db`;
-        let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-        try {
-          kgDb = createKGDatabase(kgDbPath);
-          const filePaths = kgContext.includedFiles.map(f => f.path);
-          const taskType = inferTaskTypeFromIssue(issue);
-          const success = failureType === "continuation";
-          const turns = result.agentResult.turnCount ?? 0;
-          const retries = attempt - 1;
-          recordOutcomeFiles(kgDb, filePaths, taskType, success, turns, retries);
-          logger.debug("dispatcher", `Recorded learning feedback: ${filePaths.length} files, taskType=${taskType}, success=${success}`);
-        } finally {
-          try { kgDb?.close(); } catch { /* best-effort */ }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.debug("dispatcher", `Failed to record learning feedback: ${msg}`);
-      }
-    }
-
     // Record outcome for the Outcome Analyzer
     if (outcomeDeps) {
       try {
@@ -801,50 +732,6 @@ async function executeWorkerAndHandle(
           const events = outcomeDeps.eventRepo.findByRunId(issue.identifier);
           if (events.length > 0) {
             rawEventsJson = JSON.stringify(events);
-          }
-        }
-
-        // Compute context feedback: discovery misses + hit rate
-        let contextHitRate: number | undefined;
-        if (kgContext) {
-          try {
-            const agentAccessedFiles = parseAgentAccessedFiles(rawEventsJson ?? null);
-            const preProvided = kgContext.includedFiles.map(f => f.path);
-            const feedback = computeContextFeedback(preProvided, agentAccessedFiles);
-            contextHitRate = feedback.contextHitRate;
-
-            // Record discovery misses in the KG database
-            if (feedback.discoveryMisses.length > 0) {
-              const { existsSync } = await import("node:fs");
-              const maxAgents = config.orchestrator?.max_concurrent_agents ?? 1;
-              const workspaceId = maxAgents > 1
-                ? issue.identifier
-                : (config.tracker?.repo?.replace("/", "_") ?? issue.identifier);
-              let kgPath: string | undefined;
-              try {
-                const wsKgPath = workspaceManager.getWorkspacePath(workspaceId) + "/kg.db";
-                if (existsSync(wsKgPath)) kgPath = wsKgPath;
-              } catch { /* fallback */ }
-              if (!kgPath) {
-                const { resolveKGPath } = await import("../kg/storage.js");
-                kgPath = resolveKGPath(undefined, undefined);
-              }
-              if (existsSync(kgPath)) {
-                const { createKGDatabase } = await import("../kg/storage.js");
-                let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-                try {
-                  kgDb = createKGDatabase(kgPath);
-                  const taskType = issue.labels.find(l => ["bugfix", "feature", "refactor", "test"].includes(l)) ?? "general";
-                  recordContextFeedback(kgDb, taskType, feedback.discoveryMisses);
-                  logger.info("dispatcher", `Recorded ${feedback.discoveryMisses.length} discovery misses for ${issue.identifier} (hit_rate=${feedback.contextHitRate})`);
-                } finally {
-                  try { kgDb?.close(); } catch { /* best-effort */ }
-                }
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.warn("dispatcher", `Context feedback computation failed for ${issue.identifier}: ${msg}`);
           }
         }
 
@@ -862,9 +749,9 @@ async function executeWorkerAndHandle(
           failureMode: outcomeStatus === "failure" ? (failureType ?? "unknown") : undefined,
           failureDetail: outcomeStatus === "failure" ? result.agentResult.stderr?.slice(0, 2000) : undefined,
           rawEventsJson,
-          contextEnabled: kgContext ? 1 : 0,
-          contextFilesJson: kgContext ? JSON.stringify(kgContext.includedFiles.map(f => f.path)) : undefined,
-          contextHitRate,
+          contextEnabled: 0,
+          contextFilesJson: undefined,
+          contextHitRate: undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1205,7 +1092,7 @@ async function executeWorkerAndHandle(
           status: "failure",
           failureMode: "unexpected_error",
           failureDetail: msg.slice(0, 2000),
-          contextEnabled: kgContext ? 1 : 0,
+          contextEnabled: 0,
         });
       } catch {
         // Best-effort — don't mask the original error

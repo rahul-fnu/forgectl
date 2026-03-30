@@ -25,14 +25,10 @@ import { createPRForBranch } from "../github/pr-description.js";
 import type { PRDescriptionData } from "../github/pr-description.js";
 import { renderPromptTemplate, buildTemplateVars } from "../workflow/template.js";
 import { buildPrompt } from "../context/prompt.js";
-import type { ContextResult } from "../context/builder.js";
 import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
 import { emitRunEvent } from "../logging/events.js";
-import { needsPostApproval } from "../governance/autonomy.js";
-import { enterPendingOutputApproval } from "../governance/approval.js";
-import { evaluateAutoApprove } from "../governance/rules.js";
 import { saveCheckpoint } from "../durability/checkpoint.js";
 import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
 import type { TrackerAdapter } from "../tracker/types.js";
@@ -277,7 +273,7 @@ export async function executeWorker(
   githubDeps?: GitHubDeps,
   governance?: GovernanceOpts,
   skills?: string[],
-  kgContext?: ContextResult,
+  _kgContext?: unknown,
   snapshotRepo?: SnapshotRepository,
   promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
   tracker?: TrackerAdapter,
@@ -337,46 +333,6 @@ export async function executeWorker(
       agentResult: failResult,
       comment: `**forgectl:** Workspace is not a git repository — agent output would be lost. Check workspace hooks.\n\n\`\`\`\n${message}\n\`\`\``,
     };
-  }
-
-  // 2.7. Build per-workspace KG so agent context reflects the branch state
-  try {
-    const { buildFullGraph } = await import("../kg/builder.js");
-    const wsKgPath = pathJoin(workspacePath, "kg.db");
-    await buildFullGraph(workspacePath, wsKgPath);
-    logger.info("worker", `Built per-workspace KG at ${wsKgPath}`);
-
-    // Rebuild KG context from per-workspace KG so the agent sees branch-specific code
-    if (existsSync(wsKgPath)) {
-      try {
-        const { createKGDatabase } = await import("../kg/storage.js");
-        const { buildContext } = await import("../context/builder.js");
-        let wsKgDb: import("../kg/storage.js").KGDatabase | undefined;
-        try {
-          wsKgDb = createKGDatabase(wsKgPath);
-          const taskSpec: import("../task/types.js").TaskSpec = {
-            id: issue.id,
-            title: issue.title,
-            description: issue.description,
-            context: { files: [] },
-            constraints: [],
-            acceptance: [],
-            decomposition: { strategy: "forbidden" },
-            effort: {},
-          };
-          kgContext = await buildContext(taskSpec, wsKgDb);
-          logger.info("worker", `Rebuilt KG context from workspace KG: ${kgContext.includedFiles.length} files`);
-        } finally {
-          try { wsKgDb?.close(); } catch { /* best-effort */ }
-        }
-      } catch (ctxErr) {
-        const ctxMsg = ctxErr instanceof Error ? ctxErr.message : String(ctxErr);
-        logger.warn("worker", `Failed to rebuild KG context from workspace KG (using original): ${ctxMsg}`);
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("worker", `Failed to build per-workspace KG (continuing without): ${msg}`);
   }
 
   // 3. Build RunPlan (with optional validationConfig and skills)
@@ -455,7 +411,7 @@ export async function executeWorker(
     }
 
     // 7. Invoke agent with full prompt (includes validation step descriptions)
-    const fullPrompt = buildPrompt(plan, promotedFindings ? { kgContext, promotedFindings } : kgContext);
+    const fullPrompt = buildPrompt(plan, promotedFindings ? { promotedFindings } : undefined);
     logger.info("worker", `Running agent for ${issue.identifier} (attempt ${attempt})`);
 
     emitRunEvent({
@@ -718,25 +674,6 @@ export async function executeWorker(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to update progress comment (output stage): ${msg}`);
-      }
-    }
-
-    // --- Post-execution approval gate ---
-    if (governance?.autonomy && needsPostApproval(governance.autonomy) && governance.runRepo && governance.runId) {
-      const actualCost = agentResult.tokenUsage
-        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
-        : undefined;
-      const autoApproveCtx = {
-        labels: issue.labels,
-        workflowName: plan.workflow.name,
-        actualCost,
-      };
-      if (governance.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
-        logger.info("governance", `Auto-approved post-gate for run ${governance.runId}`);
-      } else {
-        enterPendingOutputApproval(governance.runRepo, governance.runId);
-        logger.info("governance", `Run ${governance.runId} requires output approval (autonomy=${governance.autonomy})`);
-        pendingApproval = true;
       }
     }
 

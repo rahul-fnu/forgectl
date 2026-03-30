@@ -1,6 +1,18 @@
 import { createHash } from "node:crypto";
-import type { TaskSpec } from "../task/types.js";
 import type { KGDatabase } from "../kg/storage.js";
+
+export interface TaskSpec {
+  id: string;
+  title: string;
+  description?: string;
+  context: { files: string[]; docs?: string[]; modules?: string[]; related_tasks?: string[] };
+  constraints: string[];
+  acceptance: { run?: string; assert?: string; description?: string }[];
+  decomposition: { strategy: string; max_depth?: number };
+  effort: { max_turns?: number; max_review_rounds?: number; timeout?: string };
+  metadata?: Record<string, string>;
+  budget?: { max_cost_usd?: number; max_tokens?: number };
+}
 import { getModule, getMeta, getCoupledFiles, getTestsFor } from "../kg/storage.js";
 import { estimateTokenCount } from "../kg/merkle.js";
 import type { ModuleInfo } from "../kg/types.js";
