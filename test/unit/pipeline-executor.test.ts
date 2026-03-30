@@ -72,8 +72,11 @@ describe("PipelineExecutor", () => {
     // Verify order: a was called first
     const calls = vi.mocked(executeRun).mock.calls;
     expect(calls[0][0].task).toBe("do a");
-    expect(calls[1][0].task).toBe("do b");
-    expect(calls[2][0].task).toBe("do c");
+    // b and c include handoff context from their dependencies
+    expect(calls[1][0].task).toContain("do b");
+    expect(calls[1][0].task).toContain("Previous Work");
+    expect(calls[2][0].task).toContain("do c");
+    expect(calls[2][0].task).toContain("Previous Work");
   });
 
   it("runs parallel nodes concurrently", async () => {
@@ -146,8 +149,8 @@ describe("PipelineExecutor", () => {
     const result = await executor.execute();
 
     expect(result.status).toBe("completed");
-    // c should be last
-    expect(callOrder[callOrder.length - 1]).toBe("do c");
+    // c should be last (task may include handoff context prefix)
+    expect(callOrder[callOrder.length - 1]).toContain("do c");
   });
 
   it("dry-run shows plan without executing", async () => {
