@@ -6,7 +6,7 @@ import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
 import type { LockRepository } from "../storage/repositories/locks.js";
 import { getAgentAdapter } from "../agent/registry.js";
 import { createAgentSession } from "../agent/session.js";
-import { buildPrompt } from "../context/prompt.js";
+import { buildPrompt, buildHandoffContext } from "../context/prompt.js";
 import { createContainer } from "../container/runner.js";
 import { ensureImage } from "../container/builder.js";
 import { prepareRepoWorkspace, prepareFilesWorkspace } from "../container/workspace.js";
@@ -31,6 +31,8 @@ import { needsPostApproval } from "../governance/autonomy.js";
 import { enterPendingOutputApproval } from "../governance/approval.js";
 import { evaluateAutoApprove } from "../governance/rules.js";
 import { checkCostCeiling, BudgetExceededError } from "../agent/budget.js";
+import { isComplexTask } from "../workflow/types.js";
+import { buildFeatureBranchName } from "../planner/decompose-to-issues.js";
 
 /** Optional durability dependencies for checkpoint/lock support. */
 export interface DurabilityDeps {
@@ -208,10 +210,20 @@ export async function executeSingleAgent(
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
     if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
 
+    // --- Feature branch for complex tasks ---
+    if (!plan.featureBranch && isComplexTask(plan)) {
+      plan = { ...plan, featureBranch: buildFeatureBranchName(plan.task) };
+      logger.info("prepare", `Complex task detected — using feature branch: ${plan.featureBranch}`);
+    }
+
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
 
-    const prompt = buildPrompt(plan);
+    // Build handoff context from plan entries (if provided by pipeline or orchestrator)
+    const handoffContext = plan.handoffEntries
+      ? buildHandoffContext(plan.handoffEntries)
+      : undefined;
+    const prompt = buildPrompt(plan, { handoffContext });
     logger.info("agent", `Running ${plan.agent.type}...`);
 
     // Use AgentSession for the top-level invocation
