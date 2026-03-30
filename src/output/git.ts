@@ -55,7 +55,9 @@ export async function collectGitOutput(
 ): Promise<GitResult> {
   const slug = slugify(plan.task);
   const ts = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 15);
-  const branch = expandTemplate("forge/{{slug}}/{{ts}}", { slug, ts });
+  const branch = plan.featureBranch
+    ? expandTemplate("{{featureBranch}}/{{ts}}", { featureBranch: plan.featureBranch, ts })
+    : expandTemplate("forge/{{slug}}/{{ts}}", { slug, ts });
 
   logger.info("output", `Creating branch: ${branch}`);
 
