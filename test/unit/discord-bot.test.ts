@@ -137,9 +137,13 @@ describe("DiscordBot", () => {
   it("creates thread and dispatches on valid message", async () => {
     const bot = new DiscordBot(makeDeps());
 
+    const mockEmbedMsg = { id: "embed-msg-1", react: vi.fn().mockResolvedValue(undefined) };
     const mockThread = {
       id: "thread-1",
       send: vi.fn(),
+      messages: {
+        fetch: vi.fn().mockResolvedValue(new Map([["embed-msg-1", mockEmbedMsg]])),
+      },
     };
     const msg = {
       author: { bot: false },
@@ -147,6 +151,7 @@ describe("DiscordBot", () => {
       content: "Fix the login bug in https://github.com/acme/app",
       startThread: vi.fn().mockResolvedValue(mockThread),
       reply: vi.fn(),
+      channel: { isThread: () => false },
     } as any;
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -159,7 +164,9 @@ describe("DiscordBot", () => {
     expect(msg.startThread).toHaveBeenCalledWith({
       name: "Working on: Fix the login bug in https://github.com/acme/app",
     });
-    expect(mockThread.send).toHaveBeenCalledWith('Task dispatched! Run ID: `run-abc`');
+    expect(mockThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: expect.arrayContaining([expect.objectContaining({ title: "Task Dispatched" })]) }),
+    );
     expect(bot.getThreadMap().get("thread-1")).toBe("run-abc");
   });
 
@@ -222,20 +229,17 @@ describe("DiscordBot", () => {
 });
 
 describe("ConfigSchema discord section", () => {
-  it("parses with discord defaults", () => {
+  it("parses with discord undefined by default", () => {
     const config = ConfigSchema.parse({});
-    expect(config.discord.enabled).toBe(false);
-    expect(config.discord.bot_token).toBe("");
-    expect(config.discord.guild_id).toBe("");
-    expect(config.discord.channel_ids).toEqual([]);
+    expect(config.discord).toBeUndefined();
   });
 
   it("parses with discord enabled", () => {
     const config = ConfigSchema.parse({
       discord: { enabled: true, bot_token: "abc", guild_id: "g1", channel_ids: ["c1", "c2"] },
     });
-    expect(config.discord.enabled).toBe(true);
-    expect(config.discord.bot_token).toBe("abc");
-    expect(config.discord.channel_ids).toEqual(["c1", "c2"]);
+    expect(config.discord!.enabled).toBe(true);
+    expect(config.discord!.bot_token).toBe("abc");
+    expect(config.discord!.channel_ids).toEqual(["c1", "c2"]);
   });
 });

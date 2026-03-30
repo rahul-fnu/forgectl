@@ -13,7 +13,8 @@ import {
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { PlanPreview } from "../analysis/cost-predictor.js";
-import { buildPlanPreviewEmbed } from "./embeds.js";
+import { buildPlanPreviewEmbed, buildTaskSubmittedEmbed, buildCompletedEmbed, buildFailedEmbed, buildClarificationEmbed } from "./embeds.js";
+import { runEvents, type RunEvent } from "../logging/events.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;
@@ -123,10 +124,13 @@ export interface PendingApproval {
   resolve: (approved: boolean) => void;
 }
 
+const STREAM_THROTTLE_MS = 5000;
+
 export class DiscordBot {
   private client: Client;
   private threadMap = new Map<string, string>();
   private pendingApprovals = new Map<string, PendingApproval>();
+  private activeStreams = new Map<string, { cleanup: () => void; lastSent: number }>();
   private config: ForgectlConfig;
   private logger: Logger;
   private daemonPort: number;
@@ -148,7 +152,11 @@ export class DiscordBot {
     });
 
     this.client.on(Events.MessageCreate, (msg: Message) => {
-      void this.handleMessage(msg);
+      if (msg.channel.isThread()) {
+        void this.handleThreadReply(msg);
+      } else {
+        void this.handleMessage(msg);
+      }
     });
 
     this.client.on(Events.InteractionCreate, (interaction) => {
@@ -175,6 +183,10 @@ export class DiscordBot {
   }
 
   async stop(): Promise<void> {
+    for (const [, stream] of this.activeStreams) {
+      stream.cleanup();
+    }
+    this.activeStreams.clear();
     this.client.destroy();
   }
 
@@ -213,6 +225,7 @@ export class DiscordBot {
 
       const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
 
+      // Phase 1: Decompose — post task embed with details
       if (result.status === "decomposed" && result.childIssues) {
         const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
         await thread.send(`Task decomposed into sub-issues:\n${issueList}`);
@@ -220,9 +233,31 @@ export class DiscordBot {
           this.threadMap.set(thread.id, result.parentIssueId);
         }
       } else {
-        await thread.send(`Task dispatched! Run ID: \`${result.id}\``);
+        const taskEmbed = buildTaskSubmittedEmbed(result.id ?? "unknown", task);
+        await thread.send({ embeds: [taskEmbed] });
         if (result.id) {
           this.threadMap.set(thread.id, result.id);
+
+          // Phase 2: Approve — add approval reactions
+          const embedMsg = (await thread.messages.fetch({ limit: 1 })).first();
+          if (embedMsg) {
+            await embedMsg.react("\u2705");
+            await embedMsg.react("\u274c");
+            this.pendingApprovals.set(embedMsg.id, {
+              runId: result.id,
+              messageId: embedMsg.id,
+              task,
+              repo,
+              resolve: (approved: boolean) => {
+                if (approved) {
+                  // Phase 3: Stream — subscribe to run events with throttle
+                  this.startRunStream(result.id!, thread);
+                } else {
+                  thread.send("Task cancelled.").catch(() => {});
+                }
+              },
+            });
+          }
         }
       }
     } catch (err) {
@@ -231,6 +266,108 @@ export class DiscordBot {
         await msg.reply(`Failed to dispatch task: ${err instanceof Error ? err.message : String(err)}`);
       } catch { /* ignore reply failure */ }
     }
+  }
+
+  private startRunStream(runId: string, thread: { send: (opts: string | Record<string, unknown>) => Promise<unknown> }): void {
+    let lastSent = 0;
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingMsg: string | null = null;
+
+    const handler = (event: RunEvent) => {
+      // Phase 4: Clarify — post agent questions to thread
+      if (event.type === "clarification_requested") {
+        const question = String(event.data.question ?? event.data.message ?? "");
+        if (question) {
+          const embed = buildClarificationEmbed(runId, question);
+          thread.send({ embeds: [embed] }).catch(() => {});
+        }
+        return;
+      }
+
+      // Phase 5: Complete — post summary embed
+      if (event.type === "completed" || event.type === "failed") {
+        if (pendingTimer) clearTimeout(pendingTimer);
+        if (pendingMsg) {
+          thread.send(pendingMsg).catch(() => {});
+          pendingMsg = null;
+        }
+
+        if (event.type === "completed") {
+          const embed = buildCompletedEmbed(runId, {
+            prUrl: event.data.prUrl ? String(event.data.prUrl) : undefined,
+            costUsd: typeof event.data.costUsd === "number" ? event.data.costUsd : undefined,
+          });
+          thread.send({ embeds: [embed] }).catch(() => {});
+        } else {
+          const embed = buildFailedEmbed(runId, {
+            error: String(event.data.error ?? event.data.reason ?? "Unknown error"),
+          });
+          thread.send({ embeds: [embed] }).catch(() => {});
+        }
+
+        cleanup();
+        return;
+      }
+
+      // Phase 3: Stream — throttled progress updates (1 per 5s)
+      const content = this.formatStreamEvent(event);
+      if (!content) return;
+
+      const now = Date.now();
+      const elapsed = now - lastSent;
+
+      if (elapsed >= STREAM_THROTTLE_MS) {
+        lastSent = now;
+        thread.send(content).catch(() => {});
+      } else {
+        pendingMsg = pendingMsg ? `${pendingMsg}\n${content}` : content;
+        if (!pendingTimer) {
+          pendingTimer = setTimeout(() => {
+            pendingTimer = null;
+            if (pendingMsg) {
+              lastSent = Date.now();
+              thread.send(pendingMsg).catch(() => {});
+              pendingMsg = null;
+            }
+          }, STREAM_THROTTLE_MS - elapsed);
+        }
+      }
+    };
+
+    runEvents.on(`run:${runId}`, handler);
+
+    const cleanup = () => {
+      runEvents.off(`run:${runId}`, handler);
+      if (pendingTimer) clearTimeout(pendingTimer);
+      this.activeStreams.delete(runId);
+    };
+
+    this.activeStreams.set(runId, { cleanup, lastSent });
+  }
+
+  private formatStreamEvent(event: RunEvent): string | null {
+    const d = event.data;
+    switch (event.type) {
+      case "agent_started":
+        return "Agent started working...";
+      case "validation_step_started":
+        return `Running: ${d.step ?? d.name ?? "check"}...`;
+      case "validation_step_completed": {
+        const name = d.step ?? d.name ?? "check";
+        return d.passed ? `${name} PASSED` : `${name} FAILED`;
+      }
+      case "agent_retry":
+        return `Retry attempt ${d.attempt ?? "?"}/${d.maxAttempts ?? d.max ?? "?"}`;
+      default:
+        return null;
+    }
+  }
+
+  private async handleThreadReply(msg: Message): Promise<void> {
+    if (msg.author.bot) return;
+    const runId = this.threadMap.get(msg.channel.id);
+    if (!runId) return;
+    runEvents.emit(`reply:${runId}`, { content: msg.content, userId: msg.author.id });
   }
 
   private async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
