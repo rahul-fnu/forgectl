@@ -224,10 +224,7 @@ describe("DiscordBot", () => {
 describe("ConfigSchema discord section", () => {
   it("parses with discord defaults", () => {
     const config = ConfigSchema.parse({});
-    expect(config.discord.enabled).toBe(false);
-    expect(config.discord.bot_token).toBe("");
-    expect(config.discord.guild_id).toBe("");
-    expect(config.discord.channel_ids).toEqual([]);
+    expect(config.discord).toBeUndefined();
   });
 
   it("parses with discord enabled", () => {
