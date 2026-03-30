@@ -831,11 +831,12 @@ export function createGitHubAdapter(config: TrackerConfig, externalCache?: SubIs
       branch: string,
       title: string,
       body: string,
+      base?: string,
     ): Promise<string | undefined> {
       const url = `${API_BASE}/repos/${owner}/${repo}/pulls`;
       const response = await githubFetch(url, {
         method: "POST",
-        body: JSON.stringify({ title, body, head: branch, base: "main" }),
+        body: JSON.stringify({ title, body, head: branch, base: base ?? "main" }),
       });
       const data = await response.json() as { html_url?: string; number?: number };
 

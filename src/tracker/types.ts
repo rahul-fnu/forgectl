@@ -59,7 +59,7 @@ export interface TrackerAdapter {
   createBlockingRelation?(blockingIssueId: string, blockedIssueId: string): Promise<void>;
 
   /** Create a pull request for a branch. Returns the PR URL, or undefined if not supported. */
-  createPullRequest?(branch: string, title: string, body: string): Promise<string | undefined>;
+  createPullRequest?(branch: string, title: string, body: string, base?: string): Promise<string | undefined>;
 
   /**
    * Create a PR, wait for CI, and merge. Returns whether the PR was successfully merged.
