@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { collectAncestors, collectDescendants, validateDAG, topologicalSort, buildDependentsMap } from "./dag.js";
 import { evaluateCondition } from "./condition.js";
+import { buildHandoffContext, type HandoffEntry } from "../context/prompt.js";
 import type { NodeStatusContext } from "./condition.js";
 import { getWorkflowOutputMode, resolveNodeInput } from "./resolver.js";
 import { loadConfig } from "../config/loader.js";
@@ -486,9 +487,16 @@ export class PipelineExecutor {
         inputFiles.push(staged.dir);
       }
 
+      // Build handoff context from completed dependency nodes
+      const handoffEntries = this.collectHandoffEntries(node);
+      const handoffContext = buildHandoffContext(handoffEntries);
+      const taskWithHandoff = handoffContext
+        ? `${handoffContext}\n\n${node.task}`
+        : node.task;
+
       // Build CLIOptions from node + pipeline defaults
       const cliOptions: CLIOptions = {
-        task: node.task,
+        task: taskWithHandoff,
         workflow: workflowName,
         agent: node.agent ?? this.pipeline.defaults?.agent ?? "codex",
         repo: repoPath,
@@ -1071,6 +1079,37 @@ export class PipelineExecutor {
     } catch {
       return "";
     }
+  }
+
+  /**
+   * Collect handoff entries from completed dependency nodes for a given node.
+   * Used to build a summary of previous work that gets prepended to the task prompt.
+   */
+  private collectHandoffEntries(node: PipelineNode): HandoffEntry[] {
+    const entries: HandoffEntry[] = [];
+    for (const depId of node.depends_on ?? []) {
+      const depState = this.nodeStates.get(depId);
+      if (!depState) continue;
+
+      const entry: HandoffEntry = {
+        nodeId: depId,
+        status: depState.status as "completed" | "failed" | "skipped",
+      };
+
+      if (depState.result?.output) {
+        const output = depState.result.output;
+        if (output.mode === "git") {
+          entry.filesChanged = output.filesChanged;
+          entry.diffStat = output.diffStat;
+          entry.branch = output.branch;
+        } else if (output.mode === "files") {
+          entry.outputFiles = output.files;
+        }
+      }
+
+      entries.push(entry);
+    }
+    return entries;
   }
 
   /** Get current node states (for status queries) */

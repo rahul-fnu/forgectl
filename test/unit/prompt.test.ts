@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPrompt } from "../../src/context/prompt.js";
+import { buildPrompt, buildHandoffContext, type HandoffEntry } from "../../src/context/prompt.js";
 import type { RunPlan } from "../../src/workflow/types.js";
 
 function makeMinimalPlan(overrides: Partial<RunPlan> = {}): RunPlan {
@@ -142,5 +142,98 @@ describe("buildPrompt", () => {
       ],
     });
     expect(prompt).toContain("## Task");
+  });
+
+  it("prepends handoff context when provided", () => {
+    const prompt = buildPrompt(makeMinimalPlan(), {
+      handoffContext: "## Previous Work\n- user-model merged; 3 file(s) changed",
+    });
+    expect(prompt).toContain("## Previous Work");
+    expect(prompt).toContain("user-model merged");
+    // Handoff context should appear before the task
+    const handoffIdx = prompt.indexOf("## Previous Work");
+    const taskIdx = prompt.indexOf("## Task");
+    expect(handoffIdx).toBeLessThan(taskIdx);
+  });
+});
+
+describe("buildHandoffContext", () => {
+  it("returns empty string for no entries", () => {
+    expect(buildHandoffContext([])).toBe("");
+  });
+
+  it("returns empty string when all entries are non-completed", () => {
+    const entries: HandoffEntry[] = [
+      { nodeId: "task-a", status: "failed" },
+      { nodeId: "task-b", status: "skipped" },
+    ];
+    expect(buildHandoffContext(entries)).toBe("");
+  });
+
+  it("includes completed entry with diffStat", () => {
+    const entries: HandoffEntry[] = [
+      {
+        nodeId: "user-model",
+        status: "completed",
+        filesChanged: 3,
+        diffStat: "3 files changed, 50 insertions(+), 10 deletions(-)",
+        branch: "forge/user-model/abc",
+      },
+    ];
+    const result = buildHandoffContext(entries);
+    expect(result).toContain("## Previous Work");
+    expect(result).toContain("user-model merged");
+    expect(result).toContain("3 files changed, 50 insertions(+), 10 deletions(-)");
+    expect(result).toContain("branch: forge/user-model/abc");
+  });
+
+  it("uses filesChanged when diffStat is missing", () => {
+    const entries: HandoffEntry[] = [
+      { nodeId: "auth-routes", status: "completed", filesChanged: 5 },
+    ];
+    const result = buildHandoffContext(entries);
+    expect(result).toContain("5 file(s) changed");
+  });
+
+  it("includes output files for files mode", () => {
+    const entries: HandoffEntry[] = [
+      {
+        nodeId: "research",
+        status: "completed",
+        outputFiles: ["report.md", "data.csv", "chart.png", "extra.txt"],
+      },
+    ];
+    const result = buildHandoffContext(entries);
+    expect(result).toContain("files: report.md, data.csv, chart.png +1 more");
+  });
+
+  it("limits output to 5 lines", () => {
+    const entries: HandoffEntry[] = Array.from({ length: 8 }, (_, i) => ({
+      nodeId: `task-${i}`,
+      status: "completed" as const,
+      filesChanged: i + 1,
+    }));
+    const result = buildHandoffContext(entries);
+    const lines = result.split("\n").filter(l => l.startsWith("- "));
+    expect(lines.length).toBe(5);
+  });
+
+  it("task 2 prompt includes task 1 summary", () => {
+    // Verification scenario from the issue: Task 2 prompt includes Task 1 summary
+    const task1Result: HandoffEntry = {
+      nodeId: "RAH-300",
+      status: "completed",
+      filesChanged: 1,
+      diffStat: "1 file changed, 42 insertions(+)",
+      branch: "forge/rah-300/impl",
+    };
+    const handoff = buildHandoffContext([task1Result]);
+
+    const plan = makeMinimalPlan({ task: "Build on the billing module from RAH-300" });
+    const prompt = buildPrompt(plan, { handoffContext: handoff });
+
+    expect(prompt).toContain("RAH-300 merged");
+    expect(prompt).toContain("1 file changed, 42 insertions(+)");
+    expect(prompt).toContain("Build on the billing module from RAH-300");
   });
 });
