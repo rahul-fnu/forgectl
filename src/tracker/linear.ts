@@ -545,23 +545,57 @@ export function createLinearAdapter(
 }
 
 /**
+ * Result from processing a Linear webhook payload.
+ */
+export interface LinearWebhookResult {
+  /** Whether the event was relevant at all. */
+  relevant: boolean;
+  /** Whether an orchestrator tick should be triggered. */
+  shouldTick: boolean;
+  /** The issue ID that changed, if applicable. */
+  issueId?: string;
+  /** The new state name from the webhook data, if this was a state change. */
+  newState?: string;
+  /** The reason a tick was triggered. */
+  reason?: "state_change" | "issue_created" | "issue_removed" | "label_change" | "parent_change";
+}
+
+/**
  * Handle a Linear webhook payload.
  * Updates the SubIssueCache when parent/child relationships change.
- * Returns true if the event is relevant and should trigger an orchestrator tick.
+ * Returns a result object with details about the change and whether a tick should fire.
+ *
+ * @param activeStates - list of state names considered active (e.g. ["Todo", "In Progress"]).
+ *   When provided, state-change and create ticks only fire if the new state matches.
+ *   When omitted, all state changes trigger a tick (backwards-compatible).
  */
 export function handleLinearWebhook(
   payload: LinearWebhookPayload,
   subIssueCache: SubIssueCache,
-): boolean {
+  activeStates?: string[],
+): LinearWebhookResult {
+  const noResult: LinearWebhookResult = { relevant: false, shouldTick: false };
+
   const { action, type } = payload;
 
-  if (type !== "Issue") return false;
+  if (type !== "Issue") return noResult;
 
   const data = payload.data as Record<string, unknown> | undefined;
-  if (!data) return false;
+  if (!data) return noResult;
 
   const issueId = data.id as string | undefined;
-  if (!issueId) return false;
+  if (!issueId) return noResult;
+
+  // Normalize active states for case-insensitive comparison
+  const activeSet = activeStates
+    ? new Set(activeStates.map((s) => s.toLowerCase()))
+    : null;
+
+  /** Check if a state name is in the active set. Returns true if no active set configured. */
+  function isActiveState(stateName: string | undefined): boolean {
+    if (!stateName || !activeSet) return true;
+    return activeSet.has(stateName.toLowerCase());
+  }
 
   if (action === "update") {
     const updatedFrom = payload.updatedFrom as Record<string, unknown> | undefined;
@@ -573,7 +607,18 @@ export function handleLinearWebhook(
           subIssueCache.invalidate(entry.parentId);
         }
       }
-      return true;
+
+      // Extract new state name from webhook data
+      const stateData = data.state as Record<string, unknown> | undefined;
+      const newStateName = (stateData?.name as string | undefined) ?? undefined;
+
+      return {
+        relevant: true,
+        shouldTick: isActiveState(newStateName),
+        issueId,
+        newState: newStateName,
+        reason: "state_change",
+      };
     }
 
     // Parent relationship changed — invalidate both old and new parent
@@ -582,25 +627,44 @@ export function handleLinearWebhook(
       const newParentId = data.parentId as string | undefined;
       if (oldParentId) subIssueCache.invalidate(oldParentId);
       if (newParentId) subIssueCache.invalidate(newParentId);
-      return true;
+      return { relevant: true, shouldTick: true, issueId, reason: "parent_change" };
     }
 
     // Label change — may affect filtering
     if (updatedFrom?.labelIds) {
-      return true;
+      return { relevant: true, shouldTick: true, issueId, reason: "label_change" };
     }
   }
 
-  // New or deleted issue — always trigger refresh
-  if (action === "create" || action === "remove") {
+  // New issue — trigger tick if state is active
+  if (action === "create") {
     const parentId = data.parentId as string | undefined;
     if (parentId) {
       subIssueCache.invalidate(parentId);
     }
-    return true;
+
+    const stateData = data.state as Record<string, unknown> | undefined;
+    const newStateName = (stateData?.name as string | undefined) ?? undefined;
+
+    return {
+      relevant: true,
+      shouldTick: isActiveState(newStateName),
+      issueId,
+      newState: newStateName,
+      reason: "issue_created",
+    };
   }
 
-  return false;
+  // Deleted issue — always trigger refresh
+  if (action === "remove") {
+    const parentId = data.parentId as string | undefined;
+    if (parentId) {
+      subIssueCache.invalidate(parentId);
+    }
+    return { relevant: true, shouldTick: true, issueId, reason: "issue_removed" };
+  }
+
+  return noResult;
 }
 
 /**
