@@ -473,7 +473,6 @@ imagesCmd
 // forgectl repo — manage per-repo config profiles
 import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
-import { kgBuildCommand, kgUpdateCommand, kgQueryCommand, kgStatsCommand, kgStatusCommand, kgConventionsCommand } from "./cli/kg.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
 import { traceCommand } from "./cli/trace.js";
@@ -524,53 +523,6 @@ projectCmd
   .command("show <name>")
   .description("Show the full profile for a project")
   .action(projectShowCommand);
-
-// forgectl kg — knowledge graph commands
-const kgCmd = program
-  .command("kg")
-  .description("Codebase knowledge graph");
-
-kgCmd
-  .command("build")
-  .description("Full knowledge graph rebuild")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgBuildCommand);
-
-kgCmd
-  .command("update")
-  .description("Incremental update (changed files since last build)")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgUpdateCommand);
-
-kgCmd
-  .command("query <module>")
-  .description("Show dependencies, coupling, test coverage for a module")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgQueryCommand);
-
-kgCmd
-  .command("stats")
-  .description("Show graph statistics")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgStatsCommand);
-
-kgCmd
-  .command("status")
-  .description("Show root hash and change summary")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgStatusCommand);
-
-kgCmd
-  .command("conventions")
-  .description("Discover coding conventions from codebase analysis")
-  .option("--db <path>", "Custom database path")
-  .option("--workspace <dir>", "Workspace directory for per-workspace KG")
-  .action(kgConventionsCommand);
 
 /**
  * Resolve --config or --repo to a config file path.

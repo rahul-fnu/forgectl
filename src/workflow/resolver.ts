@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
-import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { AutonomyLevel, AutoApproveRule } from "../config/schema.js";
 import type { ValidationStep } from "../config/schema.js";
 import { getWorkflow } from "./registry.js";
 import { parseDuration } from "../utils/duration.js";

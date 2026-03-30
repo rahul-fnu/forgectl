@@ -1,10 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { KGDatabase } from "../kg/storage.js";
-import { createKGDatabase, getAllOutcomeFiles } from "../kg/storage.js";
-import { buildContext } from "../context/builder.js";
-import type { TaskSpec } from "../task/types.js";
-import { loadTaskSpec } from "../task/loader.js";
+import { buildContext, type TaskSpec } from "../context/builder.js";
 import type { ExecutionPlan } from "./types.js";
 import { validatePlan } from "./validator.js";
 import type { PlanValidationResult } from "./types.js";
@@ -23,25 +19,13 @@ export interface PlannerResult {
 
 /**
  * Load a goal from a string or file path.
- * If the goal looks like a file path and exists, load as TaskSpec YAML or plain text.
+ * If the goal looks like a file path and exists, load as plain text.
  * Otherwise treat as free-text goal.
  */
 export function loadGoal(goalOrFile: string): { text: string; taskSpec?: TaskSpec } {
   const resolved = resolve(goalOrFile);
   if (existsSync(resolved)) {
     const content = readFileSync(resolved, "utf-8");
-    // Try parsing as TaskSpec YAML
-    if (resolved.endsWith(".yaml") || resolved.endsWith(".yml")) {
-      try {
-        const spec = loadTaskSpec(resolved);
-        return {
-          text: `${spec.title}\n\n${spec.description ?? ""}\n\nConstraints:\n${spec.constraints.join("\n")}`,
-          taskSpec: spec,
-        };
-      } catch {
-        // Not a valid TaskSpec — use as plain text
-      }
-    }
     return { text: content };
   }
   return { text: goalOrFile };
@@ -214,16 +198,9 @@ export function parsePlanResponse(response: string): ExecutionPlan {
 export async function buildPlannerContext(
   goalText: string,
   taskSpec?: TaskSpec,
-  options?: PlannerOptions,
+  _options?: PlannerOptions,
 ): Promise<{ contextStr?: string; outcomeInsights?: string }> {
-  let kgDb: KGDatabase | undefined;
-  try {
-    kgDb = createKGDatabase(options?.kgDbPath);
-  } catch {
-    return {};
-  }
-
-  // Build a synthetic TaskSpec for context lookup if we don't have one
+  // KG module removed — build minimal context
   const contextTask: TaskSpec = taskSpec ?? {
     id: "planner-goal",
     title: goalText.slice(0, 200),
@@ -237,87 +214,13 @@ export async function buildPlannerContext(
 
   let contextStr: string | undefined;
   try {
-    const ctx = await buildContext(contextTask, kgDb);
+    const ctx = await buildContext(contextTask);
     contextStr = `${ctx.systemContext}\n${ctx.taskContext}`;
   } catch {
     // context build failed
   }
 
-  // Build outcome insights for the planner
-  let outcomeInsights: string | undefined;
-  try {
-    outcomeInsights = buildOutcomeInsights(kgDb);
-  } catch {
-    // outcome insights are best-effort
-  }
-
-  return { contextStr, outcomeInsights };
-}
-
-/**
- * Build outcome history insights for the planner.
- * Summarizes module-level success rates and average turns from past runs.
- */
-function buildOutcomeInsights(kgDb: KGDatabase): string | undefined {
-  const records = getAllOutcomeFiles(kgDb);
-  if (records.length === 0) return undefined;
-
-  // Aggregate by module
-  const moduleStats = new Map<string, {
-    successes: number;
-    failures: number;
-    totalTurns: number;
-    avgRetries: number;
-  }>();
-
-  for (const record of records) {
-    const module = extractModuleName(record.filePath);
-    const stats = moduleStats.get(module) ?? { successes: 0, failures: 0, totalTurns: 0, avgRetries: 0 };
-    stats.successes += record.successCount;
-    stats.failures += record.failureCount;
-    stats.totalTurns += record.totalTurns;
-    stats.avgRetries = (stats.avgRetries + record.avgRetries) / 2;
-    moduleStats.set(module, stats);
-  }
-
-  const lines: string[] = [];
-  lines.push("Module outcome history (from prior runs):");
-
-  const sorted = [...moduleStats.entries()]
-    .filter(([, s]) => s.successes + s.failures >= 2)
-    .sort((a, b) => (b[1].successes + b[1].failures) - (a[1].successes + a[1].failures))
-    .slice(0, 15);
-
-  for (const [module, stats] of sorted) {
-    const total = stats.successes + stats.failures;
-    const successRate = Math.round((stats.successes / total) * 100);
-    const avgTurns = Math.round(stats.totalTurns / total);
-    lines.push(`- ${module}: ${successRate}% success (${total} runs), avg ${avgTurns} turns, avg ${stats.avgRetries.toFixed(1)} retries`);
-  }
-
-  // High-risk modules
-  const riskyModules = sorted.filter(([, s]) => {
-    const total = s.successes + s.failures;
-    return total >= 3 && s.successes / total < 0.5;
-  });
-
-  if (riskyModules.length > 0) {
-    lines.push("\nHigh-risk modules (>50% failure rate):");
-    for (const [module, stats] of riskyModules) {
-      const total = stats.successes + stats.failures;
-      lines.push(`- ${module}: ${Math.round((stats.failures / total) * 100)}% failure rate — allocate extra turns and review rounds`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-function extractModuleName(filePath: string): string {
-  const parts = filePath.split("/");
-  const srcIdx = parts.indexOf("src");
-  if (srcIdx < 0) return parts.slice(0, 2).join("/");
-  if (srcIdx + 2 >= parts.length) return "src";
-  return `src/${parts[srcIdx + 1]}`;
+  return { contextStr };
 }
 
 /**
@@ -350,18 +253,11 @@ export async function generatePlanPrompt(
 }
 
 /**
- * Validate a plan with optional KG and repo root.
+ * Validate a plan with optional repo root.
  */
 export function validateExecutionPlan(
   plan: ExecutionPlan,
   options?: PlannerOptions,
 ): PlanValidationResult {
-  let kgDb: KGDatabase | undefined;
-  try {
-    kgDb = createKGDatabase(options?.kgDbPath);
-  } catch {
-    // KG not available — validate without it
-  }
-
-  return validatePlan(plan, kgDb, options?.repoRoot);
+  return validatePlan(plan, options?.repoRoot);
 }

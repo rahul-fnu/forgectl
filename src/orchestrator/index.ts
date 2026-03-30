@@ -6,7 +6,7 @@ import type { TrackerIssue } from "../tracker/types.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { RetryRepository } from "../storage/repositories/retries.js";
-import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { AutonomyLevel, AutoApproveRule } from "../config/schema.js";
 import type { RepoContext } from "../github/types.js";
 import type { DelegationRepository } from "../storage/repositories/delegations.js";
 import type { DelegationManager } from "./delegation.js";
@@ -397,7 +397,6 @@ export class Orchestrator {
       this.subIssueCache,
       this.skills,
       this.validationConfig,
-      undefined,
       undefined,
       this.promotedFindings,
       this.slotManager,

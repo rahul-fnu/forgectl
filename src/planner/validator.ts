@@ -1,19 +1,14 @@
-import type { KGDatabase } from "../kg/storage.js";
-import { getModule } from "../kg/storage.js";
-import { validateTaskSpec } from "../task/validator.js";
 import { detectIssueCycles } from "../tracker/sub-issue-dag.js";
 import type { ExecutionPlan, PlanValidationResult } from "./types.js";
 
 /**
  * Validate an ExecutionPlan:
- * 1. Referenced files exist in the KG
- * 2. Dependency graph is acyclic (reuses sub-issue-dag cycle detection)
- * 3. TaskSpecs pass validation
+ * 1. Dependency graph is acyclic (reuses sub-issue-dag cycle detection)
+ * 2. Basic structural validation
  */
 export function validatePlan(
   plan: ExecutionPlan,
-  kgDb?: KGDatabase,
-  repoRoot?: string,
+  _repoRoot?: string,
 ): PlanValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -51,30 +46,17 @@ export function validatePlan(
     }
   }
 
-  // Validate each TaskSpec
+  // Basic spec validation
   for (const task of plan.tasks) {
-    const result = validateTaskSpec(task.spec, { repoRoot });
-    for (const err of result.errors) {
-      errors.push(`Task "${task.id}" spec error: ${err.field} — ${err.message}`);
+    const spec = task.spec;
+    if (!spec.id) {
+      errors.push(`Task "${task.id}" spec missing id`);
     }
-    for (const warn of result.warnings) {
-      warnings.push(`Task "${task.id}" spec warning: ${warn.field} — ${warn.message}`);
+    if (!spec.title) {
+      errors.push(`Task "${task.id}" spec missing title`);
     }
-  }
-
-  // Check referenced files exist in KG (if KG is available)
-  if (kgDb) {
-    for (const task of plan.tasks) {
-      for (const filePath of task.spec.context.files) {
-        // Skip glob patterns — only check literal paths
-        if (filePath.includes("*") || filePath.includes("?") || filePath.includes("{")) {
-          continue;
-        }
-        const mod = getModule(kgDb, filePath);
-        if (!mod) {
-          warnings.push(`Task "${task.id}": file "${filePath}" not found in knowledge graph`);
-        }
-      }
+    if (!spec.context?.files) {
+      warnings.push(`Task "${task.id}" spec missing context.files`);
     }
   }
 

@@ -81,6 +81,8 @@ export interface GitHubContext {
 
 /** Optional dependencies for run tracking (formerly GovernanceOpts). */
 export interface GovernanceOpts {
+  autonomy?: string;
+  autoApprove?: unknown;
   runRepo?: RunRepository;
   runId?: string;
   costRepo?: CostRepository;
