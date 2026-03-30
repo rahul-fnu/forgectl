@@ -222,20 +222,17 @@ describe("DiscordBot", () => {
 });
 
 describe("ConfigSchema discord section", () => {
-  it("parses with discord defaults", () => {
+  it("parses with discord undefined by default", () => {
     const config = ConfigSchema.parse({});
-    expect(config.discord.enabled).toBe(false);
-    expect(config.discord.bot_token).toBe("");
-    expect(config.discord.guild_id).toBe("");
-    expect(config.discord.channel_ids).toEqual([]);
+    expect(config.discord).toBeUndefined();
   });
 
   it("parses with discord enabled", () => {
     const config = ConfigSchema.parse({
       discord: { enabled: true, bot_token: "abc", guild_id: "g1", channel_ids: ["c1", "c2"] },
     });
-    expect(config.discord.enabled).toBe(true);
-    expect(config.discord.bot_token).toBe("abc");
-    expect(config.discord.channel_ids).toEqual(["c1", "c2"]);
+    expect(config.discord!.enabled).toBe(true);
+    expect(config.discord!.bot_token).toBe("abc");
+    expect(config.discord!.channel_ids).toEqual(["c1", "c2"]);
   });
 });
