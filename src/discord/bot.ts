@@ -12,13 +12,15 @@ import {
   type User,
   type TextChannel,
   type Guild,
+  type ThreadChannel,
 } from "discord.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { PlanPreview } from "../analysis/cost-predictor.js";
-import { buildPlanPreviewEmbed } from "./embeds.js";
+import { buildPlanPreviewEmbed, buildReactionControlsHelp } from "./embeds.js";
 import type { AlertEvent } from "../alerting/types.js";
 import { buildAlertEmbed } from "./embeds.js";
+import { REACTION_CONTROLS, type ThreadLifecycle } from "./types.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;
@@ -51,7 +53,7 @@ export function extractRepo(text: string): string | undefined {
 
 export function truncateTitle(text: string, maxLen = 50): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + "…";
+  return text.slice(0, maxLen) + "\u2026";
 }
 
 export async function dispatchTask(
@@ -89,7 +91,7 @@ export async function fetchStatus(daemonPort: number, daemonToken: string): Prom
   if (runs.length === 0) return "No active runs.";
   return runs
     .slice(0, 10)
-    .map((r) => `• \`${r.id}\` — ${r.status}`)
+    .map((r) => `\u2022 \`${r.id}\` \u2014 ${r.status}`)
     .join("\n");
 }
 
@@ -121,6 +123,18 @@ export async function cancelRun(runId: string, daemonPort: number, daemonToken: 
     return `Failed to cancel: ${data.error?.message ?? res.statusText}`;
   }
   return `Run \`${runId}\` cancelled.`;
+}
+
+export async function retryRun(runId: string, daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs/${encodeURIComponent(runId)}/retry`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({ error: { message: "Unknown error" } }))) as { error?: { message?: string } };
+    return `Failed to retry: ${data.error?.message ?? res.statusText}`;
+  }
+  return `Run \`${runId}\` retried.`;
 }
 
 export async function fetchBudget(daemonPort: number, daemonToken: string): Promise<string> {
@@ -181,7 +195,7 @@ export function formatDigest(data: {
   budget: { dayCostUsd: number; maxPerDay: number | null } | null;
 }): string {
   const now = new Date().toISOString().slice(0, 10);
-  const lines = [`**forgectl Daily Digest — ${now}**\n`];
+  const lines = [`**forgectl Daily Digest \u2014 ${now}**\n`];
 
   const total = data.runs.length;
   const failed = data.runs.filter((r) => r.status === "failed").length;
@@ -200,7 +214,7 @@ export function formatDigest(data: {
   if (failed > 0) {
     lines.push("\n**Failed Runs:**");
     for (const r of data.runs.filter((r) => r.status === "failed").slice(0, 5)) {
-      const task = r.task ? ` — ${r.task.slice(0, 60)}` : "";
+      const task = r.task ? ` \u2014 ${r.task.slice(0, 60)}` : "";
       lines.push(`- \`${r.id}\`${task}`);
     }
   }
@@ -228,6 +242,8 @@ export interface PendingApproval {
 export class DiscordBot {
   private client: Client;
   private threadMap = new Map<string, string>();
+  private lifecycles = new Map<string, ThreadLifecycle>();
+  private channelRepoMap = new Map<string, { repo: string; workflow?: string }>();
   private pendingApprovals = new Map<string, PendingApproval>();
   private config: ForgectlConfig;
   private logger: Logger;
@@ -241,6 +257,16 @@ export class DiscordBot {
     this.logger = deps.logger;
     this.daemonPort = deps.daemonPort;
     this.daemonToken = deps.daemonToken;
+
+    // Build channel-to-repo lookup from config
+    if (this.config.discord?.channel_repos) {
+      for (const mapping of this.config.discord.channel_repos) {
+        this.channelRepoMap.set(mapping.channel_id, {
+          repo: mapping.repo,
+          workflow: mapping.workflow,
+        });
+      }
+    }
 
     this.client = new Client({
       intents: [
@@ -297,6 +323,21 @@ export class DiscordBot {
     return this.threadMap;
   }
 
+  getLifecycles(): Map<string, ThreadLifecycle> {
+    return this.lifecycles;
+  }
+
+  getChannelRepoMap(): Map<string, { repo: string; workflow?: string }> {
+    return this.channelRepoMap;
+  }
+
+  /** Resolve repo for a channel: channel_repos mapping first, then extract from message text. */
+  resolveRepoForChannel(channelId: string, messageText: string): string | undefined {
+    const mapping = this.channelRepoMap.get(channelId);
+    if (mapping) return mapping.repo;
+    return extractRepo(messageText);
+  }
+
   private resolveBotToken(): string {
     const cfgToken = this.config.discord?.bot_token;
     if (cfgToken) return cfgToken;
@@ -304,8 +345,15 @@ export class DiscordBot {
   }
 
   private isListenChannel(channelId: string): boolean {
+    // If channel_repos is configured, only listen on mapped channels + any in channel_ids
+    if (this.channelRepoMap.size > 0) {
+      if (this.channelRepoMap.has(channelId)) return true;
+    }
     const ids = this.config.discord?.channel_ids;
-    if (!ids || ids.length === 0) return true;
+    if (!ids || ids.length === 0) {
+      // If no channel_repos and no channel_ids, listen everywhere
+      return this.channelRepoMap.size === 0;
+    }
     return ids.includes(channelId);
   }
 
@@ -316,31 +364,77 @@ export class DiscordBot {
     const task = msg.content.trim();
     if (!task) return;
 
-    const repo = extractRepo(task);
-    const threadName = `Working on: ${truncateTitle(task)}`;
+    // Channel = repo: resolve repo from channel mapping first
+    const repo = this.resolveRepoForChannel(msg.channelId, task);
+    const repoTag = repo ? ` [${repo}]` : "";
+    const threadName = `Task: ${truncateTitle(task, 80)}`;
 
     try {
       const thread = await msg.startThread({ name: threadName });
 
       const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
 
+      const lifecycle: ThreadLifecycle = {
+        runId: result.id ?? result.parentIssueId ?? "",
+        threadId: thread.id,
+        channelId: msg.channelId,
+        repo,
+        task,
+        status: "dispatched",
+        userId: msg.author.id,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
       if (result.status === "decomposed" && result.childIssues) {
-        const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
-        await thread.send(`Task decomposed into sub-issues:\n${issueList}`);
+        const issueList = result.childIssues.map((c) => `\u2022 ${c}`).join("\n");
+        await thread.send(`Task decomposed into sub-issues${repoTag}:\n${issueList}`);
         if (result.parentIssueId) {
           this.threadMap.set(thread.id, result.parentIssueId);
+          lifecycle.runId = result.parentIssueId;
         }
       } else {
-        await thread.send(`Task dispatched! Run ID: \`${result.id}\``);
+        await thread.send(`Task dispatched${repoTag}! Run ID: \`${result.id}\``);
         if (result.id) {
           this.threadMap.set(thread.id, result.id);
         }
+      }
+
+      // Store lifecycle for thread tracking
+      this.lifecycles.set(thread.id, lifecycle);
+
+      // Add reaction controls to the dispatch confirmation
+      if (this.config.discord?.reaction_controls !== false) {
+        await this.addReactionControls(thread, lifecycle.status);
       }
     } catch (err) {
       this.logger.error("discord", `Failed to handle message: ${err}`);
       try {
         await msg.reply(`Failed to dispatch task: ${err instanceof Error ? err.message : String(err)}`);
       } catch { /* ignore reply failure */ }
+    }
+  }
+
+  /** Add appropriate reaction controls to the last message in a thread. */
+  private async addReactionControls(thread: ThreadChannel, status: string): Promise<void> {
+    try {
+      const messages = await thread.messages.fetch({ limit: 1 });
+      const lastMsg = messages.first();
+      if (!lastMsg) return;
+
+      if (status === "dispatched" || status === "running" || status === "validating") {
+        await lastMsg.react(REACTION_CONTROLS.CANCEL);
+        await lastMsg.react(REACTION_CONTROLS.PAUSE);
+        await lastMsg.react(REACTION_CONTROLS.LOGS);
+      } else if (status === "failed") {
+        await lastMsg.react(REACTION_CONTROLS.RETRY);
+        await lastMsg.react(REACTION_CONTROLS.LOGS);
+      } else if (status === "paused") {
+        await lastMsg.react(REACTION_CONTROLS.APPROVE);
+        await lastMsg.react(REACTION_CONTROLS.CANCEL);
+      }
+    } catch (err) {
+      this.logger.warn("discord", `Failed to add reaction controls: ${err}`);
     }
   }
 
@@ -383,7 +477,16 @@ export class DiscordBot {
     if (sub === "repos") {
       await interaction.deferReply();
       const result = await fetchRepos(this.daemonPort, this.daemonToken);
-      await interaction.editReply(result);
+
+      // Also show channel-repo mappings
+      if (this.channelRepoMap.size > 0) {
+        const mappings = Array.from(this.channelRepoMap.entries())
+          .map(([chId, m]) => `- <#${chId}> \u2192 \`${m.repo}\`${m.workflow ? ` (workflow: ${m.workflow})` : ""}`)
+          .join("\n");
+        await interaction.editReply(`${result}\n\n**Channel Mappings:**\n${mappings}`);
+      } else {
+        await interaction.editReply(result);
+      }
       return;
     }
 
@@ -399,6 +502,42 @@ export class DiscordBot {
       return;
     }
 
+    if (sub === "map-channel") {
+      await interaction.deferReply();
+      const channelId = interaction.options.getString("channel_id") ?? interaction.channelId;
+      const repo = interaction.options.getString("repo") ?? "";
+      const workflow = interaction.options.getString("workflow") ?? undefined;
+
+      if (!repo) {
+        await interaction.editReply("Please provide a repository (e.g., `owner/repo`).");
+        return;
+      }
+
+      this.channelRepoMap.set(channelId, { repo, workflow });
+      const workflowNote = workflow ? ` (workflow: ${workflow})` : "";
+      await interaction.editReply(`Channel <#${channelId}> mapped to \`${repo}\`${workflowNote}. Messages in that channel will dispatch tasks to this repo.`);
+      return;
+    }
+
+    if (sub === "unmap-channel") {
+      await interaction.deferReply();
+      const channelId = interaction.options.getString("channel_id") ?? interaction.channelId;
+      const hadMapping = this.channelRepoMap.delete(channelId);
+      if (hadMapping) {
+        await interaction.editReply(`Channel <#${channelId}> unmapped. Messages will fall back to repo detection from message text.`);
+      } else {
+        await interaction.editReply(`Channel <#${channelId}> had no repo mapping.`);
+      }
+      return;
+    }
+
+    if (sub === "controls") {
+      await interaction.deferReply();
+      const embed = buildReactionControlsHelp();
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
     // Default: dispatch a task
     const task = interaction.options.getString("task");
     if (!task) {
@@ -408,11 +547,11 @@ export class DiscordBot {
 
     await interaction.deferReply();
     try {
-      const repo = extractRepo(task);
+      const repo = this.resolveRepoForChannel(interaction.channelId, task);
       const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
 
       if (result.status === "decomposed" && result.childIssues) {
-        const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
+        const issueList = result.childIssues.map((c) => `\u2022 ${c}`).join("\n");
         await interaction.editReply(`Task decomposed into sub-issues:\n${issueList}`);
       } else {
         await interaction.editReply(`Task dispatched! Run ID: \`${result.id}\``);
@@ -434,8 +573,8 @@ export class DiscordBot {
       embeds: [embed],
     });
 
-    await msg.react("\u2705");
-    await msg.react("\u274c");
+    await msg.react(REACTION_CONTROLS.APPROVE);
+    await msg.react(REACTION_CONTROLS.REJECT);
 
     return new Promise<boolean>((resolve) => {
       const approval: PendingApproval = {
@@ -452,24 +591,111 @@ export class DiscordBot {
   private async handleReaction(reaction: MessageReaction, user: User): Promise<void> {
     if (user.bot) return;
 
-    const approval = this.pendingApprovals.get(reaction.message.id);
-    if (!approval) return;
-
     const emoji = reaction.emoji.name;
-    if (emoji !== "\u2705" && emoji !== "\u274c") return;
 
-    const approved = emoji === "\u2705";
-    this.pendingApprovals.delete(reaction.message.id);
-    approval.resolve(approved);
+    // Handle plan approval reactions
+    const approval = this.pendingApprovals.get(reaction.message.id);
+    if (approval) {
+      if (emoji === REACTION_CONTROLS.APPROVE || emoji === REACTION_CONTROLS.REJECT) {
+        const approved = emoji === REACTION_CONTROLS.APPROVE;
+        this.pendingApprovals.delete(reaction.message.id);
+        approval.resolve(approved);
 
-    const statusText = approved ? "approved" : "rejected";
-    this.logger.info("discord", `Plan for run ${approval.runId} ${statusText} by ${user.tag}`);
+        const statusText = approved ? "approved" : "rejected";
+        this.logger.info("discord", `Plan for run ${approval.runId} ${statusText} by ${user.tag}`);
+
+        try {
+          await reaction.message.reply(
+            `Plan ${statusText} by <@${user.id}>.${approved ? " Dispatching task..." : " Task cancelled."}`,
+          );
+        } catch { /* ignore reply failure */ }
+        return;
+      }
+    }
+
+    // Handle thread lifecycle reaction controls
+    if (!this.config.discord?.reaction_controls !== false) return;
+
+    await this.handleLifecycleReaction(reaction, user, emoji);
+  }
+
+  /** Handle reaction-based controls on thread messages. */
+  private async handleLifecycleReaction(reaction: MessageReaction, user: User, emoji: string | null): Promise<void> {
+    if (!emoji) return;
+
+    // Find the lifecycle for this thread
+    const channel = reaction.message.channel;
+    if (!channel.isThread()) return;
+
+    const lifecycle = this.lifecycles.get(channel.id);
+    if (!lifecycle) return;
+
+    const runId = lifecycle.runId;
+    if (!runId) return;
 
     try {
-      await reaction.message.reply(
-        `Plan ${statusText} by <@${user.id}>.${approved ? " Dispatching task..." : " Task cancelled."}`,
-      );
-    } catch { /* ignore reply failure */ }
+      switch (emoji) {
+        case REACTION_CONTROLS.CANCEL: {
+          const result = await cancelRun(runId, this.daemonPort, this.daemonToken);
+          lifecycle.status = "cancelled";
+          lifecycle.updatedAt = Date.now();
+          await channel.send(`${REACTION_CONTROLS.CANCEL} ${result} (by <@${user.id}>)`);
+          break;
+        }
+        case REACTION_CONTROLS.RETRY: {
+          const result = await retryRun(runId, this.daemonPort, this.daemonToken);
+          lifecycle.status = "dispatched";
+          lifecycle.updatedAt = Date.now();
+          await channel.send(`${REACTION_CONTROLS.RETRY} ${result} (by <@${user.id}>)`);
+          break;
+        }
+        case REACTION_CONTROLS.LOGS: {
+          const status = await fetchStatus(this.daemonPort, this.daemonToken);
+          await channel.send(`${REACTION_CONTROLS.LOGS} **Run Status:**\n${status}`);
+          break;
+        }
+        case REACTION_CONTROLS.PAUSE: {
+          // Post pause request - the daemon handles actual pausing
+          await channel.send(`${REACTION_CONTROLS.PAUSE} Pause requested for run \`${runId}\` by <@${user.id}>.`);
+          lifecycle.status = "paused";
+          lifecycle.updatedAt = Date.now();
+          break;
+        }
+        case REACTION_CONTROLS.APPROVE: {
+          await channel.send(`${REACTION_CONTROLS.APPROVE} Approved by <@${user.id}>.`);
+          break;
+        }
+        case REACTION_CONTROLS.REJECT: {
+          const result = await cancelRun(runId, this.daemonPort, this.daemonToken);
+          lifecycle.status = "cancelled";
+          lifecycle.updatedAt = Date.now();
+          await channel.send(`${REACTION_CONTROLS.REJECT} Rejected by <@${user.id}>. ${result}`);
+          break;
+        }
+      }
+    } catch (err) {
+      this.logger.error("discord", `Failed to handle reaction control: ${err}`);
+      try {
+        await channel.send(`Failed to process reaction: ${err instanceof Error ? err.message : String(err)}`);
+      } catch { /* ignore */ }
+    }
+  }
+
+  /** Update lifecycle status from external events (e.g., daemon run events). */
+  updateLifecycleStatus(threadId: string, status: ThreadLifecycle["status"]): void {
+    const lifecycle = this.lifecycles.get(threadId);
+    if (lifecycle) {
+      lifecycle.status = status;
+      lifecycle.updatedAt = Date.now();
+    }
+  }
+
+  /** Find lifecycle by run ID. */
+  findLifecycleByRunId(runId: string): ThreadLifecycle | undefined {
+    for (const lifecycle of this.lifecycles.values()) {
+      if (lifecycle.runId === runId) return lifecycle;
+    }
+    return undefined;
   }
 
   getPendingApprovals(): Map<string, PendingApproval> {
@@ -519,6 +745,25 @@ export class DiscordBot {
       if (!channel || !("send" in channel)) return;
       const embed = buildAlertEmbed(event);
       await (channel as TextChannel).send({ embeds: [embed] });
+
+      // Also post to the relevant thread if there's a lifecycle for this run
+      if (event.runId) {
+        const lifecycle = this.findLifecycleByRunId(event.runId);
+        if (lifecycle) {
+          try {
+            const thread = await this.client.channels.fetch(lifecycle.threadId) as ThreadChannel;
+            if (thread) {
+              await thread.send({ embeds: [embed] });
+              // Update lifecycle status based on alert type
+              if (event.type === "run_completed") {
+                this.updateLifecycleStatus(lifecycle.threadId, "completed");
+              } else if (event.type === "run_failed") {
+                this.updateLifecycleStatus(lifecycle.threadId, "failed");
+              }
+            }
+          } catch { /* thread may be archived */ }
+        }
+      }
     } catch (err) {
       this.logger.warn("discord", `Failed to post alert: ${err}`);
     }
@@ -540,7 +785,6 @@ export class DiscordBot {
   }
 
   startDigestSchedule(): void {
-    // Post digest daily — simple interval-based approach using digest_cron hour
     const cronExpr = this.config.discord?.digest_cron ?? "0 9 * * *";
     const hourMatch = cronExpr.match(/^\d+\s+(\d+)/);
     const targetHour = hourMatch ? parseInt(hourMatch[1], 10) : 9;
@@ -556,7 +800,6 @@ export class DiscordBot {
 
       this.digestTimer = setTimeout(() => {
         void this.postDigest();
-        // Schedule the next one
         scheduleNext();
       }, delayMs);
     };
@@ -586,12 +829,23 @@ export class DiscordBot {
           ),
         )
         .addSubcommand((sub) => sub.setName("budget").setDescription("Show budget status"))
-        .addSubcommand((sub) => sub.setName("repos").setDescription("List tracked repositories"))
+        .addSubcommand((sub) => sub.setName("repos").setDescription("List tracked repositories and channel mappings"))
         .addSubcommand((sub) =>
           sub.setName("update-claude-md").setDescription("Update CLAUDE.md for a workspace").addStringOption((opt) =>
             opt.setName("workspace").setDescription("Workspace identifier").setRequired(true),
           ),
-        ),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("map-channel").setDescription("Map a channel to a repository")
+            .addStringOption((opt) => opt.setName("repo").setDescription("Repository (owner/repo)").setRequired(true))
+            .addStringOption((opt) => opt.setName("channel_id").setDescription("Channel ID (defaults to current)"))
+            .addStringOption((opt) => opt.setName("workflow").setDescription("Workflow override")),
+        )
+        .addSubcommand((sub) =>
+          sub.setName("unmap-channel").setDescription("Remove channel-repo mapping")
+            .addStringOption((opt) => opt.setName("channel_id").setDescription("Channel ID (defaults to current)")),
+        )
+        .addSubcommand((sub) => sub.setName("controls").setDescription("Show reaction controls help")),
     ];
 
     const rest = new REST({ version: "10" }).setToken(token);

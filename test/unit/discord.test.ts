@@ -6,9 +6,11 @@ import {
   buildProgressEmbed,
   buildClarificationEmbed,
   buildStatsEmbed,
+  buildReactionControlsHelp,
 } from "../../src/discord/embeds.js";
 import type { RunEvent } from "../../src/logging/events.js";
 import { StreamSubscriber } from "../../src/discord/stream-subscriber.js";
+import { REACTION_CONTROLS } from "../../src/discord/types.js";
 
 describe("discord embeds", () => {
   describe("buildTaskSubmittedEmbed", () => {
@@ -181,6 +183,28 @@ describe("discord embeds", () => {
       expect(embed.fields).toEqual([]);
     });
   });
+
+  describe("buildReactionControlsHelp", () => {
+    it("includes all reaction controls", () => {
+      const embed = buildReactionControlsHelp();
+      expect(embed.title).toBe("Reaction Controls");
+      expect(embed.fields).toBeDefined();
+      expect(embed.fields!.length).toBe(6);
+
+      const fieldNames = embed.fields!.map((f) => f.name);
+      expect(fieldNames.some((n) => n.includes("Cancel"))).toBe(true);
+      expect(fieldNames.some((n) => n.includes("Retry"))).toBe(true);
+      expect(fieldNames.some((n) => n.includes("Approve"))).toBe(true);
+      expect(fieldNames.some((n) => n.includes("Reject"))).toBe(true);
+      expect(fieldNames.some((n) => n.includes("Pause"))).toBe(true);
+      expect(fieldNames.some((n) => n.includes("Logs"))).toBe(true);
+    });
+
+    it("uses correct color", () => {
+      const embed = buildReactionControlsHelp();
+      expect(embed.color).toBe(0x5865f2);
+    });
+  });
 });
 
 describe("StreamSubscriber", () => {
@@ -190,11 +214,25 @@ describe("StreamSubscriber", () => {
   });
 });
 
+describe("REACTION_CONTROLS", () => {
+  it("has all expected control emojis", () => {
+    expect(REACTION_CONTROLS.CANCEL).toBeDefined();
+    expect(REACTION_CONTROLS.RETRY).toBeDefined();
+    expect(REACTION_CONTROLS.APPROVE).toBeDefined();
+    expect(REACTION_CONTROLS.REJECT).toBeDefined();
+    expect(REACTION_CONTROLS.PAUSE).toBeDefined();
+    expect(REACTION_CONTROLS.LOGS).toBeDefined();
+  });
+});
+
 describe("discord config schema", () => {
-  it("discord config is optional in the schema", async () => {
+  it("discord config has defaults when not provided", async () => {
     const { ConfigSchema } = await import("../../src/config/schema.js");
     const result = ConfigSchema.parse({});
-    expect(result.discord).toBeUndefined();
+    expect(result.discord).toBeDefined();
+    expect(result.discord.enabled).toBe(false);
+    expect(result.discord.channel_repos).toEqual([]);
+    expect(result.discord.reaction_controls).toBe(true);
   });
 
   it("validates discord config when present", async () => {
@@ -213,11 +251,17 @@ describe("discord config schema", () => {
     expect(result.discord!.allowed_channel_ids).toEqual(["123456789"]);
   });
 
-  it("uses default daemon_url when not provided", async () => {
+  it("validates channel_repos config", async () => {
     const { ConfigSchema } = await import("../../src/config/schema.js");
     const result = ConfigSchema.parse({
-      discord: { token: "tok" },
+      discord: {
+        channel_repos: [
+          { channel_id: "123", repo: "org/repo", workflow: "code-node" },
+        ],
+      },
     });
-    expect(result.discord!.daemon_url).toBe("http://127.0.0.1:4856");
+    expect(result.discord!.channel_repos).toHaveLength(1);
+    expect(result.discord!.channel_repos[0].repo).toBe("org/repo");
+    expect(result.discord!.channel_repos[0].workflow).toBe("code-node");
   });
 });

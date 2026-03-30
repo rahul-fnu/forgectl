@@ -5,9 +5,11 @@ import type {
   MessageCreateOptions,
 } from "discord.js";
 import type { DiscordEmbed } from "./embeds.js";
+import type { ThreadLifecycle } from "./types.js";
 
 export class ThreadManager {
   private threads = new Map<string, string>();
+  private lifecycles = new Map<string, ThreadLifecycle>();
   private client: Client;
   private channelId: string;
 
@@ -53,7 +55,7 @@ export class ThreadManager {
         await thread.send(options);
       }
     } catch {
-      // Swallow errors — thread may have been deleted
+      // Swallow errors -- thread may have been deleted
     }
   }
 
@@ -75,6 +77,7 @@ export class ThreadManager {
 
   removeThread(runId: string): void {
     this.threads.delete(runId);
+    this.lifecycles.delete(runId);
   }
 
   findRunByThread(threadId: string): string | undefined {
@@ -82,5 +85,27 @@ export class ThreadManager {
       if (tid === threadId) return runId;
     }
     return undefined;
+  }
+
+  setLifecycle(runId: string, lifecycle: ThreadLifecycle): void {
+    this.lifecycles.set(runId, lifecycle);
+  }
+
+  getLifecycle(runId: string): ThreadLifecycle | undefined {
+    return this.lifecycles.get(runId);
+  }
+
+  updateLifecycleStatus(runId: string, status: ThreadLifecycle["status"]): void {
+    const lifecycle = this.lifecycles.get(runId);
+    if (lifecycle) {
+      lifecycle.status = status;
+      lifecycle.updatedAt = Date.now();
+    }
+  }
+
+  getActiveLifecycles(): ThreadLifecycle[] {
+    return Array.from(this.lifecycles.values()).filter(
+      (lc) => lc.status !== "completed" && lc.status !== "failed" && lc.status !== "cancelled",
+    );
   }
 }
