@@ -23,6 +23,7 @@ import { executeRun } from "../orchestration/modes.js";
 import { recoverInterruptedRuns } from "../durability/recovery.js";
 import { releaseAllStaleLocks } from "../durability/locks.js";
 import { Logger } from "../logging/logger.js";
+import { OfflineQueue } from "../resilience/offline-queue.js";
 import type { QueuedRun } from "./queue.js";
 import { PipelineRunService } from "./pipeline-service.js";
 import { Orchestrator } from "../orchestrator/index.js";
@@ -85,6 +86,19 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const daemonLogger = new Logger(false);
   const currentPid = process.pid;
 
+  // Initialize offline queue for graceful degradation when services are down
+  const offlineQueue = new OfflineQueue(db, daemonLogger, {
+    onDockerPause: () => {
+      daemonLogger.warn("daemon", "Docker down — scheduler paused, new runs will be held");
+    },
+    onDockerResume: () => {
+      daemonLogger.info("daemon", "Docker recovered — scheduler resumed");
+      void offlineQueue.flush();
+    },
+  });
+  offlineQueue.startDockerHealthCheck();
+  offlineQueue.startPeriodicFlush();
+
   // Clean up stale locks from previous daemon instance
   const staleLockCount = releaseAllStaleLocks(lockRepo, currentPid);
   if (staleLockCount > 0) {
@@ -99,6 +113,9 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   const requeuedCount = recoveryResults.filter(r => r.action.startsWith("resumed")).length;
 
   const queue = new RunQueue(runRepo, async (run: QueuedRun) => {
+    if (offlineQueue.isDockerPaused()) {
+      throw new Error("Docker is unavailable — run deferred until Docker recovers");
+    }
     const runConfig = loadConfig(configPath);
     const plan = resolveRunPlan(runConfig, run.options);
     const logger = new Logger(false);
@@ -601,6 +618,25 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         daemonToken,
         db,
       });
+
+      // Wire real-time alerts to Discord status channel
+      if (config.discord.alerts_enabled !== false) {
+        const { AlertManager } = await import("../alerting/manager.js");
+        const alertManager = new AlertManager(config.alerting ?? {});
+        const originalFire = alertManager.fire.bind(alertManager);
+        alertManager.fire = async (event) => {
+          await originalFire(event);
+          if (discordBot) {
+            await discordBot.postAlert(event);
+          }
+        };
+        // Expose alert manager on runEvents for other modules to use
+        const { runEvents } = await import("../logging/events.js");
+        runEvents.on("alert", (event) => {
+          void alertManager.fire(event);
+        });
+      }
+
       daemonLogger.info("daemon", "Discord bot started");
     } catch (err) {
       daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);
@@ -608,6 +644,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   }
 
   const shutdown = async () => {
+    offlineQueue.stop();
     stopMergeDaemon.fn();
     watcher?.stop();
     if (discordBot) {

@@ -145,6 +145,9 @@ export const DiscordConfigSchema = z.object({
   daemon_token: z.string().optional(),
   allowed_channel_ids: z.array(z.string()).optional(),
   notification_channel_id: z.string().optional(),
+  status_channel_name: z.string().default("forgectl-status"),
+  digest_cron: z.string().default("0 9 * * *"),
+  alerts_enabled: z.boolean().default(true),
 }).default({});
 
 export const AlertingConfigSchema = z.object({
