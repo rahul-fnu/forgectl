@@ -7,7 +7,6 @@ import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { RetryRepository } from "../storage/repositories/retries.js";
-import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
 import type { IssueContext, RepoContext } from "../github/types.js";
 import type { GitHubDeps } from "./worker.js";
 import type { ContextResult } from "../context/builder.js";
@@ -21,10 +20,7 @@ import { executeWorker } from "./worker.js";
 import { createProgressComment } from "../github/comments.js";
 import { serializeReviewOutput } from "../validation/review-agent.js";
 import { emitRunEvent } from "../logging/events.js";
-import { needsPreApproval } from "../governance/autonomy.js";
 import { triageIssue, type ComplexityAssessment } from "./triage.js";
-import { enterPendingApproval } from "../governance/approval.js";
-import { evaluateAutoApprove } from "../governance/rules.js";
 import {
   upsertRollupComment,
   buildSubIssueProgressComment,
@@ -89,22 +85,20 @@ export interface GitHubContext {
   repo: RepoContext;
 }
 
-/** Optional outcome logging dependencies. */
-export interface OutcomeDeps {
-  outcomeRepo: OutcomeRepository;
-  eventRepo?: EventRepository;
-  snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
-}
-
-/** Optional governance context for pre-execution approval gate. */
+/** Optional dependencies for run tracking (formerly GovernanceOpts). */
 export interface GovernanceOpts {
-  autonomy?: AutonomyLevel;
-  autoApprove?: AutoApproveRule;
   runRepo?: RunRepository;
   runId?: string;
   costRepo?: CostRepository;
   retryRepo?: RetryRepository;
   traceRepo?: TraceRepository;
+}
+
+/** Optional outcome logging dependencies. */
+export interface OutcomeDeps {
+  outcomeRepo: OutcomeRepository;
+  eventRepo?: EventRepository;
+  snapshotRepo?: import("../storage/repositories/snapshots.js").SnapshotRepository;
 }
 
 /**
@@ -545,34 +539,6 @@ async function executeWorkerAndHandle(
       worker.lastActivityAt = Date.now();
     }
   };
-
-  // --- Pre-execution approval gate ---
-  const autonomy = governance?.autonomy ?? "full";
-  if (needsPreApproval(autonomy)) {
-    // Check auto-approve bypass
-    const autoApproveCtx = {
-      labels: issue.labels,
-      workflowName: promptTemplate, // best available workflow identifier
-    };
-    if (governance?.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
-      logger.info("dispatcher", `Auto-approved pre-gate for ${issue.identifier}`);
-    } else if (governance?.runRepo && governance?.runId) {
-      // Gate the run: enter pending_approval and return early
-      enterPendingApproval(governance.runRepo, governance.runId);
-      emitRunEvent({
-        runId: "orchestrator",
-        type: "approval_required",
-        timestamp: new Date().toISOString(),
-        data: { issueId: issue.id, identifier: issue.identifier, autonomy },
-      });
-      logger.info("dispatcher", `Run ${issue.identifier} requires pre-approval (autonomy=${autonomy})`);
-      state.running.delete(issue.id);
-      slotManager?.releaseTopLevel(issue.id);
-      return;
-    } else {
-      logger.warn("dispatcher", `Pre-approval needed for ${issue.identifier} but no runRepo available, proceeding`);
-    }
-  }
 
   // --- Construct GitHubDeps if GitHub context is available ---
   let githubDeps: GitHubDeps | undefined;
