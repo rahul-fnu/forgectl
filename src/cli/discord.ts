@@ -1,7 +1,7 @@
 import { DiscordBot } from "../discord/bot.js";
-import type { DiscordBotConfig } from "../discord/types.js";
 import { loadConfig } from "../config/loader.js";
 import { readDaemonToken } from "../daemon/lifecycle.js";
+import { Logger } from "../logging/logger.js";
 
 export async function discordCommand(opts: {
   config?: string;
@@ -12,6 +12,7 @@ export async function discordCommand(opts: {
 
   const discordToken = opts.token
     ?? config.discord?.token
+    ?? config.discord?.bot_token
     ?? process.env.DISCORD_BOT_TOKEN;
 
   if (!discordToken) {
@@ -24,17 +25,26 @@ export async function discordCommand(opts: {
     ?? config.discord?.daemon_url
     ?? "http://127.0.0.1:4856";
 
-  const daemonToken = config.discord?.daemon_token ?? readDaemonToken() ?? undefined;
+  const daemonToken = config.discord?.daemon_token ?? readDaemonToken() ?? "";
 
-  const botConfig: DiscordBotConfig = {
-    token: discordToken,
-    daemon_url: daemonUrl,
-    daemon_token: daemonToken,
-    allowed_channel_ids: config.discord?.allowed_channel_ids,
-    notification_channel_id: config.discord?.notification_channel_id,
+  // Extract port from daemon URL
+  let daemonPort = 4856;
+  try {
+    daemonPort = parseInt(new URL(daemonUrl).port, 10) || 4856;
+  } catch { /* use default */ }
+
+  // Override bot_token in config so DiscordBot can use it
+  const configWithToken = {
+    ...config,
+    discord: { ...config.discord, bot_token: discordToken },
   };
 
-  const bot = new DiscordBot(botConfig);
+  const bot = new DiscordBot({
+    config: configWithToken,
+    logger: new Logger(false),
+    daemonPort,
+    daemonToken,
+  });
 
   const shutdown = async () => {
     console.log("\nShutting down Discord bot...");

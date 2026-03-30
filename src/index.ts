@@ -456,6 +456,7 @@ imagesCmd
   .action(imagesListCommand);
 
 // forgectl repo — manage per-repo config profiles
+import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
 import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
@@ -507,32 +508,6 @@ projectCmd
   .command("show <name>")
   .description("Show the full profile for a project")
   .action(projectShowCommand);
-
-/**
- * Resolve --config or --repo to a config file path.
- * --repo resolves via loadConfigWithOptions in the loader.
- */
-function resolveConfigOption(opts: { config?: string; repo?: string }): string | undefined {
-  if (opts.config) return resolve(opts.config);
-  if (opts.repo) {
-    // Resolve repo profile to its overlay path — actual merge happens in loadConfig
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    const profilePath = resolve(home, ".forgectl", "repos", `${opts.repo}.yaml`);
-    // We use a sentinel prefix so loadConfig knows to do profile merge
-    return `repo:${profilePath}`;
-  }
-  return undefined;
-}
-
-/**
- * Build extra CLI args to forward --config or --repo to detached spawns.
- */
-function buildConfigArgs(opts: { config?: string; repo?: string }): string[] {
-  if (opts.config) return ["--config", resolve(opts.config)];
-  if (opts.repo) return ["--repo", opts.repo];
-  return [];
-}
-
 
 // forgectl plan
 program
