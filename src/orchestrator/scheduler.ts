@@ -319,13 +319,21 @@ export function startScheduler(deps: TickDeps): () => void {
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingResolve: (() => void) | null = null;
 
+  let firstTick = true;
   const loop = async (): Promise<void> => {
     while (!stopped) {
-      try {
-        await tick(deps);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        deps.logger.error("scheduler", `Tick error: ${msg}`);
+      if (firstTick) {
+        // Skip initial fetch — wait for webhooks or first poll interval.
+        // This avoids burning Linear API requests on startup.
+        firstTick = false;
+        deps.logger.info("scheduler", "Skipping initial fetch — waiting for webhooks or first poll interval");
+      } else {
+        try {
+          await tick(deps);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          deps.logger.error("scheduler", `Tick error: ${msg}`);
+        }
       }
 
       if (stopped) break;

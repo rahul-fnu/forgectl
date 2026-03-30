@@ -209,22 +209,9 @@ export class Orchestrator {
    * Also recovers in-flight delegations from SQLite if delegation deps are present.
    */
   private async startupRecovery(): Promise<void> {
-    if (!this.config.tracker) {
-      return;
-    }
-
-    const terminalStates = this.config.tracker.terminal_states;
-    const terminalIssues = await this.tracker.fetchIssuesByStates(terminalStates);
-    const identifiers = terminalIssues.map((issue) => issue.identifier);
-
-    if (identifiers.length > 0) {
-      await this.workspaceManager.cleanupTerminalWorkspaces(identifiers);
-    }
-
-    this.logger.info(
-      "orchestrator",
-      `Startup recovery: cleaned ${identifiers.length} terminal workspaces`,
-    );
+    // Skip API calls at startup to avoid burning Linear rate limit.
+    // Workspace cleanup and delegation recovery happen lazily on first poll tick.
+    this.logger.info("orchestrator", "Startup recovery: deferred to first poll tick (webhook-first mode)");
 
     // Delegation recovery — non-fatal, best-effort
     if (this.delegationRepo && this.delegationManager) {
