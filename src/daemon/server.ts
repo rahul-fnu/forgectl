@@ -229,6 +229,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
           logger: daemonLogger,
           daemonPort: port,
           daemonToken: daemonToken ?? "",
+          db,
         });
       await discordBot.start();
       daemonLogger.info("daemon", "Discord bot initialized");
@@ -615,7 +616,27 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         logger: daemonLogger,
         daemonPort: port,
         daemonToken,
+        db,
       });
+
+      // Wire real-time alerts to Discord status channel
+      if (config.discord.alerts_enabled !== false) {
+        const { AlertManager } = await import("../alerting/manager.js");
+        const alertManager = new AlertManager(config.alerting ?? {});
+        const originalFire = alertManager.fire.bind(alertManager);
+        alertManager.fire = async (event) => {
+          await originalFire(event);
+          if (discordBot) {
+            await discordBot.postAlert(event);
+          }
+        };
+        // Expose alert manager on runEvents for other modules to use
+        const { runEvents } = await import("../logging/events.js");
+        runEvents.on("alert", (event) => {
+          void alertManager.fire(event);
+        });
+      }
+
       daemonLogger.info("daemon", "Discord bot started");
     } catch (err) {
       daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);

@@ -141,11 +141,14 @@ export const DiscordConfigSchema = z.object({
   channel_id: z.string().optional(),
   channel_ids: z.array(z.string()).default([]),
   application_id: z.string().optional(),
-  daemon_url: z.string().default("http://127.0.0.1:4856"),
+  daemon_url: z.string().optional(),
   daemon_token: z.string().optional(),
   allowed_channel_ids: z.array(z.string()).optional(),
   notification_channel_id: z.string().optional(),
-}).optional();
+  status_channel_name: z.string().default("forgectl-status"),
+  digest_cron: z.string().default("0 9 * * *"),
+  alerts_enabled: z.boolean().default(true),
+}).default({});
 
 export const AlertingConfigSchema = z.object({
   webhooks: z.array(WebhookTargetSchema).default([]),

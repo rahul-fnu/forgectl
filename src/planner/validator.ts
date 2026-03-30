@@ -1,14 +1,16 @@
 import { detectIssueCycles } from "../tracker/sub-issue-dag.js";
 import type { ExecutionPlan, PlanValidationResult } from "./types.js";
+import type { KGDatabase } from "../kg/storage.js";
 
 /**
  * Validate an ExecutionPlan:
  * 1. Dependency graph is acyclic (reuses sub-issue-dag cycle detection)
  * 2. Basic structural validation
+ * 3. Optional KG file existence checks
  */
 export function validatePlan(
   plan: ExecutionPlan,
-  _repoRoot?: string,
+  kgDb?: KGDatabase,
 ): PlanValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -57,6 +59,20 @@ export function validatePlan(
     }
     if (!spec.context?.files) {
       warnings.push(`Task "${task.id}" spec missing context.files`);
+    }
+  }
+
+  // KG file existence checks
+  if (kgDb) {
+    const knownPaths = new Set(kgDb.getModulePaths());
+    for (const task of plan.tasks) {
+      for (const file of task.spec.context?.files ?? []) {
+        // Skip glob patterns
+        if (file.includes("*") || file.includes("?")) continue;
+        if (!knownPaths.has(file)) {
+          warnings.push(`Task "${task.id}": file "${file}" not found in knowledge graph`);
+        }
+      }
     }
   }
 

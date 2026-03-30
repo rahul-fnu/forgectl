@@ -50,35 +50,34 @@ export function buildProgressEmbed(
 
   switch (event.type) {
     case "phase":
-      description = `Phase: **${d.phase ?? "unknown"}**`;
+      description = `Phase: **${String(d.phase ?? "unknown")}**`;
       break;
-    case "validation_step_completed": {
-      const name = d.name ?? d.step ?? "check";
-      if (d.passed) {
-        description = `**${name}** passed`;
-      } else {
-        description = `**${name}** failed`;
-      }
-      break;
-    }
     case "agent_started":
       description = "Agent started working...";
       break;
+    case "validation_step_completed": {
+      const name = String(d.name ?? d.step ?? "check");
+      const passed = Boolean(d.passed);
+      description = `Validation step **${name}** ${passed ? "passed" : "failed"}`;
+      break;
+    }
     case "retry":
+    case "agent_retry":
       description = `Retrying (attempt ${d.attempt ?? "?"})`;
       break;
     case "cost":
-      description = `Cost so far: **$${Number(d.costUsd ?? 0).toFixed(4)}**`;
+      description = `Current cost: **$${Number(d.costUsd ?? 0).toFixed(4)}**`;
       break;
     default:
       description = `Event: ${event.type}`;
+      break;
   }
 
   return {
     title: `Run \`${runId}\``,
     description,
     color: 0x5865f2,
-    footer: { text: `Run: ${runId}` },
+    footer: { text: `Event: ${event.type}` },
   };
 }
 
@@ -206,13 +205,17 @@ export function buildStatsEmbed(stats: {
   };
 }
 
-export function buildTaskSubmittedEmbed(runId: string, task: string): DiscordEmbed {
-  const maxLen = 4000;
-  const description = task.length > maxLen ? task.slice(0, maxLen) + "..." : task;
+const MAX_DESCRIPTION_LEN = 4000;
 
+function truncateDescription(text: string, maxLen = MAX_DESCRIPTION_LEN): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + "...";
+}
+
+export function buildTaskSubmittedEmbed(runId: string, task: string): DiscordEmbed {
   return {
     title: "Task Dispatched",
-    description,
+    description: truncateDescription(task),
     color: 0x5865f2,
     fields: [
       { name: "Run ID", value: runId, inline: true },
@@ -221,25 +224,23 @@ export function buildTaskSubmittedEmbed(runId: string, task: string): DiscordEmb
   };
 }
 
-export function buildCompletedEmbed(runId: string, opts: {
-  filesChanged?: number;
-  prUrl?: string;
-  costUsd?: number;
-  branch?: string;
-}): DiscordEmbed {
+export function buildCompletedEmbed(
+  runId: string,
+  details: { filesChanged?: number; prUrl?: string; costUsd?: number; branch?: string },
+): DiscordEmbed {
   const fields: DiscordEmbed["fields"] = [];
 
-  if (opts.filesChanged !== undefined) {
-    fields.push({ name: "Files Changed", value: String(opts.filesChanged), inline: true });
+  if (details.filesChanged !== undefined) {
+    fields.push({ name: "Files Changed", value: String(details.filesChanged), inline: true });
   }
-  if (opts.costUsd !== undefined) {
-    fields.push({ name: "Cost", value: `$${opts.costUsd}`, inline: true });
+  if (details.costUsd !== undefined) {
+    fields.push({ name: "Cost", value: `$${details.costUsd}`, inline: true });
   }
-  if (opts.branch !== undefined) {
-    fields.push({ name: "Branch", value: opts.branch, inline: true });
+  if (details.branch !== undefined) {
+    fields.push({ name: "Branch", value: details.branch, inline: true });
   }
-  if (opts.prUrl !== undefined) {
-    fields.push({ name: "Pull Request", value: opts.prUrl, inline: false });
+  if (details.prUrl !== undefined) {
+    fields.push({ name: "Pull Request", value: details.prUrl, inline: false });
   }
 
   return {
@@ -251,33 +252,29 @@ export function buildCompletedEmbed(runId: string, opts: {
   };
 }
 
-export function buildFailedEmbed(runId: string, opts: {
-  error?: string;
-}): DiscordEmbed {
-  const fields: DiscordEmbed["fields"] = [];
-
-  if (opts.error !== undefined) {
-    const maxLen = 1024;
-    const errorText = opts.error.length > maxLen ? opts.error.slice(0, maxLen) : opts.error;
-    fields.push({ name: "Error", value: errorText, inline: false });
-  }
+export function buildFailedEmbed(
+  runId: string,
+  details: { error: string },
+): DiscordEmbed {
+  const errorValue = details.error.length > 1024
+    ? details.error.slice(0, 1024)
+    : details.error;
 
   return {
     title: "Run Failed",
     description: `Run \`${runId}\``,
     color: 0xa30200,
-    fields,
+    fields: [
+      { name: "Error", value: errorValue, inline: false },
+    ],
     footer: { text: "forgectl" },
   };
 }
 
 export function buildClarificationEmbed(runId: string, question: string): DiscordEmbed {
-  const maxLen = 4000;
-  const description = question.length > maxLen ? question.slice(0, maxLen) + "..." : question;
-
   return {
     title: "Clarification Needed",
-    description,
+    description: truncateDescription(question),
     color: 0xdaa038,
     fields: [
       { name: "Run ID", value: runId, inline: true },

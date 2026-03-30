@@ -862,6 +862,103 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
     },
   );
 
+  // Cancel a run
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/runs/:id/cancel",
+    async (request, reply) => {
+      if (!runRepo) {
+        reply.code(503);
+        return { error: { code: "NOT_CONFIGURED", message: "Run repository not available" } };
+      }
+
+      const { id } = request.params;
+      const run = runRepo.findById(id);
+      if (!run) {
+        reply.code(404);
+        return { error: { code: "NOT_FOUND", message: `Run ${id} not found` } };
+      }
+
+      const cancellable = new Set(["queued", "running", "pending_approval", "waiting_for_input"]);
+      if (!cancellable.has(run.status)) {
+        reply.code(409);
+        return { error: { code: "CONFLICT", message: `Run ${id} is ${run.status}, cannot cancel` } };
+      }
+
+      runRepo.updateStatus(id, { status: "cancelled", error: "Cancelled via API", completedAt: new Date().toISOString() });
+      emitRunEvent({ runId: id, type: "cancelled", timestamp: new Date().toISOString(), data: {} });
+      return { status: "cancelled", runId: id };
+    },
+  );
+
+  // List tracked repos
+  app.get("/api/v1/repos", async (_request, reply) => {
+    const repos: Array<{ name: string; source: string }> = [];
+
+    // From tracker config
+    if (services.orchestrator) {
+      const state = services.orchestrator.getState?.();
+      // Collect from running workers
+      if (state?.running) {
+        for (const worker of state.running.values()) {
+          const meta = worker.issue?.metadata as Record<string, unknown> | undefined;
+          if (meta?.repo) {
+            const name = String(meta.repo);
+            if (!repos.some(r => r.name === name)) {
+              repos.push({ name, source: "orchestrator" });
+            }
+          }
+        }
+      }
+    }
+
+    // From repo profiles directory
+    try {
+      const { existsSync: exists, readdirSync: readDir, readFileSync: readFile } = await import("node:fs");
+      const { join: pathJoin } = await import("node:path");
+      const os = await import("node:os");
+      const yaml = (await import("js-yaml")).default;
+      const reposDir = pathJoin(os.homedir(), ".forgectl", "repos");
+      if (exists(reposDir)) {
+        for (const file of readDir(reposDir)) {
+          if (file.endsWith(".yaml") || file.endsWith(".yml")) {
+            try {
+              const raw = readFile(pathJoin(reposDir, file), "utf-8");
+              const profile = yaml.load(raw) as { tracker?: { repo?: string } } | null;
+              if (profile?.tracker?.repo) {
+                const name = profile.tracker.repo;
+                if (!repos.some(r => r.name === name)) {
+                  repos.push({ name, source: "profile" });
+                }
+              }
+            } catch { /* skip invalid profiles */ }
+          }
+        }
+      }
+    } catch { /* fs not available */ }
+
+    return repos;
+  });
+
+  // Budget summary
+  app.get("/api/v1/budget", async (_request, reply) => {
+    if (!costRepo) {
+      reply.code(503);
+      return { error: { code: "NOT_CONFIGURED", message: "Cost repository not available" } };
+    }
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const daySummary = costRepo.sumSince(startOfDay);
+
+    return {
+      dayCostUsd: daySummary.totalCostUsd,
+      dayInputTokens: daySummary.totalInputTokens,
+      dayOutputTokens: daySummary.totalOutputTokens,
+      maxPerDay: budgetConfig?.max_cost_per_day ?? null,
+      maxPerRun: budgetConfig?.max_cost_per_run ?? null,
+    };
+  });
+
   // CLAUDE.md update endpoint
   app.post<{ Body: { workspace: string } }>(
     "/api/v1/claude-md/update",
