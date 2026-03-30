@@ -6,10 +6,14 @@ import {
   Routes,
   SlashCommandBuilder,
   type Message,
+  type MessageReaction,
   type ChatInputCommandInteraction,
+  type User,
 } from "discord.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
+import type { PlanPreview } from "../analysis/cost-predictor.js";
+import { buildPlanPreviewEmbed } from "./embeds.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;
@@ -93,9 +97,18 @@ export async function fetchStats(daemonPort: number, daemonToken: string): Promi
   return "```json\n" + JSON.stringify(data, null, 2) + "\n```";
 }
 
+export interface PendingApproval {
+  runId: string;
+  messageId: string;
+  task: string;
+  repo: string | undefined;
+  resolve: (approved: boolean) => void;
+}
+
 export class DiscordBot {
   private client: Client;
   private threadMap = new Map<string, string>();
+  private pendingApprovals = new Map<string, PendingApproval>();
   private config: ForgectlConfig;
   private logger: Logger;
   private daemonPort: number;
@@ -112,6 +125,7 @@ export class DiscordBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
       ],
     });
 
@@ -123,6 +137,10 @@ export class DiscordBot {
       if (interaction.isChatInputCommand()) {
         void this.handleSlashCommand(interaction as ChatInputCommandInteraction);
       }
+    });
+
+    this.client.on(Events.MessageReactionAdd, (reaction, user) => {
+      void this.handleReaction(reaction as MessageReaction, user as User);
     });
   }
 
@@ -235,6 +253,60 @@ export class DiscordBot {
     } catch (err) {
       await interaction.editReply(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  async postPlanPreview(
+    channelId: string,
+    preview: PlanPreview,
+  ): Promise<boolean> {
+    const channel = await this.client.channels.fetch(channelId);
+    if (!channel || !("send" in channel)) return false;
+
+    const embed = buildPlanPreviewEmbed(preview);
+    const msg = await (channel as { send: (opts: unknown) => Promise<Message> }).send({
+      embeds: [embed],
+    });
+
+    await msg.react("\u2705");
+    await msg.react("\u274c");
+
+    return new Promise<boolean>((resolve) => {
+      const approval: PendingApproval = {
+        runId: preview.runId,
+        messageId: msg.id,
+        task: preview.task,
+        repo: undefined,
+        resolve,
+      };
+      this.pendingApprovals.set(msg.id, approval);
+    });
+  }
+
+  private async handleReaction(reaction: MessageReaction, user: User): Promise<void> {
+    if (user.bot) return;
+
+    const approval = this.pendingApprovals.get(reaction.message.id);
+    if (!approval) return;
+
+    const emoji = reaction.emoji.name;
+    if (emoji !== "\u2705" && emoji !== "\u274c") return;
+
+    const approved = emoji === "\u2705";
+    this.pendingApprovals.delete(reaction.message.id);
+    approval.resolve(approved);
+
+    const statusText = approved ? "approved" : "rejected";
+    this.logger.info("discord", `Plan for run ${approval.runId} ${statusText} by ${user.tag}`);
+
+    try {
+      await reaction.message.reply(
+        `Plan ${statusText} by <@${user.id}>.${approved ? " Dispatching task..." : " Task cancelled."}`,
+      );
+    } catch { /* ignore reply failure */ }
+  }
+
+  getPendingApprovals(): Map<string, PendingApproval> {
+    return this.pendingApprovals;
   }
 
   private async registerSlashCommands(token: string): Promise<void> {

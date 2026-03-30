@@ -1,6 +1,7 @@
 import type { RunResult } from "../github/comments.js";
 import type { AlertEvent, AlertEventType } from "../alerting/types.js";
 import type { ChildStatus } from "../github/sub-issue-rollup.js";
+import type { PlanPreview } from "../analysis/cost-predictor.js";
 
 const COLOR_MAP: Record<AlertEventType, number> = {
   run_completed: 0x2eb886,
@@ -208,5 +209,32 @@ export function buildStatsEmbed(stats: {
     color: 0x5865f2,
     fields,
     footer: { text: "forgectl" },
+  };
+}
+
+export function buildPlanPreviewEmbed(preview: PlanPreview): DiscordEmbed {
+  const { prediction } = preview;
+
+  const bulletList = preview.planBullets.length > 0
+    ? preview.planBullets.map((b) => `- ${b}`).join("\n")
+    : "_(no plan details available)_";
+
+  const confidencePct = (prediction.confidence * 100).toFixed(0);
+  const durationMin = (prediction.estimatedDurationMs / 60_000).toFixed(1);
+
+  const fields: DiscordEmbed["fields"] = [
+    { name: "Estimated Cost", value: `$${prediction.estimatedCostUsd.toFixed(2)}`, inline: true },
+    { name: "Estimated Turns", value: String(prediction.estimatedTurns), inline: true },
+    { name: "Estimated Duration", value: `${durationMin} min`, inline: true },
+    { name: "Confidence", value: `${confidencePct}% (${prediction.basedOnRuns} historical runs)`, inline: true },
+    { name: "Plan", value: bulletList, inline: false },
+  ];
+
+  return {
+    title: `Plan Preview: \`${preview.runId}\``,
+    description: `React with \\u2705 to approve or \\u274c to reject.`,
+    color: 0xdaa038,
+    fields,
+    footer: { text: "forgectl — awaiting approval" },
   };
 }
