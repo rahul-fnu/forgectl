@@ -1,5 +1,16 @@
 import type { ForgectlConfig } from "../config/schema.js";
 import type { TrackerIssue } from "../tracker/types.js";
+import { slugify } from "../utils/slug.js";
+
+const FEATURE_BRANCH_THRESHOLD = 3;
+
+/**
+ * Build a feature branch name from a title.
+ * Returns `feature/<slug>` for use as the shared PR target for sub-issues.
+ */
+export function buildFeatureBranchName(title: string): string {
+  return `feature/${slugify(title)}`;
+}
 
 /**
  * Heuristic: should this prompt be decomposed into sub-issues?
@@ -41,6 +52,9 @@ export function decomposeDispatch(
   const now = new Date().toISOString();
   const parentId = `dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+  const featureBranch = childTitles.length >= FEATURE_BRANCH_THRESHOLD
+    ? buildFeatureBranchName(title) : undefined;
+
   const parentIssue: TrackerIssue = {
     id: parentId,
     identifier: parentId,
@@ -54,7 +68,11 @@ export function decomposeDispatch(
     created_at: now,
     updated_at: now,
     blocked_by: [],
-    metadata: { source: "dispatch", ...(opts.repo ? { repo: opts.repo } : {}) },
+    metadata: {
+      source: "dispatch",
+      ...(opts.repo ? { repo: opts.repo } : {}),
+      ...(featureBranch ? { featureBranch } : {}),
+    },
   };
 
   const childIssues: TrackerIssue[] = childTitles.map((childTitle, i) => {
@@ -73,7 +91,12 @@ export function decomposeDispatch(
       created_at: now,
       updated_at: now,
       blocked_by: prevId ? [prevId] : [],
-      metadata: { source: "dispatch", parentId, ...(opts.repo ? { repo: opts.repo } : {}) },
+      metadata: {
+        source: "dispatch",
+        parentId,
+        ...(opts.repo ? { repo: opts.repo } : {}),
+        ...(featureBranch ? { featureBranch } : {}),
+      },
     };
   });
 
@@ -125,6 +148,7 @@ export type LLMCallFn = (prompt: string, model: string) => Promise<string>;
 export interface DecomposeResult {
   parentIdentifier: string;
   childIdentifiers: string[];
+  featureBranch?: string;
 }
 
 /**
@@ -264,5 +288,8 @@ export async function decomposeToIssues(
     }
   }
 
-  return { parentIdentifier, childIdentifiers };
+  const featureBranch = decomposition.children.length >= FEATURE_BRANCH_THRESHOLD
+    ? buildFeatureBranchName(decomposition.parent.title) : undefined;
+
+  return { parentIdentifier, childIdentifiers, featureBranch };
 }

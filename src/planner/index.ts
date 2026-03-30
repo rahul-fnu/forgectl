@@ -19,6 +19,7 @@ export {
   parseDecompositionResponse,
   shouldDecompose,
   decomposeDispatch,
+  buildFeatureBranchName,
 } from "./decompose-to-issues.js";
 export type {
   DecomposeInput,

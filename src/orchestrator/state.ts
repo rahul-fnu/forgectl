@@ -34,6 +34,8 @@ export interface OrchestratorState {
   retryAttempts: Map<string, number>;
   /** Maps issue ID → branch name produced by that issue's agent run. Used for stacked PRs. */
   issueBranches: Map<string, string>;
+  /** Maps parent issue ID → feature branch name. Sub-issue PRs target this branch instead of main. */
+  featureBranches: Map<string, string>;
   /** Issues recently completed and closed — guards against re-dispatch before tracker API reflects Done state. Value is timestamp (ms). */
   recentlyCompleted: Map<string, number>;
 }
@@ -48,6 +50,7 @@ export function createState(): OrchestratorState {
     retryTimers: new Map(),
     retryAttempts: new Map(),
     issueBranches: new Map(),
+    featureBranches: new Map(),
     recentlyCompleted: new Map(),
   };
 }
