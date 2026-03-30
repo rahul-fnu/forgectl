@@ -386,9 +386,10 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
         return { error: "Invalid JSON" };
       }
 
-      const shouldTick = handleLinearWebhook(payload, subIssueCache!);
+      const activeStates = config.tracker?.active_states;
+      const result = handleLinearWebhook(payload, subIssueCache!, activeStates);
 
-      if (shouldTick && orchestrator) {
+      if (result.shouldTick && orchestrator) {
         void orchestrator.triggerTick();
       }
 

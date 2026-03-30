@@ -4,6 +4,7 @@ import {
   handleLinearWebhook,
   verifyLinearWebhookSignature,
   type LinearWebhookPayload,
+  type LinearWebhookResult,
 } from "../../src/tracker/linear.js";
 
 // ---- Config Validation ----
@@ -233,17 +234,24 @@ describe("handleLinearWebhook", () => {
   });
 
   it("ignores non-Issue events", () => {
-    expect(handleLinearWebhook({ action: "create", type: "Comment", data: { id: "c1" } }, cache)).toBe(false);
-    expect(handleLinearWebhook({ action: "update", type: "Project", data: { id: "p1" } }, cache)).toBe(false);
-    expect(handleLinearWebhook({ action: "create", type: "Label", data: { id: "l1" } }, cache)).toBe(false);
+    expect(handleLinearWebhook({ action: "create", type: "Comment", data: { id: "c1" } }, cache).relevant).toBe(false);
+    expect(handleLinearWebhook({ action: "update", type: "Project", data: { id: "p1" } }, cache).relevant).toBe(false);
+    expect(handleLinearWebhook({ action: "create", type: "Label", data: { id: "l1" } }, cache).relevant).toBe(false);
   });
 
-  it("returns true on issue create", () => {
-    expect(handleLinearWebhook({ action: "create", type: "Issue", data: { id: "i1" } }, cache)).toBe(true);
+  it("returns shouldTick on issue create", () => {
+    const result = handleLinearWebhook({ action: "create", type: "Issue", data: { id: "i1" } }, cache);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
+    expect(result.issueId).toBe("i1");
+    expect(result.reason).toBe("issue_created");
   });
 
-  it("returns true on issue remove", () => {
-    expect(handleLinearWebhook({ action: "remove", type: "Issue", data: { id: "i1" } }, cache)).toBe(true);
+  it("returns shouldTick on issue remove", () => {
+    const result = handleLinearWebhook({ action: "remove", type: "Issue", data: { id: "i1" } }, cache);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
+    expect(result.reason).toBe("issue_removed");
   });
 
   it("invalidates parent cache when child issue is created", () => {
@@ -281,7 +289,9 @@ describe("handleLinearWebhook", () => {
       updatedFrom: { stateId: "old-state-uuid" },
     }, cache);
 
-    expect(result).toBe(true);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
+    expect(result.reason).toBe("state_change");
     expect(cache.get("parent-1")).toBeNull();
   });
 
@@ -332,7 +342,9 @@ describe("handleLinearWebhook", () => {
       updatedFrom: { parentId: "old-parent" },
     }, cache);
 
-    expect(result).toBe(true);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
+    expect(result.reason).toBe("parent_change");
     expect(cache.get("old-parent")).toBeNull();
     expect(cache.get("new-parent")).toBeNull();
   });
@@ -345,7 +357,8 @@ describe("handleLinearWebhook", () => {
       updatedFrom: { parentId: null },
     }, cache);
 
-    expect(result).toBe(true);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
   });
 
   it("triggers on label change", () => {
@@ -356,28 +369,106 @@ describe("handleLinearWebhook", () => {
       updatedFrom: { labelIds: ["old-label-id"] },
     }, cache);
 
-    expect(result).toBe(true);
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(true);
+    expect(result.reason).toBe("label_change");
   });
 
-  it("returns false on irrelevant update (title change)", () => {
-    expect(handleLinearWebhook({
+  it("returns not relevant on irrelevant update (title change)", () => {
+    const result = handleLinearWebhook({
       action: "update",
       type: "Issue",
       data: { id: "i1" },
       updatedFrom: { title: "Old title" },
-    }, cache)).toBe(false);
+    }, cache);
+    expect(result.relevant).toBe(false);
+    expect(result.shouldTick).toBe(false);
   });
 
-  it("returns false on missing data", () => {
-    expect(handleLinearWebhook({ action: "create", type: "Issue" }, cache)).toBe(false);
+  it("returns not relevant on missing data", () => {
+    const result = handleLinearWebhook({ action: "create", type: "Issue" }, cache);
+    expect(result.relevant).toBe(false);
   });
 
-  it("returns false on missing issue id in data", () => {
-    expect(handleLinearWebhook({
+  it("returns not relevant on missing issue id in data", () => {
+    const result = handleLinearWebhook({
       action: "create",
       type: "Issue",
       data: { title: "No id" },
-    }, cache)).toBe(false);
+    }, cache);
+    expect(result.relevant).toBe(false);
+  });
+
+  it("triggers tick when state changes to an active state (Todo)", () => {
+    const result = handleLinearWebhook({
+      action: "update",
+      type: "Issue",
+      data: { id: "i1", state: { name: "Todo" } },
+      updatedFrom: { stateId: "old-state" },
+    }, cache, ["Todo", "In Progress"]);
+
+    expect(result.shouldTick).toBe(true);
+    expect(result.newState).toBe("Todo");
+    expect(result.reason).toBe("state_change");
+  });
+
+  it("does not trigger tick when state changes to a non-active state", () => {
+    const result = handleLinearWebhook({
+      action: "update",
+      type: "Issue",
+      data: { id: "i1", state: { name: "Done" } },
+      updatedFrom: { stateId: "old-state" },
+    }, cache, ["Todo", "In Progress"]);
+
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(false);
+    expect(result.newState).toBe("Done");
+  });
+
+  it("triggers tick when issue created with active state", () => {
+    const result = handleLinearWebhook({
+      action: "create",
+      type: "Issue",
+      data: { id: "i1", state: { name: "Todo" } },
+    }, cache, ["Todo"]);
+
+    expect(result.shouldTick).toBe(true);
+    expect(result.issueId).toBe("i1");
+    expect(result.reason).toBe("issue_created");
+    expect(result.newState).toBe("Todo");
+  });
+
+  it("does not trigger tick when issue created with non-active state", () => {
+    const result = handleLinearWebhook({
+      action: "create",
+      type: "Issue",
+      data: { id: "i1", state: { name: "Backlog" } },
+    }, cache, ["Todo", "In Progress"]);
+
+    expect(result.relevant).toBe(true);
+    expect(result.shouldTick).toBe(false);
+  });
+
+  it("active state matching is case-insensitive", () => {
+    const result = handleLinearWebhook({
+      action: "update",
+      type: "Issue",
+      data: { id: "i1", state: { name: "todo" } },
+      updatedFrom: { stateId: "old-state" },
+    }, cache, ["Todo"]);
+
+    expect(result.shouldTick).toBe(true);
+  });
+
+  it("triggers tick on state change when no activeStates provided (backwards-compat)", () => {
+    const result = handleLinearWebhook({
+      action: "update",
+      type: "Issue",
+      data: { id: "i1", state: { name: "Done" } },
+      updatedFrom: { stateId: "old-state" },
+    }, cache);
+
+    expect(result.shouldTick).toBe(true);
   });
 });
 
