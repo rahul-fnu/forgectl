@@ -111,29 +111,12 @@ export async function scheduledQATick(deps: ScheduledQADeps): Promise<{ created:
 }
 
 /**
- * Scan the KG for source files with no test coverage mappings.
+ * Scan for source files with no test coverage (simple filename matching).
  */
-async function scanCoverageGaps(kgPath: string): Promise<string[]> {
-  const { createKGDatabase } = await import("../kg/storage.js");
-  const db = createKGDatabase(kgPath);
-  try {
-    const allModules = db.prepare(
-      "SELECT path FROM kg_modules WHERE is_test = 0 AND path LIKE '%.ts' AND path NOT LIKE '%/index.ts'",
-    ).all() as Array<{ path: string }>;
-
-    const gaps: string[] = [];
-    for (const mod of allModules) {
-      const mappings = db.prepare(
-        "SELECT COUNT(*) as count FROM kg_test_mappings WHERE source_file = ?",
-      ).get(mod.path) as { count: number };
-      if (mappings.count === 0) {
-        gaps.push(mod.path);
-      }
-    }
-    return gaps;
-  } finally {
-    db.close();
-  }
+async function scanCoverageGaps(_kgPath: string): Promise<string[]> {
+  // KG removed — return empty. Coverage gap detection now uses simple
+  // filename matching in findCoverageGaps (merge-daemon/pr-processor.ts).
+  return [];
 }
 
 /**

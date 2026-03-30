@@ -21,7 +21,7 @@ import type { ReviewFindingsRepository } from "../storage/repositories/review-fi
 import { extractAcceptanceCriteria } from "../github/pr-description.js";
 import { fetchCIErrorLog } from "../github/ci-logs.js";
 import { load as yamlLoad } from "js-yaml";
-import { createKGDatabase, getTestsFor, resolveKGPath } from "../kg/storage.js";
+import { join, dirname, basename } from "node:path";
 
 const API_BASE = "https://api.github.com";
 
@@ -1287,21 +1287,27 @@ export class PRProcessor {
   }
 }
 
+/**
+ * Find source files that lack corresponding test files.
+ * Simple filename-matching approach: src/foo/bar.ts -> test/foo/bar.test.ts
+ */
 export function findCoverageGaps(changedFiles: string[], workDir: string): string[] {
-  const kgPath = resolveKGPath(workDir);
-  if (!existsSync(kgPath)) return [];
-
-  const db = createKGDatabase(kgPath);
-  try {
-    const gaps: string[] = [];
-    for (const file of changedFiles) {
-      const mappings = getTestsFor(db, file);
-      if (mappings.length === 0 || mappings.every((m) => m.testFiles.length === 0)) {
-        gaps.push(file);
-      }
-    }
-    return gaps;
-  } finally {
-    db.close();
+  const gaps: string[] = [];
+  for (const file of changedFiles) {
+    if (!file.match(/\.(ts|js|py|go|rs)$/) || file.includes("test") || file.includes("spec")) continue;
+    // Check common test file patterns
+    const base = basename(file).replace(/\.(ts|js|py|go|rs)$/, "");
+    const dir = dirname(file);
+    const testDir = dir.replace(/^src\//, "test/");
+    const candidates = [
+      join(testDir, `${base}.test.ts`),
+      join(testDir, `${base}.test.js`),
+      join(dir, `${base}.test.ts`),
+      join(dir, `${base}_test.go`),
+      join(dir, `${base}_test.py`),
+    ];
+    const hasTest = candidates.some(t => existsSync(join(workDir, t)));
+    if (!hasTest) gaps.push(file);
   }
+  return gaps;
 }

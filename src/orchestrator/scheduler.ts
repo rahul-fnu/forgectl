@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type { OrchestratorState } from "./state.js";
 import type { TwoTierSlotManager } from "./state.js";
 import type { TrackerAdapter, TrackerIssue } from "../tracker/types.js";
@@ -14,6 +13,9 @@ import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
 import type { ContextResult } from "../context/builder.js";
+
+/** In-memory dedup for cron schedules (resets on daemon restart). */
+const scheduleLastRun = new Map<string, string>();
 import type { CooldownRepository } from "../storage/repositories/cooldown.js";
 import type { UsageLimitRecovery } from "./usage-limit-recovery.js";
 import type { AlertManager } from "../alerting/manager.js";
@@ -161,7 +163,7 @@ export async function tick(deps: TickDeps): Promise<void> {
   }
 
   // Step 1.7: Evaluate cron schedules and inject synthetic issues
-  const scheduledIssues = await evaluateSchedules(config, deps.kgDbPath ?? resolveDefaultKgPath(config), logger);
+  const scheduledIssues = await evaluateSchedules(config, logger);
 
   // Step 2: Validate config (tracker must be defined)
   if (!config.tracker && scheduledIssues.length === 0) {
@@ -230,60 +232,11 @@ export async function tick(deps: TickDeps): Promise<void> {
     ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo, costRepo: deps.costRepo, retryRepo: deps.retryRepo }
     : undefined;
 
-  // Step 8: Auto-rebuild shared KG before building context
-  const sharedKgPath = deps.kgDbPath ?? resolveDefaultKgPath(config);
-  if (sorted.length > 0) {
-    try {
-      await autoRebuildSharedKG(sharedKgPath, config, logger);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn("scheduler", `Auto-rebuild KG failed (continuing with existing): ${msg}`);
-    }
-  }
-
-  // Step 9: Build KG context for eligible issues (open + close db per tick)
-  // Prefer per-workspace kg.db if it exists, fall back to the shared kg.db
+  // KG removed — agents read CLAUDE.md natively from the workspace
+  // KG context removed — agents read CLAUDE.md natively from the workspace
   const kgContextMap = new Map<string, ContextResult>();
   if (sorted.length > 0) {
-    const { createKGDatabase } = await import("../kg/storage.js");
-    const { buildContext } = await import("../context/builder.js");
-    const maxAgents = config.orchestrator?.max_concurrent_agents ?? 1;
-
-    for (const issue of sorted.slice(0, available)) {
-      // Resolve per-workspace kg.db path, fall back to shared kg.db
-      let kgPath = sharedKgPath;
-      let wsKgPath: string | undefined;
-      try {
-        const workspaceId = maxAgents > 1
-          ? issue.identifier
-          : (config.tracker?.repo?.replace("/", "_") ?? issue.identifier);
-        wsKgPath = workspaceManager.getWorkspacePath(workspaceId) + "/kg.db";
-        if (existsSync(wsKgPath)) {
-          kgPath = wsKgPath;
-        }
-      } catch {
-        // Workspace path resolution failed, use shared kg.db
-      }
-
-      if (!existsSync(kgPath)) {
-        logger.warn("scheduler", `KG database not found for ${issue.identifier} (tried ${wsKgPath ?? "n/a"} and ${sharedKgPath})`);
-        continue;
-      }
-
-      let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-      try {
-        kgDb = createKGDatabase(kgPath);
-        const taskSpec = issueToTaskSpec(issue);
-        const ctx = await buildContext(taskSpec, kgDb);
-        kgContextMap.set(issue.id, ctx);
-        logger.info("scheduler", `KG context for ${issue.identifier}: ${ctx.includedFiles.length} files, ${ctx.budget.used}/${ctx.budget.max} tokens (db=${kgPath})`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn("scheduler", `Failed to build KG context for ${issue.identifier}: ${msg}`);
-      } finally {
-        try { kgDb?.close(); } catch { /* best-effort */ }
-      }
-    }
+    // No KG context building needed — Claude Code reads CLAUDE.md automatically
   }
 
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
@@ -298,7 +251,6 @@ export async function tick(deps: TickDeps): Promise<void> {
  */
 export async function evaluateSchedules(
   config: ForgectlConfig,
-  kgDbPath: string,
   logger: Logger,
 ): Promise<TrackerIssue[]> {
   const schedules = config.schedules ?? [];
@@ -307,41 +259,23 @@ export async function evaluateSchedules(
   const now = new Date();
   const results: TrackerIssue[] = [];
 
-  let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-  try {
-    const { createKGDatabase, getMeta, saveMeta } = await import("../kg/storage.js");
-    kgDb = createKGDatabase(kgDbPath);
+  for (const schedule of schedules) {
+    try {
+      const fields = parseCron(schedule.cron);
+      if (!cronMatches(fields, now)) continue;
 
-    for (const schedule of schedules) {
-      try {
-        const fields = parseCron(schedule.cron);
-        if (!cronMatches(fields, now)) continue;
+      // Simple dedup: track last-run in memory (resets on daemon restart, which is fine)
+      const currentMinute = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      const metaKey = `schedule_last_run:${schedule.name}`;
+      if (scheduleLastRun.get(metaKey) === currentMinute) continue;
+      scheduleLastRun.set(metaKey, currentMinute);
 
-        // Check last-run to prevent duplicate dispatch within the same minute
-        const metaKey = `schedule_last_run:${schedule.name}`;
-        const lastRun = getMeta(kgDb, metaKey);
-        const currentMinute = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-
-        if (lastRun === currentMinute) {
-          logger.debug("scheduler", `Schedule "${schedule.name}" already ran at ${currentMinute}, skipping`);
-          continue;
-        }
-
-        // Record this run
-        saveMeta(kgDb, metaKey, currentMinute);
-
-        results.push(scheduleToSyntheticIssue(schedule, now));
-        logger.info("scheduler", `Schedule "${schedule.name}" triggered at ${currentMinute}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn("scheduler", `Failed to evaluate schedule "${schedule.name}": ${msg}`);
-      }
+      results.push(scheduleToSyntheticIssue(schedule, now));
+      logger.info("scheduler", `Schedule "${schedule.name}" triggered at ${currentMinute}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("scheduler", `Failed to evaluate schedule "${schedule.name}": ${msg}`);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("scheduler", `Failed to open KG for schedule tracking: ${msg}`);
-  } finally {
-    try { kgDb?.close(); } catch { /* best-effort */ }
   }
 
   return results;
@@ -373,140 +307,8 @@ function scheduleToSyntheticIssue(schedule: ScheduleEntry, now: Date): TrackerIs
 
 /**
  * Auto-rebuild the shared KG if it is stale or missing.
- * Uses incremental build when git can supply changed files, falls back to full build.
+ * KG removed — agents read CLAUDE.md natively from the workspace.
  */
-async function autoRebuildSharedKG(
-  kgPath: string,
-  _config: ForgectlConfig,
-  logger: Logger,
-): Promise<void> {
-  const { buildFullGraph, buildIncrementalGraph } = await import("../kg/builder.js");
-  const { getMeta, createKGDatabase } = await import("../kg/storage.js");
-
-  const repoPath = process.cwd();
-
-  if (!existsSync(kgPath)) {
-    logger.info("scheduler", `KG not found at ${kgPath}, running full build`);
-    await buildFullGraph(repoPath, kgPath);
-    try {
-      const { execFile } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const execFileP = promisify(execFile);
-      const { stdout } = await execFileP("git", ["-C", repoPath, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
-      await saveLastBuildCommit(kgPath, stdout.trim(), createKGDatabase, logger);
-    } catch {
-      // best-effort
-    }
-    return;
-  }
-
-  // Check staleness: retrieve last build commit SHA
-  let lastBuildCommit: string | null = null;
-  let kgDb: import("../kg/storage.js").KGDatabase | undefined;
-  try {
-    kgDb = createKGDatabase(kgPath);
-    lastBuildCommit = getMeta(kgDb, "last_build_commit");
-  } finally {
-    try { kgDb?.close(); } catch { /* best-effort */ }
-  }
-
-  // Try incremental build using git log since last build commit
-  if (lastBuildCommit) {
-    try {
-      const { execFile } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const execFileP = promisify(execFile);
-
-      // Get current HEAD commit
-      const { stdout: headSha } = await execFileP("git", [
-        "-C", repoPath, "rev-parse", "HEAD",
-      ], { maxBuffer: 1024 * 1024 });
-      const currentCommit = headSha.trim();
-
-      if (currentCommit === lastBuildCommit) {
-        logger.debug("scheduler", "KG is up to date, no rebuild needed");
-        return;
-      }
-
-      const { stdout } = await execFileP("git", [
-        "-C", repoPath, "log", "--name-only", "--diff-filter=ACMR",
-        "--pretty=format:", `${lastBuildCommit}..HEAD`,
-      ], { maxBuffer: 1024 * 1024 });
-      const changed = [...new Set(stdout.trim().split("\n").filter(
-        f => f && (f.endsWith(".ts") || f.endsWith(".tsx")) && !f.endsWith(".d.ts"),
-      ))];
-      if (changed.length === 0) {
-        logger.debug("scheduler", "KG is up to date, no rebuild needed");
-        // Still update the commit SHA so we don't re-scan the same range
-        await saveLastBuildCommit(kgPath, currentCommit, createKGDatabase, logger);
-        return;
-      }
-      logger.info("scheduler", `KG incremental rebuild: ${changed.length} changed files`);
-      await buildIncrementalGraph(repoPath, changed, kgPath);
-      await saveLastBuildCommit(kgPath, currentCommit, createKGDatabase, logger);
-      return;
-    } catch {
-      // git log failed, fall through to full build
-    }
-  }
-
-  logger.info("scheduler", "KG full rebuild triggered (no prior build or git log failed)");
-  await buildFullGraph(repoPath, kgPath);
-
-  // Record current HEAD commit so subsequent ticks can do incremental builds
-  try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileP = promisify(execFile);
-    const { stdout } = await execFileP("git", ["-C", repoPath, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
-    await saveLastBuildCommit(kgPath, stdout.trim(), createKGDatabase, logger);
-  } catch {
-    // best-effort
-  }
-}
-
-async function saveLastBuildCommit(
-  kgPath: string,
-  commitSha: string,
-  createKGDatabase: typeof import("../kg/storage.js").createKGDatabase,
-  logger: Logger,
-): Promise<void> {
-  let db: import("../kg/storage.js").KGDatabase | undefined;
-  try {
-    const { saveMeta } = await import("../kg/storage.js");
-    db = createKGDatabase(kgPath);
-    saveMeta(db, "last_build_commit", commitSha);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn("scheduler", `Failed to save last_build_commit: ${msg}`);
-  } finally {
-    try { db?.close(); } catch { /* best-effort */ }
-  }
-}
-
-function resolveDefaultKgPath(config: ForgectlConfig): string {
-  const storagePath = config.storage?.db_path ?? "~/.forgectl/forgectl.db";
-  const dir = storagePath.replace(/\/[^/]+$/, "");
-  const expanded = dir.replace(/^~/, process.env.HOME || "/tmp");
-  return `${expanded}/kg.db`;
-}
-
-function issueToTaskSpec(issue: import("../tracker/types.js").TrackerIssue): import("../task/types.js").TaskSpec {
-  const fileRefPattern = /(?:src|test|lib)\/[\w/.=-]+\.(?:ts|js|tsx|jsx)/g;
-  const text = `${issue.title}\n${issue.description}`;
-  const files = [...text.matchAll(fileRefPattern)].map(m => m[0]);
-
-  return {
-    id: issue.id,
-    title: issue.title,
-    description: issue.description,
-    context: { files },
-    constraints: [],
-    acceptance: [],
-    decomposition: { strategy: "forbidden" },
-    effort: {},
-  };
-}
 
 /**
  * Start the scheduler tick loop using setTimeout chain.
