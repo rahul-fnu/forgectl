@@ -8,6 +8,7 @@ const COLOR_MAP: Record<AlertEventType, number> = {
   cost_ceiling_hit: 0xdaa038,
   usage_limit_detected: 0xdaa038,
   review_escalated: 0xdaa038,
+  claude_md_update: 0x5865f2,
 };
 
 export function formatDiscordPayload(event: AlertEvent): Record<string, unknown> {
