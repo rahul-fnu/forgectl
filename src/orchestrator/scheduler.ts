@@ -185,6 +185,9 @@ export async function tick(deps: TickDeps): Promise<void> {
   }
   candidates = [...candidates, ...scheduledIssues];
 
+  // Cache candidates for immediate dispatch when slots open (avoids extra API calls)
+  state.cachedCandidates = candidates;
+
   // Step 4: Build terminalIssueIds from SubIssueCache (SUBISSUE-03), then filter candidates
   const terminalIds = new Set<string>();
   if (deps.subIssueCache) {

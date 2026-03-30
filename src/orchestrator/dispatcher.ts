@@ -367,6 +367,44 @@ export function handleSynthesizerOutcome(
 }
 
 /**
+ * Dispatch the next eligible issue from the cached candidates.
+ * Called after a slot opens (issue released) to avoid waiting for the next poll tick.
+ * Uses state.cachedCandidates so no tracker API call is needed.
+ */
+export function dispatchNextFromCache(
+  state: OrchestratorState,
+  tracker: TrackerAdapter,
+  config: ForgectlConfig,
+  workspaceManager: WorkspaceManager,
+  promptTemplate: string,
+  logger: Logger,
+  metrics: MetricsCollector,
+  slotManager: TwoTierSlotManager | undefined,
+  governance?: GovernanceOpts,
+  githubContext?: GitHubContext,
+  delegationManager?: DelegationManager,
+  subIssueCache?: SubIssueCache,
+  skills?: string[],
+  validationConfig?: { steps: import("../config/schema.js").ValidationStep[]; on_failure: string },
+  promotedFindings?: import("../storage/repositories/review-findings.js").ReviewFindingRow[],
+  usageLimitRecovery?: UsageLimitRecovery,
+): void {
+  if (!slotManager || !slotManager.hasTopLevelSlot()) return;
+  if (state.cachedCandidates.length === 0) return;
+
+  const doneLabel = config.tracker?.done_label;
+  const eligible = filterCandidates(state.cachedCandidates, state, new Set(), doneLabel);
+  if (eligible.length === 0) return;
+
+  const sorted = sortCandidates(eligible);
+  const available = slotManager.availableTopLevelSlots();
+  for (const issue of sorted.slice(0, available)) {
+    logger.info("dispatcher", `Dispatching ${issue.identifier} from cache (slot opened)`);
+    void dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, githubContext, delegationManager, subIssueCache, skills, validationConfig, undefined, promotedFindings, slotManager, usageLimitRecovery);
+  }
+}
+
+/**
  * Dispatch an issue: claim it, start a worker in the background,
  * and handle completion with retry logic.
  */
@@ -986,6 +1024,7 @@ async function executeWorkerAndHandle(
       cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
       releaseIssue(state, issue.id);
       logger.info("dispatcher", `Post-release: claimed=${state.claimed.size}, running=${state.running.size}`);
+      dispatchNextFromCache(state, tracker, config, workspaceManager, promptTemplate, logger, metrics, slotManager, governance, githubContext, delegationManager, subIssueCache, skills, validationConfig, promotedFindings, usageLimitRecovery);
 
       // Dispatcher-level Linear comment fallback (scheduler-dispatched runs without webhook context)
       if (!githubContext && config.tracker?.comments_enabled !== false) {
@@ -1040,6 +1079,7 @@ async function executeWorkerAndHandle(
 
       cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
       releaseIssue(state, issue.id);
+      dispatchNextFromCache(state, tracker, config, workspaceManager, promptTemplate, logger, metrics, slotManager, governance, githubContext, delegationManager, subIssueCache, skills, validationConfig, promotedFindings, usageLimitRecovery);
     } else {
       // Failure path: if this is a synthesizer run, post error comment and do NOT close parent
       const isSynthesizerFailure = issue.labels.includes("forge:synthesize");
@@ -1074,6 +1114,7 @@ async function executeWorkerAndHandle(
 
         cleanupRetryRecords(issue.id, governanceWithRunId?.retryRepo);
         releaseIssue(state, issue.id);
+        dispatchNextFromCache(state, tracker, config, workspaceManager, promptTemplate, logger, metrics, slotManager, governance, githubContext, delegationManager, subIssueCache, skills, validationConfig, promotedFindings, usageLimitRecovery);
 
         // Dispatcher-level Linear comment fallback for failed runs (scheduler-dispatched)
         if (!githubContext && config.tracker?.comments_enabled !== false) {
@@ -1163,6 +1204,7 @@ async function executeWorkerAndHandle(
     }
 
     releaseIssue(state, issue.id);
+    dispatchNextFromCache(state, tracker, config, workspaceManager, promptTemplate, logger, metrics, slotManager, governance, githubContext, delegationManager, subIssueCache, skills, validationConfig, promotedFindings, usageLimitRecovery);
   }
 }
 
