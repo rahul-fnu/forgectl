@@ -1,5 +1,14 @@
 import type { RunPlan } from "../workflow/types.js";
-import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
+
+export interface ReviewFindingRow {
+  id: number;
+  category: string;
+  pattern: string;
+  module: string;
+  exampleComment: string;
+  occurrences: number;
+  promoted: number;
+}
 
 export interface HandoffEntry {
   nodeId: string;

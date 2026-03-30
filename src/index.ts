@@ -5,22 +5,15 @@ import { runCommand, runSummaryCommand } from "./cli/run.js";
 import { authCommand } from "./cli/auth.js";
 import { initCommand } from "./cli/init.js";
 import { workflowsCommand } from "./cli/workflows.js";
-import {
-  pipelineShowCommand,
-  pipelineRunCommand,
-  pipelineStatusCommand,
-  pipelineRerunCommand,
-  pipelineRevertCommand,
-} from "./cli/pipeline.js";
 import { inspectCommand, summaryCommand } from "./cli/inspect.js";
 import { registerDoctorCommand } from "./cli/doctor.js";
 import { cacheListCommand, cacheClearCommand, cachePrebuildCommand } from "./cli/cache.js";
 import { imagesBuildCommand, imagesListCommand } from "./cli/images.js";
-import { costsCommand } from "./cli/costs.js";
-import { statsCommand } from "./cli/stats.js";
 import { isDaemonRunning, readPid } from "./daemon/lifecycle.js";
 import { isMergeDaemonRunning, readMergeDaemonPid } from "./merge-daemon/lifecycle.js";
 import { logsCommand } from "./cli/logs.js";
+import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
+import { discordCommand } from "./cli/discord.js";
 
 const program = new Command();
 
@@ -48,16 +41,7 @@ program
   .option("--verbose", "Show full agent output")
   .option("--no-cleanup", "Leave container running after run")
   .option("--dry-run", "Show run plan without executing")
-  .option("--no-skills", "Disable skill/config bind-mounting for this run")
-  .option("--no-context", "Skip KG context building for this run")
-  .option("--no-team", "Disable agent team mode for this run")
-  .option("--team-size <n>", "Override team size (2-5)", parseInt)
   .action((rawOpts: Record<string, unknown>) => {
-    // Commander's --no-context sets context=false, normalize to noContext boolean
-    if (rawOpts.context === false) {
-      rawOpts.noContext = true;
-      rawOpts.context = undefined;
-    }
     return runCommand(rawOpts as any);
   });
 
@@ -124,45 +108,10 @@ program
   .description("Show the structured summary for a run")
   .action(summaryCommand);
 
-// forgectl trace
-program
-  .command("trace <runId>")
-  .description("Show waterfall view of trace spans for a run")
-  .action(traceCommand);
-
-// forgectl costs
-program
-  .command("costs")
-  .description("Show cost summary")
-  .option("--run-id <id>", "Show costs for a specific run")
-  .option("--since <duration>", "Show costs since duration (e.g. 24h, 7d)")
-  .option("--workflow <name>", "Show costs for a specific workflow")
-  .action(costsCommand);
-
-// forgectl stats
-program
-  .command("stats")
-  .description("Show run statistics and analytics")
-  .option("--since <duration>", "Statistics period (e.g. 7d, 24h, 30d)", "7d")
-  .option("--json", "Output as JSON")
-  .action(statsCommand);
-
-// forgectl analyze
-program
-  .command("analyze")
-  .description("Analyze run outcomes for patterns and recommendations")
-  .option("--since <duration>", "Analysis period (e.g. 7d, 24h, 30d)")
-  .option("--module <path>", "Filter to runs touching this module (e.g. src/auth)")
-  .option("--compare-context", "Compare context-enabled vs disabled runs side-by-side")
-  .option("--review-calibration", "Show review agent false positive rate per module")
-  .option("--review-quality", "Show review daemon quality stats: approval rate, common findings, false positives")
-  .option("--suggest", "Generate improvement task suggestions from outcome patterns")
-  .action(analyzeCommand);
-
 // forgectl orchestrate — start daemon with orchestration enabled
 program
   .command("orchestrate")
-  .description("Start daemon with orchestration enabled (polls tracker, dispatches agents)")
+  .description("Start daemon with orchestration enabled")
   .option("-p, --port <port>", "daemon port", "4856")
   .option("--foreground", "Run in foreground (don't detach)")
   .option("-c, --config <path>", "Config file path")
@@ -217,14 +166,12 @@ program
       const { startDaemon } = await import("./daemon/server.js");
       await startDaemon(port, false, configPath);
     } else {
-      // Spawn detached background process
       const extraArgs = opts.config ? ["--config", resolve(opts.config)] : [];
       const child = spawn(process.execPath, [process.argv[1], "up", "--foreground", "--port", String(port), ...extraArgs], {
         detached: true,
         stdio: "ignore",
       });
       child.unref();
-      // Give it a moment to start
       await new Promise(r => setTimeout(r, 500));
       if (isDaemonRunning()) {
         console.log(`forgectl daemon started on http://127.0.0.1:${port}`);
@@ -267,7 +214,6 @@ program
     }
     console.log(`Daemon: running (PID ${pid})`);
 
-    // Fetch runs from daemon
     try {
       const res = await fetch("http://127.0.0.1:4856/runs");
       if (res.ok) {
@@ -322,54 +268,7 @@ program
   .option("--follow", "Stream events as they arrive (SSE)")
   .action(logsCommand);
 
-// forgectl pipeline
-const pipelineCmd = program
-  .command("pipeline")
-  .description("DAG pipeline orchestration");
-
-pipelineCmd
-  .command("show")
-  .description("Display the pipeline DAG")
-  .requiredOption("-f, --file <path>", "Pipeline YAML file")
-  .action(pipelineShowCommand);
-
-pipelineCmd
-  .command("run")
-  .description("Execute a pipeline")
-  .requiredOption("-f, --file <path>", "Pipeline YAML file")
-  .option("-r, --repo <path>", "Repository path override")
-  .option("--dry-run", "Show execution plan without running")
-  .option("--verbose", "Show detailed output")
-  .option("--max-parallel <n>", "Max parallel nodes")
-  .option("--from <node>", "Resume from this node")
-  .action(pipelineRunCommand);
-
-pipelineCmd
-  .command("status")
-  .description("Show pipeline status")
-  .requiredOption("-f, --file <path>", "Pipeline YAML file")
-  .action(pipelineStatusCommand);
-
-pipelineCmd
-  .command("rerun")
-  .description("Re-run pipeline from a specific node")
-  .requiredOption("-f, --file <path>", "Pipeline YAML file")
-  .requiredOption("--from <node>", "Node to start from")
-  .option("--pipeline-run <id>", "Checkpoint source pipeline run ID")
-  .option("-r, --repo <path>", "Repository path override")
-  .option("--verbose", "Show detailed output")
-  .action(pipelineRerunCommand);
-
-pipelineCmd
-  .command("revert")
-  .description("Revert to a checkpoint")
-  .requiredOption("-f, --file <path>", "Pipeline YAML file")
-  .requiredOption("--to <node>", "Node to revert to")
-  .option("--pipeline-run <id>", "Pipeline run ID")
-  .action(pipelineRevertCommand);
-
-
-// forgectl merge-daemon — start a separate daemon that processes forge PRs sequentially
+// forgectl merge-daemon
 program
   .command("merge-daemon")
   .description("Start merge daemon (processes forge PRs sequentially: rebase, fix, review, CI, merge)")
@@ -456,13 +355,6 @@ imagesCmd
   .action(imagesListCommand);
 
 // forgectl repo — manage per-repo config profiles
-import { repoListCommand, repoAddCommand, repoShowCommand } from "./cli/repo.js";
-import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli/project.js";
-import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
-import { analyzeCommand } from "./cli/analyze.js";
-import { traceCommand } from "./cli/trace.js";
-import { discordCommand } from "./cli/discord.js";
-
 const repoCmd = program
   .command("repo")
   .description("Manage per-repo config profiles (~/.forgectl/repos/)");
@@ -488,40 +380,6 @@ repoCmd
   .command("show <name>")
   .description("Show merged config for a repo profile")
   .action(repoShowCommand);
-
-// forgectl project — interactive project setup
-const projectCmd = program
-  .command("project")
-  .description("Add and manage projects (auto-detects stack from repo)");
-
-projectCmd
-  .command("add <url>")
-  .description("Clone a repo, detect stack, and generate a profile")
-  .action(projectAddCommand);
-
-projectCmd
-  .command("list")
-  .description("List configured projects with stack info")
-  .action(projectListCommand);
-
-projectCmd
-  .command("show <name>")
-  .description("Show the full profile for a project")
-  .action(projectShowCommand);
-
-// forgectl plan
-program
-  .command("plan <goal-or-file>")
-  .description("Generate an ExecutionPlan from a goal or task spec")
-  .option("--db <path>", "Custom KG database path")
-  .option("-o, --output <path>", "Write planning prompt to this file")
-  .action(planCommand);
-
-program
-  .command("plan-validate <response-file>")
-  .description("Validate a plan response (use - for stdin)")
-  .option("--db <path>", "Custom KG database path")
-  .action(planValidateResponseCommand);
 
 // forgectl discord — start the Discord bot
 program

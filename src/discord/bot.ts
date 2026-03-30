@@ -15,10 +15,8 @@ import {
 } from "discord.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
-import type { PlanPreview } from "../analysis/cost-predictor.js";
-import { buildPlanPreviewEmbed } from "./embeds.js";
-import type { AlertEvent } from "../alerting/types.js";
-import { buildAlertEmbed } from "./embeds.js";
+import type { PlanPreview, AlertEvent } from "./embeds.js";
+import { buildPlanPreviewEmbed, buildAlertEmbed } from "./embeds.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;

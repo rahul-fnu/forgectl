@@ -7,7 +7,6 @@ import { Logger } from "../logging/logger.js";
 import { saveRunLog, type RunLog } from "../logging/run-log.js";
 import { emitRunEvent } from "../logging/events.js";
 import { formatDuration } from "../utils/duration.js";
-import type { RunSummary } from "../storage/repositories/runs.js";
 
 export async function runCommand(options: CLIOptions): Promise<void> {
   const config = loadConfig(options.config);
@@ -117,7 +116,7 @@ export async function runCommand(options: CLIOptions): Promise<void> {
       steps: result.validation.stepResults,
     },
     output: result.output
-      ? { mode: "git", branch: result.output.branch }
+      ? { mode: result.output.mode, branch: result.output.mode === "git" ? result.output.branch : undefined }
       : { mode: "git" },
     entries: logger.getEntries(),
   };
@@ -144,7 +143,6 @@ async function printDryRun(plan: ReturnType<typeof resolveRunPlan>): Promise<voi
   console.log(`  Review:     ${plan.orchestration.review.enabled ? `enabled (max ${plan.orchestration.review.maxRounds} rounds)` : "disabled"}`);
   console.log(`  Timeout:    ${formatDuration(plan.agent.timeout)}`);
 
-  // Check credentials so the user knows if they'll hit a wall at run time
   let credStatus: string;
   if (plan.agent.type === "claude-code") {
     const { getClaudeAuth } = await import("../auth/claude.js");
@@ -172,54 +170,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-export function formatRunSummary(runId: string, summary: RunSummary): string {
-  const lines: string[] = [];
-  lines.push(chalk.bold(`=== Run Summary: ${runId} ===`));
-  lines.push(`${chalk.cyan("Approach:")} ${summary.approach}`);
-  lines.push(`${chalk.cyan("Key Actions:")} ${summary.keyActions}`);
-  lines.push(`${chalk.cyan("Obstacles:")} ${summary.obstacles}`);
-  lines.push(`${chalk.cyan("Retries:")} ${summary.retries}`);
-  lines.push(`${chalk.cyan("Outcome:")} ${summary.outcome}`);
-  lines.push(`${chalk.cyan("Token Efficiency:")} ${summary.tokenEfficiency}`);
-  return lines.join("\n");
-}
-
 export async function runSummaryCommand(runId: string): Promise<void> {
-  const { join } = await import("node:path");
-  const { homedir } = await import("node:os");
-  const { createDatabase, closeDatabase } = await import("../storage/database.js");
-  const { runMigrations } = await import("../storage/migrator.js");
-  const { createRunRepository } = await import("../storage/repositories/runs.js");
-  const { createEventRepository } = await import("../storage/repositories/events.js");
-  const { createCostRepository } = await import("../storage/repositories/costs.js");
-  const { generateRunSummary } = await import("../analysis/run-summary.js");
-
-  const dbPath = join(homedir(), ".forgectl", "daemon.db");
-  const db = createDatabase(dbPath);
-  try {
-    runMigrations(db);
-    const runRepo = createRunRepository(db);
-    const eventRepo = createEventRepository(db);
-    const costRepo = createCostRepository(db);
-    let summary = runRepo.getSummary(runId);
-    if (!summary) {
-      const run = runRepo.findById(runId);
-      if (!run) {
-        console.log("Run not found.");
-        return;
-      }
-      console.log("No summary cached — generating...");
-      try {
-        summary = await generateRunSummary(runId, eventRepo, costRepo);
-        runRepo.setSummary(runId, summary);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.log(`Failed to generate summary: ${msg}`);
-        return;
-      }
-    }
-    console.log(formatRunSummary(runId, summary));
-  } finally {
-    closeDatabase(db);
-  }
+  console.log(`Run summary for ${runId} is not available (storage module removed).`);
 }

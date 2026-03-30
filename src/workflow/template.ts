@@ -1,4 +1,18 @@
-import type { TrackerIssue } from "../tracker/types.js";
+export interface TrackerIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  state: string;
+  priority: string | null;
+  labels: string[];
+  assignees: string[];
+  url: string;
+  created_at: string;
+  updated_at: string;
+  blocked_by: string[];
+  metadata?: Record<string, unknown>;
+}
 
 /**
  * Strict prompt template renderer. Replaces {{key.path}} variables.
