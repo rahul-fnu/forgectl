@@ -340,11 +340,12 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     const webhookSecret = config.tracker.webhook_secret;
     const { handleLinearWebhook, verifyLinearWebhookSignature } = await import("../tracker/linear.js");
 
-    app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
-      done(null, body);
-    });
+    void app.register(async function linearWebhookPlugin(instance) {
+      instance.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+        done(null, body);
+      });
 
-    app.post("/api/v1/linear/webhook", async (request, reply) => {
+      instance.post("/api/v1/linear/webhook", async (request, reply) => {
       const rawBody = request.body as string;
       const signature = request.headers["linear-signature"] as string | undefined;
 
@@ -375,6 +376,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
       return { ok: true };
     });
+    }); // end linearWebhookPlugin
 
     daemonLogger.info("daemon", "Linear webhook endpoint registered at /api/v1/linear/webhook");
   }
