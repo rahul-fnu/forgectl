@@ -1,4 +1,4 @@
-import type { TaskSpec } from "../task/types.js";
+import type { TaskSpec } from "../context/builder.js";
 
 export interface ExecutionPlan {
   tasks: PlannedTask[];
