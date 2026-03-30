@@ -104,7 +104,7 @@ export type ScheduleEntry = z.infer<typeof ScheduleEntrySchema>;
 export const OrchestratorConfigSchema = z.object({
   enabled: z.boolean().default(false),
   max_concurrent_agents: z.number().int().positive().default(3),
-  poll_interval_ms: z.number().int().positive().default(30000),
+  poll_interval_ms: z.number().int().positive().default(3600000), // 1 hour — webhooks handle real-time, polling is safety net
   stall_timeout_ms: z.number().int().positive().default(600000),
   max_retries: z.number().int().min(0).default(5),
   max_retry_backoff_ms: z.number().int().positive().default(300000),
@@ -141,11 +141,14 @@ export const DiscordConfigSchema = z.object({
   channel_id: z.string().optional(),
   channel_ids: z.array(z.string()).default([]),
   application_id: z.string().optional(),
-  daemon_url: z.string().default("http://127.0.0.1:4856"),
+  daemon_url: z.string().optional(),
   daemon_token: z.string().optional(),
   allowed_channel_ids: z.array(z.string()).optional(),
   notification_channel_id: z.string().optional(),
-}).optional();
+  status_channel_name: z.string().default("forgectl-status"),
+  digest_cron: z.string().default("0 9 * * *"),
+  alerts_enabled: z.boolean().default(true),
+}).default({});
 
 export const AlertingConfigSchema = z.object({
   webhooks: z.array(WebhookTargetSchema).default([]),
@@ -299,12 +302,6 @@ export const ConfigSchema = z.object({
     check_interval_days: z.number().int().positive().default(30),
     growth_threshold: z.number().min(0).max(1).default(0.2),
     auto_apply: z.boolean().default(false),
-  }).default({}),
-
-  board: z.object({
-    state_dir: z.string().default("~/.forgectl/board"),
-    scheduler_tick_seconds: z.number().int().positive().default(30),
-    max_concurrent_card_runs: z.number().int().positive().default(2),
   }).default({}),
 
   validate: z.array(z.string()).default([]),

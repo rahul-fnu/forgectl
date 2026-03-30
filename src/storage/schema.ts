@@ -196,3 +196,29 @@ export const reviewCalibration = sqliteTable(
   },
   (table) => [unique().on(table.module)]
 );
+
+export const offlineQueue = sqliteTable("offline_queue", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  service: text("service").notNull(), // "linear" | "discord" | "github"
+  operation: text("operation").notNull(), // e.g. "create_issue", "send_message", "create_pr"
+  payload: text("payload").notNull(), // JSON-serialized
+  status: text("status").notNull().default("pending"), // "pending" | "flushed" | "failed"
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: text("created_at").notNull(),
+  flushedAt: text("flushed_at"),
+});
+
+export const pendingPrs = sqliteTable("pending_prs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  repo: text("repo").notNull(), // "owner/repo"
+  branch: text("branch").notNull(),
+  title: text("title").notNull(),
+  body: text("body"),
+  baseBranch: text("base_branch").notNull().default("main"),
+  status: text("status").notNull().default("pending"), // "pending" | "created" | "failed"
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: text("created_at").notNull(),
+  resolvedAt: text("resolved_at"),
+});

@@ -148,6 +148,20 @@
       "when": 1774333200000,
       "tag": "0018_add_trace_id_to_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1774419600000,
+      "tag": "0019_offline_queue_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1774506000000,
+      "tag": "0020_pending_prs_table",
+      "breakpoints": true
     }
   ]
 }

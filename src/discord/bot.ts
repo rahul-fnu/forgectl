@@ -1,5 +1,6 @@
 import {
   Client,
+  ChannelType,
   GatewayIntentBits,
   Events,
   REST,
@@ -9,11 +10,15 @@ import {
   type MessageReaction,
   type ChatInputCommandInteraction,
   type User,
+  type TextChannel,
+  type Guild,
 } from "discord.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { PlanPreview } from "../analysis/cost-predictor.js";
 import { buildPlanPreviewEmbed } from "./embeds.js";
+import type { AlertEvent } from "../alerting/types.js";
+import { buildAlertEmbed } from "./embeds.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;
@@ -106,6 +111,103 @@ export async function triggerClaudeMdUpdate(workspace: string, daemonPort: numbe
   return `CLAUDE.md update: ${data.status}`;
 }
 
+export async function cancelRun(runId: string, daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({ error: { message: "Unknown error" } }))) as { error?: { message?: string } };
+    return `Failed to cancel: ${data.error?.message ?? res.statusText}`;
+  }
+  return `Run \`${runId}\` cancelled.`;
+}
+
+export async function fetchBudget(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/budget`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch budget.";
+  const data = (await res.json()) as {
+    dayCostUsd: number;
+    dayInputTokens: number;
+    dayOutputTokens: number;
+    maxPerDay: number | null;
+    maxPerRun: number | null;
+  };
+  const lines = [
+    `**Today's Cost:** $${data.dayCostUsd.toFixed(4)}`,
+    `**Tokens:** ${data.dayInputTokens.toLocaleString()} in / ${data.dayOutputTokens.toLocaleString()} out`,
+  ];
+  if (data.maxPerDay !== null) lines.push(`**Daily Limit:** $${data.maxPerDay.toFixed(2)}`);
+  if (data.maxPerRun !== null) lines.push(`**Per-Run Limit:** $${data.maxPerRun.toFixed(2)}`);
+  return lines.join("\n");
+}
+
+export async function fetchRepos(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/repos`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch repos.";
+  const repos = (await res.json()) as Array<{ name: string; source: string }>;
+  if (repos.length === 0) return "No tracked repositories.";
+  return repos.map((r) => `- \`${r.name}\` (${r.source})`).join("\n");
+}
+
+export async function fetchDigestData(daemonPort: number, daemonToken: string): Promise<{
+  runs: Array<{ id: string; status: string; task?: string }>;
+  budget: { dayCostUsd: number; maxPerDay: number | null } | null;
+}> {
+  const [runsRes, budgetRes] = await Promise.allSettled([
+    fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs`, { headers: { Authorization: `Bearer ${daemonToken}` } }),
+    fetch(`http://127.0.0.1:${daemonPort}/api/v1/budget`, { headers: { Authorization: `Bearer ${daemonToken}` } }),
+  ]);
+
+  let runs: Array<{ id: string; status: string; task?: string }> = [];
+  if (runsRes.status === "fulfilled" && runsRes.value.ok) {
+    runs = (await runsRes.value.json()) as typeof runs;
+  }
+
+  let budget: { dayCostUsd: number; maxPerDay: number | null } | null = null;
+  if (budgetRes.status === "fulfilled" && budgetRes.value.ok) {
+    budget = (await budgetRes.value.json()) as typeof budget;
+  }
+
+  return { runs, budget };
+}
+
+export function formatDigest(data: {
+  runs: Array<{ id: string; status: string; task?: string }>;
+  budget: { dayCostUsd: number; maxPerDay: number | null } | null;
+}): string {
+  const now = new Date().toISOString().slice(0, 10);
+  const lines = [`**forgectl Daily Digest — ${now}**\n`];
+
+  const total = data.runs.length;
+  const failed = data.runs.filter((r) => r.status === "failed").length;
+  const completed = data.runs.filter((r) => r.status === "completed").length;
+  const running = data.runs.filter((r) => r.status === "running").length;
+
+  lines.push(`**Runs:** ${total} total, ${completed} completed, ${failed} failed, ${running} running`);
+
+  if (data.budget) {
+    lines.push(`**Cost:** $${data.budget.dayCostUsd.toFixed(4)}`);
+    if (data.budget.maxPerDay !== null) {
+      lines.push(`**Budget:** $${data.budget.dayCostUsd.toFixed(2)} / $${data.budget.maxPerDay.toFixed(2)}`);
+    }
+  }
+
+  if (failed > 0) {
+    lines.push("\n**Failed Runs:**");
+    for (const r of data.runs.filter((r) => r.status === "failed").slice(0, 5)) {
+      const task = r.task ? ` — ${r.task.slice(0, 60)}` : "";
+      lines.push(`- \`${r.id}\`${task}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export async function fetchStats(daemonPort: number, daemonToken: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/summary`, {
     headers: { Authorization: `Bearer ${daemonToken}` },
@@ -131,6 +233,8 @@ export class DiscordBot {
   private logger: Logger;
   private daemonPort: number;
   private daemonToken: string;
+  private statusChannelId: string | null = null;
+  private digestTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: DiscordBotDeps) {
     this.config = deps.config;
@@ -172,9 +276,16 @@ export class DiscordBot {
     await this.registerSlashCommands(token);
     await this.client.login(token);
     this.logger.info("discord", `Discord bot logged in as ${this.client.user?.tag ?? "unknown"}`);
+
+    await this.ensureStatusChannel();
+    this.startDigestSchedule();
   }
 
   async stop(): Promise<void> {
+    if (this.digestTimer) {
+      clearInterval(this.digestTimer);
+      this.digestTimer = null;
+    }
     this.client.destroy();
   }
 
@@ -247,6 +358,32 @@ export class DiscordBot {
       await interaction.deferReply();
       const stats = await fetchStats(this.daemonPort, this.daemonToken);
       await interaction.editReply(stats);
+      return;
+    }
+
+    if (sub === "cancel") {
+      await interaction.deferReply();
+      const runId = interaction.options.getString("run_id") ?? "";
+      if (!runId) {
+        await interaction.editReply("Please provide a run ID.");
+        return;
+      }
+      const result = await cancelRun(runId, this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
+      return;
+    }
+
+    if (sub === "budget") {
+      await interaction.deferReply();
+      const result = await fetchBudget(this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
+      return;
+    }
+
+    if (sub === "repos") {
+      await interaction.deferReply();
+      const result = await fetchRepos(this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
       return;
     }
 
@@ -339,6 +476,95 @@ export class DiscordBot {
     return this.pendingApprovals;
   }
 
+  getStatusChannelId(): string | null {
+    return this.statusChannelId;
+  }
+
+  async ensureStatusChannel(): Promise<void> {
+    const guildId = this.config.discord?.guild_id;
+    if (!guildId) return;
+
+    const channelName = this.config.discord?.status_channel_name ?? "forgectl-status";
+
+    try {
+      const guild: Guild = await this.client.guilds.fetch(guildId);
+      const channels = await guild.channels.fetch();
+      const existing = channels.find(
+        (ch) => ch?.name === channelName && ch.type === ChannelType.GuildText,
+      );
+
+      if (existing) {
+        this.statusChannelId = existing.id;
+        this.logger.info("discord", `Using existing status channel #${channelName} (${existing.id})`);
+      } else {
+        const created = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          topic: "forgectl status updates, alerts, and daily digests",
+        });
+        this.statusChannelId = created.id;
+        this.logger.info("discord", `Created status channel #${channelName} (${created.id})`);
+      }
+    } catch (err) {
+      this.logger.warn("discord", `Failed to ensure status channel: ${err}`);
+    }
+  }
+
+  async postAlert(event: AlertEvent): Promise<void> {
+    if (!this.statusChannelId) return;
+    if (this.config.discord?.alerts_enabled === false) return;
+
+    try {
+      const channel = await this.client.channels.fetch(this.statusChannelId);
+      if (!channel || !("send" in channel)) return;
+      const embed = buildAlertEmbed(event);
+      await (channel as TextChannel).send({ embeds: [embed] });
+    } catch (err) {
+      this.logger.warn("discord", `Failed to post alert: ${err}`);
+    }
+  }
+
+  async postDigest(): Promise<void> {
+    if (!this.statusChannelId) return;
+
+    try {
+      const data = await fetchDigestData(this.daemonPort, this.daemonToken);
+      const message = formatDigest(data);
+      const channel = await this.client.channels.fetch(this.statusChannelId);
+      if (!channel || !("send" in channel)) return;
+      await (channel as TextChannel).send(message);
+      this.logger.info("discord", "Daily digest posted");
+    } catch (err) {
+      this.logger.warn("discord", `Failed to post digest: ${err}`);
+    }
+  }
+
+  startDigestSchedule(): void {
+    // Post digest daily — simple interval-based approach using digest_cron hour
+    const cronExpr = this.config.discord?.digest_cron ?? "0 9 * * *";
+    const hourMatch = cronExpr.match(/^\d+\s+(\d+)/);
+    const targetHour = hourMatch ? parseInt(hourMatch[1], 10) : 9;
+
+    const scheduleNext = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(targetHour, 0, 0, 0);
+      if (next.getTime() <= now.getTime()) {
+        next.setDate(next.getDate() + 1);
+      }
+      const delayMs = next.getTime() - now.getTime();
+
+      this.digestTimer = setTimeout(() => {
+        void this.postDigest();
+        // Schedule the next one
+        scheduleNext();
+      }, delayMs);
+    };
+
+    scheduleNext();
+    this.logger.info("discord", `Daily digest scheduled at hour ${targetHour}`);
+  }
+
   private async registerSlashCommands(token: string): Promise<void> {
     const guildId = this.config.discord?.guild_id;
     if (!guildId) return;
@@ -354,6 +580,13 @@ export class DiscordBot {
         )
         .addSubcommand((sub) => sub.setName("status").setDescription("Show current runs"))
         .addSubcommand((sub) => sub.setName("stats").setDescription("Show analytics summary"))
+        .addSubcommand((sub) =>
+          sub.setName("cancel").setDescription("Cancel a running task").addStringOption((opt) =>
+            opt.setName("run_id").setDescription("Run ID to cancel").setRequired(true),
+          ),
+        )
+        .addSubcommand((sub) => sub.setName("budget").setDescription("Show budget status"))
+        .addSubcommand((sub) => sub.setName("repos").setDescription("List tracked repositories"))
         .addSubcommand((sub) =>
           sub.setName("update-claude-md").setDescription("Update CLAUDE.md for a workspace").addStringOption((opt) =>
             opt.setName("workspace").setDescription("Workspace identifier").setRequired(true),
