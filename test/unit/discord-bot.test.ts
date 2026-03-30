@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { extractRepo, truncateTitle, dispatchTask, DiscordBot, type DiscordBotDeps } from "../../src/discord/bot.js";
+import { extractRepo, truncateTitle, dispatchTask, cancelRun, fetchBudget, fetchRepos, formatDigest, DiscordBot, type DiscordBotDeps } from "../../src/discord/bot.js";
 import { ConfigSchema } from "../../src/config/schema.js";
 import type { Logger } from "../../src/logging/logger.js";
 
@@ -137,13 +137,9 @@ describe("DiscordBot", () => {
   it("creates thread and dispatches on valid message", async () => {
     const bot = new DiscordBot(makeDeps());
 
-    const mockEmbedMsg = { id: "embed-msg-1", react: vi.fn().mockResolvedValue(undefined) };
     const mockThread = {
       id: "thread-1",
       send: vi.fn(),
-      messages: {
-        fetch: vi.fn().mockResolvedValue(new Map([["embed-msg-1", mockEmbedMsg]])),
-      },
     };
     const msg = {
       author: { bot: false },
@@ -151,7 +147,6 @@ describe("DiscordBot", () => {
       content: "Fix the login bug in https://github.com/acme/app",
       startThread: vi.fn().mockResolvedValue(mockThread),
       reply: vi.fn(),
-      channel: { isThread: () => false },
     } as any;
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -164,9 +159,7 @@ describe("DiscordBot", () => {
     expect(msg.startThread).toHaveBeenCalledWith({
       name: "Working on: Fix the login bug in https://github.com/acme/app",
     });
-    expect(mockThread.send).toHaveBeenCalledWith(
-      expect.objectContaining({ embeds: expect.arrayContaining([expect.objectContaining({ title: "Task Dispatched" })]) }),
-    );
+    expect(mockThread.send).toHaveBeenCalledWith('Task dispatched! Run ID: `run-abc`');
     expect(bot.getThreadMap().get("thread-1")).toBe("run-abc");
   });
 
@@ -228,18 +221,157 @@ describe("DiscordBot", () => {
   });
 });
 
+describe("cancelRun", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns success message on cancel", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: "cancelled", runId: "run-1" }),
+    }));
+
+    const result = await cancelRun("run-1", 4856, "tok");
+    expect(result).toBe("Run `run-1` cancelled.");
+  });
+
+  it("returns error message on failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      statusText: "Conflict",
+      json: async () => ({ error: { message: "Run is already completed" } }),
+    }));
+
+    const result = await cancelRun("run-1", 4856, "tok");
+    expect(result).toContain("Failed to cancel");
+    expect(result).toContain("already completed");
+  });
+});
+
+describe("fetchBudget", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("formats budget data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        dayCostUsd: 1.5,
+        dayInputTokens: 10000,
+        dayOutputTokens: 5000,
+        maxPerDay: 10,
+        maxPerRun: 2,
+      }),
+    }));
+
+    const result = await fetchBudget(4856, "tok");
+    expect(result).toContain("$1.5000");
+    expect(result).toContain("10,000");
+    expect(result).toContain("Daily Limit");
+    expect(result).toContain("Per-Run Limit");
+  });
+
+  it("returns error on failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    const result = await fetchBudget(4856, "tok");
+    expect(result).toBe("Failed to fetch budget.");
+  });
+});
+
+describe("fetchRepos", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("formats repo list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([
+        { name: "owner/repo1", source: "profile" },
+        { name: "owner/repo2", source: "orchestrator" },
+      ]),
+    }));
+
+    const result = await fetchRepos(4856, "tok");
+    expect(result).toContain("owner/repo1");
+    expect(result).toContain("owner/repo2");
+  });
+
+  it("returns empty message when no repos", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([]),
+    }));
+
+    const result = await fetchRepos(4856, "tok");
+    expect(result).toBe("No tracked repositories.");
+  });
+});
+
+describe("formatDigest", () => {
+  it("formats a daily digest with runs and budget", () => {
+    const digest = formatDigest({
+      runs: [
+        { id: "r1", status: "completed", task: "Fix bug" },
+        { id: "r2", status: "failed", task: "Add feature" },
+        { id: "r3", status: "running", task: "Refactor" },
+      ],
+      budget: { dayCostUsd: 2.5, maxPerDay: 10 },
+    });
+
+    expect(digest).toContain("Daily Digest");
+    expect(digest).toContain("3 total");
+    expect(digest).toContain("1 completed");
+    expect(digest).toContain("1 failed");
+    expect(digest).toContain("1 running");
+    expect(digest).toContain("$2.5");
+    expect(digest).toContain("Failed Runs");
+    expect(digest).toContain("r2");
+  });
+
+  it("handles no runs and no budget", () => {
+    const digest = formatDigest({ runs: [], budget: null });
+    expect(digest).toContain("0 total");
+    expect(digest).not.toContain("Failed Runs");
+  });
+});
+
 describe("ConfigSchema discord section", () => {
-  it("parses with discord undefined by default", () => {
+  it("parses with discord defaults", () => {
     const config = ConfigSchema.parse({});
-    expect(config.discord).toBeUndefined();
+    expect(config.discord.enabled).toBe(false);
+    expect(config.discord.bot_token).toBe("");
+    expect(config.discord.guild_id).toBe("");
+    expect(config.discord.channel_ids).toEqual([]);
+    expect(config.discord.status_channel_name).toBe("forgectl-status");
+    expect(config.discord.digest_cron).toBe("0 9 * * *");
+    expect(config.discord.alerts_enabled).toBe(true);
   });
 
   it("parses with discord enabled", () => {
     const config = ConfigSchema.parse({
       discord: { enabled: true, bot_token: "abc", guild_id: "g1", channel_ids: ["c1", "c2"] },
     });
-    expect(config.discord!.enabled).toBe(true);
-    expect(config.discord!.bot_token).toBe("abc");
-    expect(config.discord!.channel_ids).toEqual(["c1", "c2"]);
+    expect(config.discord.enabled).toBe(true);
+    expect(config.discord.bot_token).toBe("abc");
+    expect(config.discord.channel_ids).toEqual(["c1", "c2"]);
+  });
+
+  it("parses with custom status channel and digest config", () => {
+    const config = ConfigSchema.parse({
+      discord: {
+        enabled: true,
+        bot_token: "abc",
+        guild_id: "g1",
+        status_channel_name: "my-status",
+        digest_cron: "0 18 * * *",
+        alerts_enabled: false,
+      },
+    });
+    expect(config.discord.status_channel_name).toBe("my-status");
+    expect(config.discord.digest_cron).toBe("0 18 * * *");
+    expect(config.discord.alerts_enabled).toBe(false);
   });
 });

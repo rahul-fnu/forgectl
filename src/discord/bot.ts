@@ -1,5 +1,6 @@
 import {
   Client,
+  ChannelType,
   GatewayIntentBits,
   Events,
   REST,
@@ -9,12 +10,15 @@ import {
   type MessageReaction,
   type ChatInputCommandInteraction,
   type User,
+  type TextChannel,
+  type Guild,
 } from "discord.js";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { Logger } from "../logging/logger.js";
 import type { PlanPreview } from "../analysis/cost-predictor.js";
-import { buildPlanPreviewEmbed, buildTaskSubmittedEmbed, buildCompletedEmbed, buildFailedEmbed, buildClarificationEmbed } from "./embeds.js";
-import { runEvents, type RunEvent } from "../logging/events.js";
+import { buildPlanPreviewEmbed } from "./embeds.js";
+import type { AlertEvent } from "../alerting/types.js";
+import { buildAlertEmbed } from "./embeds.js";
 
 export interface DiscordBotDeps {
   config: ForgectlConfig;
@@ -107,6 +111,103 @@ export async function triggerClaudeMdUpdate(workspace: string, daemonPort: numbe
   return `CLAUDE.md update: ${data.status}`;
 }
 
+export async function cancelRun(runId: string, daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({ error: { message: "Unknown error" } }))) as { error?: { message?: string } };
+    return `Failed to cancel: ${data.error?.message ?? res.statusText}`;
+  }
+  return `Run \`${runId}\` cancelled.`;
+}
+
+export async function fetchBudget(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/budget`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch budget.";
+  const data = (await res.json()) as {
+    dayCostUsd: number;
+    dayInputTokens: number;
+    dayOutputTokens: number;
+    maxPerDay: number | null;
+    maxPerRun: number | null;
+  };
+  const lines = [
+    `**Today's Cost:** $${data.dayCostUsd.toFixed(4)}`,
+    `**Tokens:** ${data.dayInputTokens.toLocaleString()} in / ${data.dayOutputTokens.toLocaleString()} out`,
+  ];
+  if (data.maxPerDay !== null) lines.push(`**Daily Limit:** $${data.maxPerDay.toFixed(2)}`);
+  if (data.maxPerRun !== null) lines.push(`**Per-Run Limit:** $${data.maxPerRun.toFixed(2)}`);
+  return lines.join("\n");
+}
+
+export async function fetchRepos(daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/repos`, {
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!res.ok) return "Failed to fetch repos.";
+  const repos = (await res.json()) as Array<{ name: string; source: string }>;
+  if (repos.length === 0) return "No tracked repositories.";
+  return repos.map((r) => `- \`${r.name}\` (${r.source})`).join("\n");
+}
+
+export async function fetchDigestData(daemonPort: number, daemonToken: string): Promise<{
+  runs: Array<{ id: string; status: string; task?: string }>;
+  budget: { dayCostUsd: number; maxPerDay: number | null } | null;
+}> {
+  const [runsRes, budgetRes] = await Promise.allSettled([
+    fetch(`http://127.0.0.1:${daemonPort}/api/v1/runs`, { headers: { Authorization: `Bearer ${daemonToken}` } }),
+    fetch(`http://127.0.0.1:${daemonPort}/api/v1/budget`, { headers: { Authorization: `Bearer ${daemonToken}` } }),
+  ]);
+
+  let runs: Array<{ id: string; status: string; task?: string }> = [];
+  if (runsRes.status === "fulfilled" && runsRes.value.ok) {
+    runs = (await runsRes.value.json()) as typeof runs;
+  }
+
+  let budget: { dayCostUsd: number; maxPerDay: number | null } | null = null;
+  if (budgetRes.status === "fulfilled" && budgetRes.value.ok) {
+    budget = (await budgetRes.value.json()) as typeof budget;
+  }
+
+  return { runs, budget };
+}
+
+export function formatDigest(data: {
+  runs: Array<{ id: string; status: string; task?: string }>;
+  budget: { dayCostUsd: number; maxPerDay: number | null } | null;
+}): string {
+  const now = new Date().toISOString().slice(0, 10);
+  const lines = [`**forgectl Daily Digest — ${now}**\n`];
+
+  const total = data.runs.length;
+  const failed = data.runs.filter((r) => r.status === "failed").length;
+  const completed = data.runs.filter((r) => r.status === "completed").length;
+  const running = data.runs.filter((r) => r.status === "running").length;
+
+  lines.push(`**Runs:** ${total} total, ${completed} completed, ${failed} failed, ${running} running`);
+
+  if (data.budget) {
+    lines.push(`**Cost:** $${data.budget.dayCostUsd.toFixed(4)}`);
+    if (data.budget.maxPerDay !== null) {
+      lines.push(`**Budget:** $${data.budget.dayCostUsd.toFixed(2)} / $${data.budget.maxPerDay.toFixed(2)}`);
+    }
+  }
+
+  if (failed > 0) {
+    lines.push("\n**Failed Runs:**");
+    for (const r of data.runs.filter((r) => r.status === "failed").slice(0, 5)) {
+      const task = r.task ? ` — ${r.task.slice(0, 60)}` : "";
+      lines.push(`- \`${r.id}\`${task}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export async function fetchStats(daemonPort: number, daemonToken: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/summary`, {
     headers: { Authorization: `Bearer ${daemonToken}` },
@@ -124,17 +225,16 @@ export interface PendingApproval {
   resolve: (approved: boolean) => void;
 }
 
-const STREAM_THROTTLE_MS = 5000;
-
 export class DiscordBot {
   private client: Client;
   private threadMap = new Map<string, string>();
   private pendingApprovals = new Map<string, PendingApproval>();
-  private activeStreams = new Map<string, { cleanup: () => void; lastSent: number }>();
   private config: ForgectlConfig;
   private logger: Logger;
   private daemonPort: number;
   private daemonToken: string;
+  private statusChannelId: string | null = null;
+  private digestTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: DiscordBotDeps) {
     this.config = deps.config;
@@ -152,11 +252,7 @@ export class DiscordBot {
     });
 
     this.client.on(Events.MessageCreate, (msg: Message) => {
-      if (msg.channel.isThread()) {
-        void this.handleThreadReply(msg);
-      } else {
-        void this.handleMessage(msg);
-      }
+      void this.handleMessage(msg);
     });
 
     this.client.on(Events.InteractionCreate, (interaction) => {
@@ -180,13 +276,16 @@ export class DiscordBot {
     await this.registerSlashCommands(token);
     await this.client.login(token);
     this.logger.info("discord", `Discord bot logged in as ${this.client.user?.tag ?? "unknown"}`);
+
+    await this.ensureStatusChannel();
+    this.startDigestSchedule();
   }
 
   async stop(): Promise<void> {
-    for (const [, stream] of this.activeStreams) {
-      stream.cleanup();
+    if (this.digestTimer) {
+      clearInterval(this.digestTimer);
+      this.digestTimer = null;
     }
-    this.activeStreams.clear();
     this.client.destroy();
   }
 
@@ -225,7 +324,6 @@ export class DiscordBot {
 
       const result = await dispatchTask(task, repo, this.daemonPort, this.daemonToken);
 
-      // Phase 1: Decompose — post task embed with details
       if (result.status === "decomposed" && result.childIssues) {
         const issueList = result.childIssues.map((c) => `• ${c}`).join("\n");
         await thread.send(`Task decomposed into sub-issues:\n${issueList}`);
@@ -233,31 +331,9 @@ export class DiscordBot {
           this.threadMap.set(thread.id, result.parentIssueId);
         }
       } else {
-        const taskEmbed = buildTaskSubmittedEmbed(result.id ?? "unknown", task);
-        await thread.send({ embeds: [taskEmbed] });
+        await thread.send(`Task dispatched! Run ID: \`${result.id}\``);
         if (result.id) {
           this.threadMap.set(thread.id, result.id);
-
-          // Phase 2: Approve — add approval reactions
-          const embedMsg = (await thread.messages.fetch({ limit: 1 })).first();
-          if (embedMsg) {
-            await embedMsg.react("\u2705");
-            await embedMsg.react("\u274c");
-            this.pendingApprovals.set(embedMsg.id, {
-              runId: result.id,
-              messageId: embedMsg.id,
-              task,
-              repo,
-              resolve: (approved: boolean) => {
-                if (approved) {
-                  // Phase 3: Stream — subscribe to run events with throttle
-                  this.startRunStream(result.id!, thread);
-                } else {
-                  thread.send("Task cancelled.").catch(() => {});
-                }
-              },
-            });
-          }
         }
       }
     } catch (err) {
@@ -266,108 +342,6 @@ export class DiscordBot {
         await msg.reply(`Failed to dispatch task: ${err instanceof Error ? err.message : String(err)}`);
       } catch { /* ignore reply failure */ }
     }
-  }
-
-  private startRunStream(runId: string, thread: { send: (opts: string | Record<string, unknown>) => Promise<unknown> }): void {
-    let lastSent = 0;
-    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-    let pendingMsg: string | null = null;
-
-    const handler = (event: RunEvent) => {
-      // Phase 4: Clarify — post agent questions to thread
-      if (event.type === "clarification_requested") {
-        const question = String(event.data.question ?? event.data.message ?? "");
-        if (question) {
-          const embed = buildClarificationEmbed(runId, question);
-          thread.send({ embeds: [embed] }).catch(() => {});
-        }
-        return;
-      }
-
-      // Phase 5: Complete — post summary embed
-      if (event.type === "completed" || event.type === "failed") {
-        if (pendingTimer) clearTimeout(pendingTimer);
-        if (pendingMsg) {
-          thread.send(pendingMsg).catch(() => {});
-          pendingMsg = null;
-        }
-
-        if (event.type === "completed") {
-          const embed = buildCompletedEmbed(runId, {
-            prUrl: event.data.prUrl ? String(event.data.prUrl) : undefined,
-            costUsd: typeof event.data.costUsd === "number" ? event.data.costUsd : undefined,
-          });
-          thread.send({ embeds: [embed] }).catch(() => {});
-        } else {
-          const embed = buildFailedEmbed(runId, {
-            error: String(event.data.error ?? event.data.reason ?? "Unknown error"),
-          });
-          thread.send({ embeds: [embed] }).catch(() => {});
-        }
-
-        cleanup();
-        return;
-      }
-
-      // Phase 3: Stream — throttled progress updates (1 per 5s)
-      const content = this.formatStreamEvent(event);
-      if (!content) return;
-
-      const now = Date.now();
-      const elapsed = now - lastSent;
-
-      if (elapsed >= STREAM_THROTTLE_MS) {
-        lastSent = now;
-        thread.send(content).catch(() => {});
-      } else {
-        pendingMsg = pendingMsg ? `${pendingMsg}\n${content}` : content;
-        if (!pendingTimer) {
-          pendingTimer = setTimeout(() => {
-            pendingTimer = null;
-            if (pendingMsg) {
-              lastSent = Date.now();
-              thread.send(pendingMsg).catch(() => {});
-              pendingMsg = null;
-            }
-          }, STREAM_THROTTLE_MS - elapsed);
-        }
-      }
-    };
-
-    runEvents.on(`run:${runId}`, handler);
-
-    const cleanup = () => {
-      runEvents.off(`run:${runId}`, handler);
-      if (pendingTimer) clearTimeout(pendingTimer);
-      this.activeStreams.delete(runId);
-    };
-
-    this.activeStreams.set(runId, { cleanup, lastSent });
-  }
-
-  private formatStreamEvent(event: RunEvent): string | null {
-    const d = event.data;
-    switch (event.type) {
-      case "agent_started":
-        return "Agent started working...";
-      case "validation_step_started":
-        return `Running: ${d.step ?? d.name ?? "check"}...`;
-      case "validation_step_completed": {
-        const name = d.step ?? d.name ?? "check";
-        return d.passed ? `${name} PASSED` : `${name} FAILED`;
-      }
-      case "agent_retry":
-        return `Retry attempt ${d.attempt ?? "?"}/${d.maxAttempts ?? d.max ?? "?"}`;
-      default:
-        return null;
-    }
-  }
-
-  private async handleThreadReply(msg: Message): Promise<void> {
-    if (msg.author.bot) return;
-    const runId = this.threadMap.get(msg.channel.id);
-    if (!runId) return;
-    runEvents.emit(`reply:${runId}`, { content: msg.content, userId: msg.author.id });
   }
 
   private async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -384,6 +358,32 @@ export class DiscordBot {
       await interaction.deferReply();
       const stats = await fetchStats(this.daemonPort, this.daemonToken);
       await interaction.editReply(stats);
+      return;
+    }
+
+    if (sub === "cancel") {
+      await interaction.deferReply();
+      const runId = interaction.options.getString("run_id") ?? "";
+      if (!runId) {
+        await interaction.editReply("Please provide a run ID.");
+        return;
+      }
+      const result = await cancelRun(runId, this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
+      return;
+    }
+
+    if (sub === "budget") {
+      await interaction.deferReply();
+      const result = await fetchBudget(this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
+      return;
+    }
+
+    if (sub === "repos") {
+      await interaction.deferReply();
+      const result = await fetchRepos(this.daemonPort, this.daemonToken);
+      await interaction.editReply(result);
       return;
     }
 
@@ -476,6 +476,95 @@ export class DiscordBot {
     return this.pendingApprovals;
   }
 
+  getStatusChannelId(): string | null {
+    return this.statusChannelId;
+  }
+
+  async ensureStatusChannel(): Promise<void> {
+    const guildId = this.config.discord?.guild_id;
+    if (!guildId) return;
+
+    const channelName = this.config.discord?.status_channel_name ?? "forgectl-status";
+
+    try {
+      const guild: Guild = await this.client.guilds.fetch(guildId);
+      const channels = await guild.channels.fetch();
+      const existing = channels.find(
+        (ch) => ch?.name === channelName && ch.type === ChannelType.GuildText,
+      );
+
+      if (existing) {
+        this.statusChannelId = existing.id;
+        this.logger.info("discord", `Using existing status channel #${channelName} (${existing.id})`);
+      } else {
+        const created = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          topic: "forgectl status updates, alerts, and daily digests",
+        });
+        this.statusChannelId = created.id;
+        this.logger.info("discord", `Created status channel #${channelName} (${created.id})`);
+      }
+    } catch (err) {
+      this.logger.warn("discord", `Failed to ensure status channel: ${err}`);
+    }
+  }
+
+  async postAlert(event: AlertEvent): Promise<void> {
+    if (!this.statusChannelId) return;
+    if (this.config.discord?.alerts_enabled === false) return;
+
+    try {
+      const channel = await this.client.channels.fetch(this.statusChannelId);
+      if (!channel || !("send" in channel)) return;
+      const embed = buildAlertEmbed(event);
+      await (channel as TextChannel).send({ embeds: [embed] });
+    } catch (err) {
+      this.logger.warn("discord", `Failed to post alert: ${err}`);
+    }
+  }
+
+  async postDigest(): Promise<void> {
+    if (!this.statusChannelId) return;
+
+    try {
+      const data = await fetchDigestData(this.daemonPort, this.daemonToken);
+      const message = formatDigest(data);
+      const channel = await this.client.channels.fetch(this.statusChannelId);
+      if (!channel || !("send" in channel)) return;
+      await (channel as TextChannel).send(message);
+      this.logger.info("discord", "Daily digest posted");
+    } catch (err) {
+      this.logger.warn("discord", `Failed to post digest: ${err}`);
+    }
+  }
+
+  startDigestSchedule(): void {
+    // Post digest daily — simple interval-based approach using digest_cron hour
+    const cronExpr = this.config.discord?.digest_cron ?? "0 9 * * *";
+    const hourMatch = cronExpr.match(/^\d+\s+(\d+)/);
+    const targetHour = hourMatch ? parseInt(hourMatch[1], 10) : 9;
+
+    const scheduleNext = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(targetHour, 0, 0, 0);
+      if (next.getTime() <= now.getTime()) {
+        next.setDate(next.getDate() + 1);
+      }
+      const delayMs = next.getTime() - now.getTime();
+
+      this.digestTimer = setTimeout(() => {
+        void this.postDigest();
+        // Schedule the next one
+        scheduleNext();
+      }, delayMs);
+    };
+
+    scheduleNext();
+    this.logger.info("discord", `Daily digest scheduled at hour ${targetHour}`);
+  }
+
   private async registerSlashCommands(token: string): Promise<void> {
     const guildId = this.config.discord?.guild_id;
     if (!guildId) return;
@@ -491,6 +580,13 @@ export class DiscordBot {
         )
         .addSubcommand((sub) => sub.setName("status").setDescription("Show current runs"))
         .addSubcommand((sub) => sub.setName("stats").setDescription("Show analytics summary"))
+        .addSubcommand((sub) =>
+          sub.setName("cancel").setDescription("Cancel a running task").addStringOption((opt) =>
+            opt.setName("run_id").setDescription("Run ID to cancel").setRequired(true),
+          ),
+        )
+        .addSubcommand((sub) => sub.setName("budget").setDescription("Show budget status"))
+        .addSubcommand((sub) => sub.setName("repos").setDescription("List tracked repositories"))
         .addSubcommand((sub) =>
           sub.setName("update-claude-md").setDescription("Update CLAUDE.md for a workspace").addStringOption((opt) =>
             opt.setName("workspace").setDescription("Workspace identifier").setRequired(true),
