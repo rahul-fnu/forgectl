@@ -9,7 +9,7 @@ import type { MetricsCollector } from "./metrics.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { RetryRepository } from "../storage/repositories/retries.js";
-import type { AutonomyLevel, AutoApproveRule } from "../governance/types.js";
+import type { AutonomyLevel, AutoApproveRule } from "../config/schema.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
@@ -288,7 +288,7 @@ export async function tick(deps: TickDeps): Promise<void> {
 
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {
-    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, kgContextMap.get(issue.id), deps.promotedFindings, slotManager, deps.usageLimitRecovery, deps.alertManager);
+    await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, deps.promotedFindings, slotManager, deps.usageLimitRecovery);
   }
 }
 

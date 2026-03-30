@@ -16,6 +16,7 @@ export const OutputMode = z.enum(["git"]);
 
 export const AutonomyLevelEnum = z.enum(["full", "interactive", "semi", "supervised"]);
 export type AutonomyLevelEnum = z.infer<typeof AutonomyLevelEnum>;
+export type AutonomyLevel = AutonomyLevelEnum;
 
 export const GitHubAppConfigSchema = z.object({
   app_id: z.number().int().positive(),
@@ -29,6 +30,7 @@ export const AutoApproveRuleSchema = z.object({
   workflow_pattern: z.string().optional(),
   max_cost: z.number().positive().optional(),
 }).optional();
+export type AutoApproveRule = z.infer<typeof AutoApproveRuleSchema>;
 
 export const ValidationStepSchema = z.object({
   name: z.string(),
@@ -131,10 +133,11 @@ export const WebhookTargetSchema = z.object({
 });
 
 export const DiscordConfigSchema = z.object({
-  bot_token: z.string(),
-  channel_id: z.string(),
-  application_id: z.string().optional(),
-}).optional();
+  enabled: z.boolean().default(false),
+  bot_token: z.string().default(""),
+  guild_id: z.string().default(""),
+  channel_ids: z.array(z.string()).default([]),
+}).default({});
 
 export const AlertingConfigSchema = z.object({
   webhooks: z.array(WebhookTargetSchema).default([]),
@@ -277,13 +280,6 @@ export const ConfigSchema = z.object({
   discord: DiscordConfigSchema,
 
   alerting: AlertingConfigSchema,
-
-  discord: z.object({
-    enabled: z.boolean().default(false),
-    bot_token: z.string().default(""),
-    guild_id: z.string().default(""),
-    channel_ids: z.array(z.string()).default([]),
-  }).default({}),
 
   project: z.object({
     auto_create: z.boolean().default(false),
