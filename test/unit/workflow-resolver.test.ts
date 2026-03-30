@@ -195,7 +195,7 @@ describe("workflow resolver", () => {
       const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "research" }));
       expect(plan.container.image).toBe("forgectl/research-browser");
       expect(plan.input.mountPath).toBe("/input");
-      expect(plan.output.mode).toBe("files");
+      expect(plan.output.mode).toBe("git");
       expect(plan.output.path).toBe("/output");
     });
 
@@ -203,7 +203,7 @@ describe("workflow resolver", () => {
       const plan = resolveRunPlan(defaultConfig, makeOptions({ workflow: "data" }));
       expect(plan.container.image).toBe("forgectl/data");
       expect(plan.input.mode).toBe("files");
-      expect(plan.output.mode).toBe("files");
+      expect(plan.output.mode).toBe("git");
     });
 
     it("has correct run ID format", () => {

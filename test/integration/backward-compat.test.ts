@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConfigSchema } from "../../src/config/schema.js";
-import { getWorkflow } from "../../src/workflow/registry.js";
+import { getWorkflow } from "../../src/workflow/resolver.js";
 import {
   parseWorkflowFile,
   WorkflowFrontMatterSchema,

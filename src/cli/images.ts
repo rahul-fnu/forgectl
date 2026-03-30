@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { resolve, join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { listWorkflows } from "../workflow/registry.js";
+import { listWorkflows } from "../workflow/resolver.js";
 import { buildImage, imageExists } from "../container/builder.js";
 
 const selfDir = typeof import.meta.dirname === "string"
