@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import yaml from "js-yaml";
-import { listWorkflows, getWorkflow } from "../workflow/registry.js";
+import { listWorkflows, getWorkflow } from "../workflow/resolver.js";
 
 export function workflowsCommand(action: string, name?: string): void {
   if (action === "list") {

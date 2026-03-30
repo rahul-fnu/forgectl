@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { ImageCache } from "../container/cache.js";
-import { getWorkflow } from "../workflow/registry.js";
+import { getWorkflow } from "../workflow/resolver.js";
 import { formatDuration } from "../utils/duration.js";
 import { ensureImage } from "../container/builder.js";
 

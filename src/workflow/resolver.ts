@@ -1,14 +1,294 @@
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import type { ForgectlConfig } from "../config/schema.js";
 import type { WorkflowDefinition, RunPlan, NetworkConfig } from "./types.js";
 import type { AutonomyLevel, AutoApproveRule } from "../config/schema.js";
-import type { ValidationStep } from "../config/schema.js";
-import { getWorkflow } from "./registry.js";
+import { detectStack } from "./detect.js";
+import { loadCustomWorkflows } from "./custom.js";
+import { deepMerge } from "../config/loader.js";
 import { parseDuration } from "../utils/duration.js";
 import { parseMemory } from "../container/runner.js";
+
+const CODE_SYSTEM = `You are an expert software engineer working in an isolated container.
+Your workspace is at /workspace containing the project repository.
+
+## How to work
+
+### 1. Understand before you code
+Before writing any code:
+- Read the task fully. Identify which parts of the codebase are involved.
+- Use ripgrep and fd to search for related files, functions, types, and tests.
+- Read the existing code around where your changes will go. Understand the patterns in use.
+- Check if the problem is already partially solved or if similar functionality exists. If so, extend it rather than building from scratch.
+- Form a plan. Know which files you will change and why before you open an editor.
+
+### 2. Follow the project's patterns, not your own
+{{conventions}}
+
+### 3. Make surgical changes
+- Change only what the task requires. Do not refactor unrelated code.
+- Do not modify linting rules, test configs, CI workflows, or build scripts.
+- Do not install new dependencies unless the task explicitly requires it.
+- Do not add comments explaining obvious code. Match the commenting style of the existing codebase.
+- When deleting or replacing code, verify the old code is actually removed, not just that new code exists alongside it.
+
+### 4. Verify continuously, not just at the end
+Run the relevant check after each meaningful change — do not batch all verification to the end.
+- After modifying types or interfaces → run typecheck
+- After modifying logic → run the relevant tests
+- Before considering yourself done → run the full verification suite
+
+### 5. When something fails
+- Read the full error output carefully. Identify the root cause, not just the symptom.
+- If you have failed the same check twice with the same error, STOP and try a fundamentally different approach. Do not make the same fix again with minor variations.
+- If you are stuck after 3 attempts, simplify. Revert to a known-good state and take a smaller step.
+- Never suppress errors by weakening types, disabling lint rules, or skipping tests.
+
+### 6. Write tests
+- Write tests for new functionality. Follow the existing test patterns (location, naming, style, framework).
+- If the task is a bug fix, write a test that would have caught the bug.
+- Run the new tests in isolation first to make sure they pass before running the full suite.`;
+
+const REVIEW_SYSTEM = `You are a senior code reviewer. Critically review the changes.
+Check for: security issues, error handling, resource leaks, logic errors, test coverage.
+If acceptable, respond with exactly: LGTM
+If issues exist, list them numbered. Only flag real problems, not style preferences.`;
+
+const BUILTINS: Record<string, WorkflowDefinition> = {
+  code: {
+    name: "code",
+    description: "Write, fix, or refactor code in a git repository",
+    container: { image: "forgectl/code-node20", network: { mode: "open", allow: [] } },
+    input: { mode: "repo", mountPath: "/workspace" },
+    tools: ["git", "ripgrep", "fd"],
+    system: CODE_SYSTEM,
+    validation: {
+      steps: [],
+      lint_steps: [],
+      on_failure: "abandon",
+      max_same_failures: 2,
+      on_repeated_failure: "abort",
+    },
+    output: { mode: "git", path: "/workspace", collect: [] },
+    review: { enabled: true, system: REVIEW_SYSTEM },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+  research: {
+    name: "research",
+    description: "Research a topic, synthesize findings, produce a report",
+    container: { image: "forgectl/research-browser", network: { mode: "open", allow: [] } },
+    input: { mode: "files", mountPath: "/input" },
+    tools: ["curl", "puppeteer", "jq", "pandoc", "python3"],
+    system: `You are an expert researcher working in an isolated container.
+
+You have access to the web via curl and a headless browser (Puppeteer).
+Context files (if any) are in /input.
+Write your output to /output.
+
+Rules:
+- Cite all sources with URLs
+- Distinguish facts from analysis/opinion
+- Use markdown for reports
+- Include an executive summary at the top
+- Save all output files to /output`,
+    validation: {
+      steps: [
+        { name: "output-exists", command: "test -f /output/*.md || test -f /output/*.pdf", retries: 2, description: "Report file exists" },
+        { name: "has-sources", command: "grep -c 'http' /output/*.md | awk -F: '{s+=$2} END {if(s<3) exit 1}'", retries: 2, description: "Report includes at least 3 source URLs" },
+        { name: "min-length", command: "wc -w /output/*.md | tail -1 | awk '{if($1<500) exit 1}'", retries: 1, description: "Report is at least 500 words" },
+      ],
+      lint_steps: [],
+      on_failure: "output-wip",
+      max_same_failures: 2,
+      on_repeated_failure: "abort",
+    },
+    output: { mode: "git", path: "/output", collect: ["**/*.md", "**/*.pdf", "**/*.json"] },
+    review: {
+      enabled: true,
+      system: `You are a fact-checker and editor. Review this research report.
+Check for: unsupported claims, missing citations, logical gaps, outdated information.
+If acceptable, respond with: APPROVED
+If issues exist, list them numbered.`,
+    },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+  content: {
+    name: "content",
+    description: "Write blog posts, documentation, marketing copy, translations",
+    container: { image: "forgectl/content", network: { mode: "open", allow: [] } },
+    input: { mode: "files", mountPath: "/input" },
+    tools: ["pandoc", "vale", "wkhtmltopdf", "python3"],
+    system: `You are an expert writer working in an isolated container.
+
+Context files (brand guides, source material, etc.) are in /input.
+Write your output to /output.
+
+Rules:
+- Match the tone and style specified in the task or brand guide
+- Use markdown unless another format is specified
+- Include appropriate headings and structure
+- Save all output files to /output`,
+    validation: {
+      steps: [
+        { name: "output-exists", command: "ls /output/*.md /output/*.html /output/*.pdf 2>/dev/null | head -1 | grep -q .", retries: 2, description: "Output file exists" },
+        { name: "prose-lint", command: "vale --output=line /output/*.md 2>/dev/null || true", retries: 2, description: "Prose quality check (spelling, grammar, style)" },
+      ],
+      lint_steps: [],
+      on_failure: "output-wip",
+      max_same_failures: 2,
+      on_repeated_failure: "abort",
+    },
+    output: { mode: "git", path: "/output", collect: ["**/*.md", "**/*.html", "**/*.pdf", "**/*.docx"] },
+    review: {
+      enabled: true,
+      system: `You are a senior editor. Review this content for clarity, accuracy, and tone.
+Check for: factual errors, unclear writing, tone inconsistency, missing sections.
+If acceptable, respond with: APPROVED
+If issues exist, list them numbered.`,
+    },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+  data: {
+    name: "data",
+    description: "ETL, analysis, cleaning, visualization, dataset transformation",
+    container: { image: "forgectl/data", network: { mode: "open", allow: [] } },
+    input: { mode: "files", mountPath: "/input" },
+    tools: ["python3", "pandas", "numpy", "matplotlib", "duckdb", "jq", "csvkit"],
+    system: `You are a data engineer/analyst working in an isolated container.
+
+Input data files are in /input.
+Write all output to /output.
+
+Rules:
+- Validate data before and after transformations
+- Preserve original files in /input (read-only)
+- Document any assumptions or data quality issues
+- Save analysis scripts to /output/scripts/ so work is reproducible
+- Save data outputs to /output/data/
+- Save visualizations to /output/viz/`,
+    validation: {
+      steps: [
+        { name: "output-exists", command: "ls /output/data/* 2>/dev/null | head -1 | grep -q .", retries: 2, description: "Output data files exist" },
+        { name: "scripts-exist", command: "ls /output/scripts/*.py 2>/dev/null | head -1 | grep -q .", retries: 1, description: "Processing scripts are saved (reproducibility)" },
+        {
+          name: "no-pii",
+          command: `python3 -c "
+import re, sys, glob
+patterns = [r'\\b\\d{3}-\\d{2}-\\d{4}\\b', r'\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b']
+for f in glob.glob('/output/data/*'):
+  text = open(f).read()
+  for p in patterns:
+    if re.search(p, text):
+      print(f'PII detected in {f}'); sys.exit(1)
+"`,
+          retries: 1,
+          description: "Check output for PII (SSN, email patterns)",
+        },
+      ],
+      lint_steps: [],
+      on_failure: "abandon",
+      max_same_failures: 2,
+      on_repeated_failure: "abort",
+    },
+    output: { mode: "git", path: "/output", collect: ["**/*"] },
+    review: { enabled: false, system: "" },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+  ops: {
+    name: "ops",
+    description: "Infrastructure scripts, Terraform modules, migration scripts, monitoring config",
+    container: { image: "forgectl/ops", network: { mode: "open", allow: [] } },
+    input: { mode: "repo", mountPath: "/workspace" },
+    tools: ["terraform", "aws-cli", "kubectl", "ansible", "shellcheck", "python3"],
+    system: `You are a senior infrastructure engineer working in an isolated container.
+
+Your workspace is at /workspace. You are writing infrastructure-as-code.
+You do NOT have access to any real cloud accounts or clusters.
+All validation is via dry-run / plan / lint — nothing is applied.
+
+Rules:
+- All Terraform must pass \`terraform validate\` and \`terraform fmt\`
+- All shell scripts must pass shellcheck
+- Include README or comments explaining what the code does
+- Use variables for anything environment-specific (no hardcoded values)`,
+    validation: {
+      steps: [
+        { name: "shellcheck", command: "find /workspace -name '*.sh' -exec shellcheck {} + 2>/dev/null || true", retries: 2, description: "Shell script linting" },
+        { name: "terraform-fmt", command: "find /workspace -name '*.tf' -exec terraform fmt -check {} + 2>/dev/null || true", retries: 2, description: "Terraform formatting" },
+        { name: "terraform-validate", command: "cd /workspace && terraform init -backend=false 2>/dev/null && terraform validate 2>/dev/null || true", retries: 2, description: "Terraform configuration validation" },
+      ],
+      lint_steps: [],
+      on_failure: "output-wip",
+      max_same_failures: 2,
+      on_repeated_failure: "abort",
+    },
+    output: { mode: "git", path: "/workspace", collect: [] },
+    review: {
+      enabled: true,
+      system: `You are a senior infrastructure reviewer. Review these IaC changes.
+Check for: security misconfigs, missing encryption, overly permissive IAM,
+hardcoded secrets, missing tagging, resource naming conventions.
+If acceptable, respond with: LGTM
+If issues exist, list them numbered.`,
+    },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+  general: {
+    name: "general",
+    description: "General-purpose workflow. Configure via project config.",
+    container: { image: "forgectl/code-node20", network: { mode: "open", allow: [] } },
+    input: { mode: "files", mountPath: "/input" },
+    tools: ["git", "curl", "jq", "python3"],
+    system: `You are an AI assistant working in an isolated container.
+Input files (if any) are in /input. Write output to /output.
+Complete the task as instructed.`,
+    validation: { steps: [], lint_steps: [], on_failure: "output-wip", max_same_failures: 2, on_repeated_failure: "abort" },
+    output: { mode: "git", path: "/output", collect: ["**/*"] },
+    review: { enabled: false, system: "" },
+    cache: { enabled: true, ttl: "7d" },
+    autonomy: "full",
+    skills: [],
+  },
+};
+
+export function getWorkflow(name: string, projectDir?: string): WorkflowDefinition {
+  if (BUILTINS[name]) return BUILTINS[name];
+
+  const customs = loadCustomWorkflows(projectDir);
+  const custom = customs[name];
+  if (!custom) {
+    throw new Error(
+      `Unknown workflow: "${name}". Available: ${listWorkflowNames(projectDir).join(", ")}`
+    );
+  }
+
+  if (custom.extends && BUILTINS[custom.extends]) {
+    return deepMerge(BUILTINS[custom.extends], custom) as WorkflowDefinition;
+  }
+
+  return custom;
+}
+
+export function listWorkflowNames(projectDir?: string): string[] {
+  const customNames = Object.keys(loadCustomWorkflows(projectDir));
+  return [...Object.keys(BUILTINS), ...customNames];
+}
+
+export function listWorkflows(projectDir?: string): WorkflowDefinition[] {
+  const customs = loadCustomWorkflows(projectDir);
+  return [...Object.values(BUILTINS), ...Object.values(customs)];
+}
 
 export interface WorkflowOverrides {
   autonomy?: AutonomyLevel;
@@ -32,18 +312,11 @@ export interface CLIOptions {
   noCleanup?: boolean;
   dryRun?: boolean;
   config?: string;
-  // Commander sets skills=false when --no-skills is passed, undefined when omitted
   skills?: boolean;
-  // Commander sets team=false when --no-team is passed, undefined when omitted
   team?: boolean;
-  // Numeric override from --team-size
   teamSize?: number;
 }
 
-/**
- * Scale base memory string by 1GB per teammate (teammates = teamSize - 1).
- * Returns a string like "6g" using ceiling division to nearest GB.
- */
 function scaleMemoryForTeam(baseMemory: string, teammateCount: number): string {
   const baseBytes = parseMemory(baseMemory);
   const extraBytes = teammateCount * 1024 ** 3;
@@ -51,79 +324,19 @@ function scaleMemoryForTeam(baseMemory: string, teammateCount: number): string {
   return `${totalGB}g`;
 }
 
-/**
- * Auto-detect workflow from CLI inputs if not explicitly specified.
- */
 function detectWorkflow(options: CLIOptions): string {
   if (options.workflow) return options.workflow;
   if (options.repo) return "code";
   if (options.input?.some(f => /\.(csv|tsv|json|parquet|xlsx)$/i.test(f))) return "data";
   if (options.input?.some(f => /\.(md|txt|docx|doc)$/i.test(f))) return "content";
-  // Check if cwd is a git repo
   try {
     execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
-    // Auto-detect language-specific code workflow
-    const cwd = resolve(options.repo || ".");
-    const lang = detectLanguage(cwd);
-    if (lang === "python") return "code-python";
-    if (lang === "go") return "code-go";
-    if (lang === "rust") return "code-rust";
     return "code";
   } catch {
     return "general";
   }
 }
 
-interface LanguageDefaults {
-  image: string;
-  validation: ValidationStep[];
-}
-
-const LANGUAGE_DEFAULTS: Record<string, LanguageDefaults> = {
-  python: {
-    image: "forgectl/code-python312",
-    validation: [
-      { name: "test", command: "pytest", retries: 3, description: "" },
-      { name: "lint", command: "ruff check .", retries: 3, description: "" },
-      { name: "typecheck", command: "mypy .", retries: 2, description: "" },
-    ],
-  },
-  go: {
-    image: "forgectl/code-go122",
-    validation: [
-      { name: "test", command: "go test ./...", retries: 3, description: "" },
-      { name: "lint", command: "golangci-lint run", retries: 3, description: "" },
-    ],
-  },
-  rust: {
-    image: "forgectl/code-rust",
-    validation: [
-      { name: "test", command: "cargo test", retries: 3, description: "" },
-      { name: "lint", command: "cargo clippy -- -D warnings", retries: 3, description: "" },
-    ],
-  },
-};
-
-/**
- * Detect the project language from marker files in the workspace directory.
- * Returns language key or undefined if no marker is found (defaults to Node).
- */
-function detectLanguage(workspaceDir: string): string | undefined {
-  if (existsSync(resolve(workspaceDir, "pyproject.toml")) || existsSync(resolve(workspaceDir, "requirements.txt"))) {
-    return "python";
-  }
-  if (existsSync(resolve(workspaceDir, "go.mod"))) {
-    return "go";
-  }
-  if (existsSync(resolve(workspaceDir, "Cargo.toml"))) {
-    return "rust";
-  }
-  return undefined;
-}
-
-/**
- * Resolve network configuration from workflow + config overrides.
- */
 function resolveNetwork(
   workflow: WorkflowDefinition,
   config: ForgectlConfig,
@@ -140,13 +353,11 @@ function resolveNetwork(
     return { mode: "airgapped", dockerNetwork: "none" };
   }
 
-  // Allowlist mode
   const allow = [
     ...workflow.container.network.allow,
     ...(config.container.network.allow ?? []),
   ];
 
-  // Auto-add LLM API domain
   if (agentType === "claude-code" && !allow.includes("api.anthropic.com")) {
     allow.push("api.anthropic.com");
   }
@@ -161,9 +372,6 @@ function resolveNetwork(
   };
 }
 
-/**
- * Build a complete RunPlan from workflow definition + config + CLI options.
- */
 export function resolveRunPlan(
   config: ForgectlConfig,
   options: CLIOptions,
@@ -181,21 +389,17 @@ export function resolveRunPlan(
   const runId = `forge-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15)}-${randomBytes(2).toString("hex")}`;
   const agentType = (options.agent ?? config.agent.type) as "claude-code" | "codex";
 
-  // Language auto-detection for code workflow (only when no explicit config image)
   const workspaceDir = resolve(options.repo || ".");
-  const detectedLang = workflowName === "code" && !config.container.image
-    ? detectLanguage(workspaceDir)
+  const detected = workflowName === "code" && !config.container.image
+    ? detectStack(workspaceDir)
     : undefined;
-  const langDefaults = detectedLang ? LANGUAGE_DEFAULTS[detectedLang] : undefined;
 
-  // Team config: CLI --team-size overrides workflow, --no-team disables entirely
   const resolvedNoTeam = options.team === false;
   const effectiveTeamSize = resolvedNoTeam
     ? undefined
     : options.teamSize ?? workflow.team?.size;
   const hasTeam = effectiveTeamSize !== undefined && effectiveTeamSize >= 2;
 
-  // Determine input sources
   const inputSources: string[] = [];
   if (workflow.input.mode === "repo" || workflow.input.mode === "both") {
     inputSources.push(resolve(options.repo || "."));
@@ -204,8 +408,6 @@ export function resolveRunPlan(
     inputSources.push(...options.input.map(p => resolve(p)));
   }
 
-  // Determine review config
-  // Commander: --review sets review=true, --no-review sets review=false, neither sets review=undefined
   const reviewEnabled = options.review === true
     ? true
     : options.review === false
@@ -224,7 +426,7 @@ export function resolveRunPlan(
       flags: config.agent.flags,
     },
     container: {
-      image: config.container.image ?? langDefaults?.image ?? workflow.container.image,
+      image: config.container.image ?? detected?.image ?? workflow.container.image,
       dockerfile: config.container.dockerfile,
       network: resolveNetwork(workflow, config, agentType, runId),
       resources: {
@@ -246,7 +448,7 @@ export function resolveRunPlan(
       inject: [],
     },
     validation: {
-      steps: langDefaults?.validation ?? workflow.validation.steps,
+      steps: detected?.defaultValidation ?? workflow.validation.steps,
       lintSteps: workflow.validation.lint_steps ?? [],
       onFailure: workflow.validation.on_failure,
       maxSameFailures: workflow.validation.max_same_failures ?? 2,

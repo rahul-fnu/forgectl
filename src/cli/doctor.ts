@@ -81,7 +81,7 @@ export async function checkDockerImages(): Promise<CheckResult[]> {
     // Verify Docker is reachable first
     await docker.version();
 
-    const { listWorkflows } = await import("../workflow/registry.js");
+    const { listWorkflows } = await import("../workflow/resolver.js");
     let workflows: ReturnType<typeof listWorkflows> = [];
     try {
       workflows = listWorkflows();
