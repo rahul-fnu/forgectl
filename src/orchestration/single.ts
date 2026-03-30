@@ -4,7 +4,7 @@ import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
 import { getAgentAdapter } from "../agent/registry.js";
 import { createAgentSession } from "../agent/session.js";
-import { buildPrompt } from "../context/prompt.js";
+import { buildPrompt, buildHandoffContext } from "../context/prompt.js";
 import { createContainer } from "../container/runner.js";
 import { ensureImage } from "../container/builder.js";
 import { prepareRepoWorkspace, prepareFilesWorkspace } from "../container/workspace.js";
@@ -22,6 +22,8 @@ import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
 import { emitRunEvent } from "../logging/events.js";
 import { checkCostCeiling, BudgetExceededError } from "../agent/budget.js";
+import { isComplexTask } from "../workflow/types.js";
+import { buildFeatureBranchName } from "../planner/decompose-to-issues.js";
 
 export interface ReviewSummary {
   totalRounds: number;
@@ -157,10 +159,20 @@ export async function executeSingleAgent(
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
 
+    // --- Feature branch for complex tasks ---
+    if (!plan.featureBranch && isComplexTask(plan)) {
+      plan = { ...plan, featureBranch: buildFeatureBranchName(plan.task) };
+      logger.info("prepare", `Complex task detected — using feature branch: ${plan.featureBranch}`);
+    }
+
     // --- Phase: Execute ---
     emitRunEvent({ runId: plan.runId, type: "phase", timestamp: new Date().toISOString(), data: { phase: "execute" } });
 
-    const prompt = buildPrompt(plan);
+    // Build handoff context from plan entries (if provided by pipeline or orchestrator)
+    const handoffContext = plan.handoffEntries
+      ? buildHandoffContext(plan.handoffEntries)
+      : undefined;
+    const prompt = buildPrompt(plan, { handoffContext });
     logger.info("agent", `Running ${plan.agent.type}...`);
 
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
