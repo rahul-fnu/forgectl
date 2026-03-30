@@ -8,11 +8,4 @@ export interface GitResult {
   diffStat?: string;
 }
 
-export interface FileResult {
-  mode: "files";
-  dir: string;
-  files: string[];
-  totalSize: number;
-}
-
-export type OutputResult = GitResult | FileResult;
+export type OutputResult = GitResult;

@@ -4,7 +4,6 @@ import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
 import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
 import type { LockRepository } from "../storage/repositories/locks.js";
-import type { AgentAdapter } from "../agent/types.js";
 import { getAgentAdapter } from "../agent/registry.js";
 import { createAgentSession } from "../agent/session.js";
 import { buildPrompt } from "../context/prompt.js";
@@ -122,29 +121,6 @@ export async function prepareExecution(
       const teammates = plan.team.size - 1;
       agentEnv.push(`CLAUDE_NUM_TEAMMATES=${teammates}`);
     }
-  } else if (plan.agent.type === "browser-use") {
-    // Browser-use needs LLM credentials -- try Claude first (forgectl is Claude-first), fall back to OpenAI
-    try {
-      const claudeAuth = await getClaudeAuth();
-      if (claudeAuth?.type === "api_key" && claudeAuth.apiKey) {
-        agentEnv.push(`ANTHROPIC_API_KEY=${claudeAuth.apiKey}`);
-      }
-    } catch {
-      // Claude key is optional for browser-use
-    }
-    // Also check OpenAI as fallback/alternative
-    try {
-      const codexAuth = await getCodexAuth();
-      if (codexAuth?.type === "api_key" && codexAuth.apiKey) {
-        agentEnv.push(`OPENAI_API_KEY=${codexAuth.apiKey}`);
-      }
-    } catch {
-      // OpenAI key is optional for browser-use
-    }
-    // Docker env vars for Chromium sandbox workaround
-    agentEnv.push("IN_DOCKER=True");
-    agentEnv.push("BROWSER_USE_CHROME_NO_SANDBOX=1");
-    // No bind mounts needed -- sidecar runs inside container
   } else {
     const auth = await getCodexAuth();
     if (!auth) throw new Error("No Codex credentials configured. Run: codex login (OAuth) or forgectl auth add codex (API key)");
@@ -190,10 +166,7 @@ export async function prepareExecution(
   }
 
   // Build adapter and options
-  // browser-use has no CLI adapter -- it uses BrowserUseSession directly via createAgentSession
-  const adapter = plan.agent.type === "browser-use"
-    ? { name: "browser-use", buildShellCommand: () => "" } as AgentAdapter
-    : getAgentAdapter(plan.agent.type);
+  const adapter = getAgentAdapter(plan.agent.type);
   const agentOptions = {
     model: plan.agent.model,
     maxTurns: plan.agent.maxTurns,

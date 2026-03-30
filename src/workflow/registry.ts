@@ -5,7 +5,6 @@ import { contentWorkflow } from "./builtins/content.js";
 import { dataWorkflow } from "./builtins/data.js";
 import { opsWorkflow } from "./builtins/ops.js";
 import { generalWorkflow } from "./builtins/general.js";
-import { browserResearchWorkflow } from "./builtins/browser-research.js";
 import { codePythonWorkflow } from "./builtins/code-python.js";
 import { codeGoWorkflow } from "./builtins/code-go.js";
 import { codeRustWorkflow } from "./builtins/code-rust.js";
@@ -19,7 +18,6 @@ const BUILTINS: Record<string, WorkflowDefinition> = {
   data: dataWorkflow,
   ops: opsWorkflow,
   general: generalWorkflow,
-  "browser-research": browserResearchWorkflow,
   "code-python": codePythonWorkflow,
   "code-go": codeGoWorkflow,
   "code-rust": codeRustWorkflow,

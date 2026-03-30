@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const duration = z.string().regex(/^\d+(s|m|h|d)$/, "Must be a duration like 30s, 5m, 1h, 7d");
 
-export const AgentType = z.enum(["claude-code", "codex", "browser-use"]);
+export const AgentType = z.enum(["claude-code", "codex"]);
 export type AgentType = z.infer<typeof AgentType>;
 
 export const NetworkMode = z.enum(["open", "allowlist", "airgapped"]);
@@ -12,7 +12,7 @@ export const FailureAction = z.enum(["abandon", "output-wip", "pause"]);
 export const RepeatedFailureAction = z.enum(["abort", "change_strategy", "escalate"]);
 export const OrchestrationMode = z.enum(["single", "review", "parallel"]);
 export const InputMode = z.enum(["repo", "files", "both"]);
-export const OutputMode = z.enum(["git", "files"]);
+export const OutputMode = z.enum(["git"]);
 
 export const AutonomyLevelEnum = z.enum(["full", "interactive", "semi", "supervised"]);
 export type AutonomyLevelEnum = z.infer<typeof AutonomyLevelEnum>;

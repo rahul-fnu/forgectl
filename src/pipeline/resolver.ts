@@ -9,7 +9,6 @@ import type {
   ResolvedNodeInput,
 } from "./types.js";
 
-const gitWorkflows = new Set(["code", "ops"]);
 const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
 interface GitChangeEntry {
@@ -24,8 +23,8 @@ interface ClassifiedContext {
   inlineContent?: string;
 }
 
-export function getWorkflowOutputMode(workflowName: string): "git" | "files" {
-  return gitWorkflows.has(workflowName) ? "git" : "files";
+export function getWorkflowOutputMode(workflowName: string): "git" {
+  return "git";
 }
 
 /**
@@ -129,16 +128,6 @@ export async function resolveNodeInput(
         }
       }
 
-      continue;
-    }
-
-    if (downstreamMode === "files") {
-      for (const file of output.files) {
-        result.fileArtifacts.push({
-          sourcePath: join(output.dir, file),
-          targetPath: join("upstream", depId, file),
-        });
-      }
       continue;
     }
 

@@ -45,7 +45,7 @@ for f in glob.glob('/output/data/*'):
     max_same_failures: 2,
     on_repeated_failure: "abort",
   },
-  output: { mode: "files", path: "/output", collect: ["**/*"] },
+  output: { mode: "git", path: "/output", collect: ["**/*"] },
   review: { enabled: false, system: "" },
   cache: { enabled: true, ttl: "7d" },
   autonomy: "full",

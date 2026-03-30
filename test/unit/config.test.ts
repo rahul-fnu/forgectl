@@ -67,13 +67,6 @@ describe("ConfigSchema", () => {
     })).toThrow();
   });
 
-  it("accepts browser-use agent type", () => {
-    const config = ConfigSchema.parse({
-      agent: { type: "browser-use" },
-    });
-    expect(config.agent.type).toBe("browser-use");
-  });
-
   it("rejects invalid duration format", () => {
     expect(() => ConfigSchema.parse({
       agent: { timeout: "invalid" }

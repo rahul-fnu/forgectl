@@ -401,13 +401,6 @@ export class PipelineExecutor {
         insertions: 0,
         deletions: 0,
       };
-    } else if (checkpoint.outputDir) {
-      output = {
-        mode: "files",
-        dir: checkpoint.outputDir,
-        files: [...(checkpoint.outputFiles ?? [])],
-        totalSize: 0,
-      };
     } else {
       throw new Error(`Checkpoint for node "${nodeId}" has no restorable output`);
     }

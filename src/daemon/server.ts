@@ -643,7 +643,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
   // Discord bot initialization (when discord.enabled is true)
-  let discordBot: Awaited<ReturnType<typeof import("../discord/bot.js").startDiscordBot>> | null = null;
   if (config.discord?.enabled) {
     try {
       const { startDiscordBot } = await import("../discord/bot.js");
