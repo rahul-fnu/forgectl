@@ -38,6 +38,8 @@ export interface OrchestratorState {
   featureBranches: Map<string, string>;
   /** Issues recently completed and closed — guards against re-dispatch before tracker API reflects Done state. Value is timestamp (ms). */
   recentlyCompleted: Map<string, number>;
+  /** Cached candidate issues from the last tracker fetch — enables immediate dispatch when a slot opens without an API call. */
+  cachedCandidates: TrackerIssue[];
 }
 
 /**
@@ -52,6 +54,7 @@ export function createState(): OrchestratorState {
     issueBranches: new Map(),
     featureBranches: new Map(),
     recentlyCompleted: new Map(),
+    cachedCandidates: [],
   };
 }
 
