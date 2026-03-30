@@ -1,12 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { buildPrompt } from "../../src/context/prompt.js";
 import type { RunPlan } from "../../src/workflow/types.js";
-
-// Mock fs to control file reads
-vi.mock("node:fs", () => ({
-  existsSync: vi.fn((path: string) => path.endsWith("context.md")),
-  readFileSync: vi.fn(() => "context file content"),
-}));
 
 function makeMinimalPlan(overrides: Partial<RunPlan> = {}): RunPlan {
   return {
@@ -47,43 +41,17 @@ function makeMinimalPlan(overrides: Partial<RunPlan> = {}): RunPlan {
 }
 
 describe("buildPrompt", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("includes the workflow system prompt", () => {
-    const plan = makeMinimalPlan();
-    const prompt = buildPrompt(plan);
-    expect(prompt).toContain("You are an expert software engineer.");
-  });
-
-  it("uses context.system override when provided", () => {
-    const plan = makeMinimalPlan({
-      context: { system: "Custom system prompt", files: [], inject: [] },
-    });
-    const prompt = buildPrompt(plan);
-    expect(prompt).toContain("Custom system prompt");
-  });
-
   it("includes the task", () => {
-    const plan = makeMinimalPlan();
-    const prompt = buildPrompt(plan);
-    expect(prompt).toContain("Add a healthcheck endpoint");
+    const prompt = buildPrompt(makeMinimalPlan());
     expect(prompt).toContain("## Task");
+    expect(prompt).toContain("Add a healthcheck endpoint");
   });
 
-  it("includes available tools", () => {
-    const plan = makeMinimalPlan();
-    const prompt = buildPrompt(plan);
-    expect(prompt).toContain("node, npm");
-    expect(prompt).toContain("Available tools");
-  });
-
-  it("omits tools section when no tools defined", () => {
-    const plan = makeMinimalPlan();
-    plan.workflow.tools = [];
-    const prompt = buildPrompt(plan);
+  it("does not include system prompt, tools, or context files", () => {
+    const prompt = buildPrompt(makeMinimalPlan());
+    expect(prompt).not.toContain("expert software engineer");
     expect(prompt).not.toContain("Available tools");
+    expect(prompt).not.toContain("Context:");
   });
 
   it("includes validation instructions when steps exist", () => {
@@ -100,20 +68,18 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("Verification");
     expect(prompt).toContain("must ALL pass");
     expect(prompt).toContain("lint");
-    expect(prompt).toContain("npm run lint");
+    expect(prompt).toContain("`npm run lint`");
     expect(prompt).toContain("test");
-    expect(prompt).toContain("npm test");
-    expect(prompt).toContain("If any check fails");
+    expect(prompt).toContain("`npm test`");
   });
 
   it("omits validation section when no steps", () => {
-    const plan = makeMinimalPlan({ validation: { steps: [], onFailure: "abandon" } });
-    const prompt = buildPrompt(plan);
+    const prompt = buildPrompt(makeMinimalPlan({ validation: { steps: [], onFailure: "abandon" } }));
     expect(prompt).not.toContain("Verification");
     expect(prompt).not.toContain("Reproduce");
   });
 
-  it("splits reproduction and verification steps in prompt", () => {
+  it("splits reproduction and verification steps", () => {
     const plan = makeMinimalPlan({
       validation: {
         steps: [
@@ -132,7 +98,7 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("lint");
   });
 
-  it("shows only VERIFY section when no before_fix steps", () => {
+  it("shows only verification section when no before_fix steps", () => {
     const plan = makeMinimalPlan({
       validation: {
         steps: [
@@ -155,16 +121,12 @@ describe("buildPrompt", () => {
   });
 
   it("does not include output path instruction for git mode", () => {
-    const plan = makeMinimalPlan({
-      output: { mode: "git", path: "/workspace", collect: [], hostDir: "" },
-    });
-    const prompt = buildPrompt(plan);
+    const prompt = buildPrompt(makeMinimalPlan());
     expect(prompt).not.toContain("Save all output files");
   });
 
-  it("includes promoted review findings as conventions", () => {
-    const plan = makeMinimalPlan();
-    const prompt = buildPrompt(plan, {
+  it("accepts promotedFindings option without error (ignored)", () => {
+    const prompt = buildPrompt(makeMinimalPlan(), {
       promotedFindings: [
         {
           id: 1,
@@ -179,28 +141,6 @@ describe("buildPrompt", () => {
         },
       ],
     });
-    expect(prompt).toContain("code review history");
-    expect(prompt).toContain("Always handle errors in database calls with typed errors");
-    expect(prompt).toContain("flagged 5 times");
-  });
-
-  it("omits conventions section when no promoted findings", () => {
-    const plan = makeMinimalPlan();
-    const prompt = buildPrompt(plan, { promotedFindings: [] });
-    expect(prompt).not.toContain("code review history");
-  });
-
-  it("still works with ContextResult as second argument (backward compat)", () => {
-    const plan = makeMinimalPlan();
-    const kgContext = {
-      systemContext: "KG system context",
-      taskContext: "KG task context",
-      budget: { used: 100, max: 1000, reservedForAgent: 500 },
-      merkleRoot: "abc123",
-      includedFiles: [],
-    };
-    const prompt = buildPrompt(plan, kgContext);
-    expect(prompt).toContain("KG system context");
-    expect(prompt).toContain("KG task context");
+    expect(prompt).toContain("## Task");
   });
 });
