@@ -112,6 +112,7 @@ export const OrchestratorConfigSchema = z.object({
   child_slots: z.number().int().min(0).default(0),
   enable_triage: z.boolean().default(false),
   triage_max_complexity: z.number().int().min(1).max(10).default(7),
+  auto_approve: z.boolean().default(true),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
@@ -229,12 +230,6 @@ export const ConfigSchema = z.object({
 
   storage: z.object({
     db_path: z.string().default("~/.forgectl/forgectl.db"),
-  }).default({}),
-
-  board: z.object({
-    state_dir: z.string().default("~/.forgectl/board"),
-    scheduler_tick_seconds: z.number().int().positive().default(30),
-    max_concurrent_card_runs: z.number().int().positive().default(2),
   }).default({}),
 
   github_app: GitHubAppConfigSchema.optional(),

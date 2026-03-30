@@ -30,9 +30,6 @@ import { parseDuration } from "../utils/duration.js";
 import { formatDuration } from "../utils/duration.js";
 import type { GovernanceOpts } from "./dispatcher.js";
 import { emitRunEvent } from "../logging/events.js";
-import { needsPostApproval } from "../governance/autonomy.js";
-import { enterPendingOutputApproval } from "../governance/approval.js";
-import { evaluateAutoApprove } from "../governance/rules.js";
 import { saveCheckpoint } from "../durability/checkpoint.js";
 import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
 import type { TrackerAdapter } from "../tracker/types.js";
@@ -718,25 +715,6 @@ export async function executeWorker(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn("worker", `Failed to update progress comment (output stage): ${msg}`);
-      }
-    }
-
-    // --- Post-execution approval gate ---
-    if (governance?.autonomy && needsPostApproval(governance.autonomy) && governance.runRepo && governance.runId) {
-      const actualCost = agentResult.tokenUsage
-        ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
-        : undefined;
-      const autoApproveCtx = {
-        labels: issue.labels,
-        workflowName: plan.workflow.name,
-        actualCost,
-      };
-      if (governance.autoApprove && evaluateAutoApprove(governance.autoApprove, autoApproveCtx)) {
-        logger.info("governance", `Auto-approved post-gate for run ${governance.runId}`);
-      } else {
-        enterPendingOutputApproval(governance.runRepo, governance.runId);
-        logger.info("governance", `Run ${governance.runId} requires output approval (autonomy=${governance.autonomy})`);
-        pendingApproval = true;
       }
     }
 

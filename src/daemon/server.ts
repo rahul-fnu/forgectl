@@ -24,8 +24,6 @@ import { recoverInterruptedRuns } from "../durability/recovery.js";
 import { releaseAllStaleLocks } from "../durability/locks.js";
 import { Logger } from "../logging/logger.js";
 import type { QueuedRun } from "./queue.js";
-import { BoardEngine } from "../board/engine.js";
-import { BoardStore, resolveBoardStateDir } from "../board/store.js";
 import { PipelineRunService } from "./pipeline-service.js";
 import { Orchestrator } from "../orchestrator/index.js";
 import { SubIssueCache } from "../tracker/sub-issue-cache.js";
@@ -54,7 +52,7 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   app.addHook("onRequest", async (request, reply) => {
     const url = request.url;
-    if (url.startsWith("/api/v1/") || url.startsWith("/runs") || url.startsWith("/pipelines") || url.startsWith("/boards") || url.startsWith("/outcomes") || url.startsWith("/auth")) {
+    if (url.startsWith("/api/v1/") || url.startsWith("/runs") || url.startsWith("/pipelines") || url.startsWith("/outcomes") || url.startsWith("/auth")) {
       const authHeader = request.headers.authorization;
       const queryToken = (request.query as Record<string, string>)?.token;
       if (authHeader === `Bearer ${daemonToken}` || queryToken === daemonToken) {
@@ -115,14 +113,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   }
 
   const pipelineService = new PipelineRunService(pipelineRepo);
-  const boardStore = new BoardStore(resolveBoardStateDir(config.board.state_dir));
-  const boardEngine = new BoardEngine(boardStore, pipelineService, {
-    maxConcurrentCardRuns: config.board.max_concurrent_card_runs,
-  });
-
-  const schedulerInterval = setInterval(() => {
-    void boardEngine.schedulerTick();
-  }, config.board.scheduler_tick_seconds * 1000);
 
   // Orchestrator initialization (when enabled or forced via CLI)
   let orchestrator: Orchestrator | null = null;
@@ -204,8 +194,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   registerRoutes(app, queue, {
     pipelineService,
-    boardStore,
-    boardEngine,
     orchestrator: orchestrator ?? undefined,
     runRepo,
     costRepo,
@@ -304,7 +292,28 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
       });
 
       const { handleSlashCommand } = await import("../github/command-handler.js");
-      const { approveRun, rejectRun } = await import("../governance/approval.js");
+      const { emitRunEvent } = await import("../logging/events.js");
+      const pendingStatuses = new Set(["pending_approval", "pending_output_approval"]);
+      const approveRun = (repo: typeof runRepo, id: string) => {
+        const run = repo.findById(id);
+        if (!run) throw new Error(`Run ${id} not found`);
+        if (!pendingStatuses.has(run.status)) throw new Error(`Cannot act on run ${id}: status is ${run.status}`);
+        const prev = run.status;
+        if (run.status === "pending_approval") {
+          repo.updateStatus(id, { status: "running", approvalAction: "approve" });
+        } else {
+          repo.updateStatus(id, { status: "completed", completedAt: new Date().toISOString(), approvalAction: "approve" });
+        }
+        emitRunEvent({ runId: id, type: "approved", timestamp: new Date().toISOString(), data: { previousStatus: prev } });
+        return { previousStatus: prev };
+      };
+      const rejectRun = (repo: typeof runRepo, id: string, reason?: string) => {
+        const run = repo.findById(id);
+        if (!run) throw new Error(`Run ${id} not found`);
+        if (!pendingStatuses.has(run.status)) throw new Error(`Cannot act on run ${id}: status is ${run.status}`);
+        repo.updateStatus(id, { status: "rejected", error: reason, approvalAction: "reject" });
+        emitRunEvent({ runId: id, type: "rejected", timestamp: new Date().toISOString(), data: { reason } });
+      };
 
       registerWebhookHandlers(ghAppService.app, {
         triggerLabel: "forgectl",
@@ -651,7 +660,6 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
   }
 
   const shutdown = async () => {
-    clearInterval(schedulerInterval);
     stopMergeDaemon.fn();
     watcher?.stop();
     if (discordBot) {

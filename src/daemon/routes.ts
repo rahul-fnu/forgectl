@@ -7,15 +7,12 @@ import { runEvents } from "../logging/events.js";
 import type { RunEvent } from "../logging/events.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
-import { BoardEngine } from "../board/engine.js";
-import { BoardStore } from "../board/store.js";
-import { CreateCardSchema, TriggerCardSchema, UpdateCardSchema } from "../board/schema.js";
 import { PipelineRunService, PipelineValidationError } from "./pipeline-service.js";
 import type { PipelineDefinition } from "../pipeline/types.js";
 import type { Orchestrator } from "../orchestrator/index.js";
 import type { RunRepository } from "../storage/repositories/runs.js";
 import { resumeRun } from "../durability/pause.js";
-import { approveRun, rejectRun, requestRevision } from "../governance/approval.js";
+import { emitRunEvent } from "../logging/events.js";
 import type { CostRepository } from "../storage/repositories/costs.js";
 import type { OutcomeRepository } from "../storage/repositories/outcomes.js";
 import type { AnalyticsRepository } from "../storage/repositories/analytics.js";
@@ -33,8 +30,6 @@ interface InlineContext {
 
 interface RouteServices {
   pipelineService?: PipelineRunService;
-  boardStore?: BoardStore;
-  boardEngine?: BoardEngine;
   orchestrator?: Orchestrator;
   runRepo?: RunRepository;
   costRepo?: CostRepository;
@@ -45,10 +40,49 @@ interface RouteServices {
   authToken?: string;
 }
 
+const PENDING_STATUSES = new Set(["pending_approval", "pending_output_approval"]);
+
+function approveRun(runRepo: RunRepository, runId: string): { previousStatus: string } {
+  const run = runRepo.findById(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  if (!PENDING_STATUSES.has(run.status)) {
+    throw new Error(`Cannot act on run ${run.id}: status is ${run.status}, expected pending_approval or pending_output_approval`);
+  }
+  const previousStatus = run.status;
+  if (run.status === "pending_approval") {
+    runRepo.updateStatus(runId, { status: "running", approvalAction: "approve" });
+    emitRunEvent({ runId, type: "approved", timestamp: new Date().toISOString(), data: { previousStatus } });
+  } else {
+    runRepo.updateStatus(runId, { status: "completed", completedAt: new Date().toISOString(), approvalAction: "approve" });
+    emitRunEvent({ runId, type: "output_approved", timestamp: new Date().toISOString(), data: { previousStatus } });
+  }
+  return { previousStatus };
+}
+
+function rejectRun(runRepo: RunRepository, runId: string, reason?: string): void {
+  const run = runRepo.findById(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  if (!PENDING_STATUSES.has(run.status)) {
+    throw new Error(`Cannot act on run ${run.id}: status is ${run.status}, expected pending_approval or pending_output_approval`);
+  }
+  const eventType = run.status === "pending_approval" ? "rejected" : "output_rejected";
+  runRepo.updateStatus(runId, { status: "rejected", error: reason, approvalAction: "reject" });
+  emitRunEvent({ runId, type: eventType, timestamp: new Date().toISOString(), data: { reason } });
+}
+
+function requestRevision(runRepo: RunRepository, runId: string, feedback: string): void {
+  const run = runRepo.findById(runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  if (!PENDING_STATUSES.has(run.status)) {
+    throw new Error(`Cannot act on run ${run.id}: status is ${run.status}, expected pending_approval or pending_output_approval`);
+  }
+  const context = { action: "revision_requested" as const, feedback, requestedAt: new Date().toISOString() };
+  runRepo.updateStatus(runId, { status: "running", approvalContext: context, approvalAction: "revision_requested" });
+  emitRunEvent({ runId, type: "revision_requested", timestamp: new Date().toISOString(), data: { feedback } });
+}
+
 export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: RouteServices = {}): void {
   const pipelineService = services.pipelineService ?? new PipelineRunService();
-  const boardStore = services.boardStore;
-  const boardEngine = services.boardEngine;
   const orchestrator = services.orchestrator;
   const runRepo = services.runRepo;
   const costRepo = services.costRepo;
@@ -290,187 +324,6 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       }
       return { error: message };
     }
-  });
-
-  // --- Board API ---
-  app.get("/boards", async (_request, reply) => {
-    if (!boardStore) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    const boards = await boardStore.listBoards();
-    return boards;
-  });
-
-  app.post<{ Body: { file: string } }>("/boards", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    if (!request.body.file) {
-      reply.code(400);
-      return { error: "file is required" };
-    }
-
-    try {
-      const board = await boardEngine.registerBoardFile(request.body.file);
-      reply.code(201);
-      return board;
-    } catch (err) {
-      reply.code(400);
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  app.get<{ Params: { id: string } }>("/boards/:id", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    const board = await boardEngine.getBoard(request.params.id);
-    if (!board) {
-      reply.code(404);
-      return { error: "Board not found" };
-    }
-    return board;
-  });
-
-  app.patch<{ Params: { id: string }; Body: { file?: string } }>("/boards/:id", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    const existing = await boardEngine.getBoard(request.params.id);
-    if (!existing) {
-      reply.code(404);
-      return { error: "Board not found" };
-    }
-
-    const filePath = request.body.file ?? existing.definitionPath;
-    try {
-      const board = await boardEngine.registerBoardFile(filePath);
-      return board;
-    } catch (err) {
-      reply.code(400);
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  app.get<{ Params: { id: string } }>("/boards/:id/cards", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    const board = await boardEngine.getBoard(request.params.id);
-    if (!board) {
-      reply.code(404);
-      return { error: "Board not found" };
-    }
-    return board.cards;
-  });
-
-  app.post<{
-    Params: { id: string };
-    Body: {
-      id?: string;
-      title: string;
-      type: string;
-      column?: string;
-      params?: Record<string, string | number | boolean>;
-    };
-  }>("/boards/:id/cards", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    try {
-      const payload = CreateCardSchema.parse(request.body);
-      const card = await boardEngine.createCard(request.params.id, payload);
-      reply.code(201);
-      return card;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      reply.code(message.includes("not found") ? 404 : 400);
-      return { error: message };
-    }
-  });
-
-  app.patch<{
-    Params: { id: string; cardId: string };
-    Body: {
-      title?: string;
-      column?: string;
-      params?: Record<string, string | number | boolean>;
-    };
-  }>("/boards/:id/cards/:cardId", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    try {
-      const payload = UpdateCardSchema.parse(request.body);
-      const card = await boardEngine.updateCard(request.params.id, request.params.cardId, payload);
-      return card;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      reply.code(message.includes("not found") ? 404 : 400);
-      return { error: message };
-    }
-  });
-
-  app.post<{
-    Params: { id: string; cardId: string };
-    Body: { mode?: "manual" | "auto" | "scheduled" };
-  }>("/boards/:id/cards/:cardId/trigger", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    try {
-      const mode = TriggerCardSchema.parse(request.body ?? {}).mode;
-      const result = await boardEngine.triggerCardRun(request.params.id, request.params.cardId, mode);
-      reply.code(202);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("already has an active run") || message.includes("capacity")) {
-        reply.code(409);
-      } else if (message.includes("not found")) {
-        reply.code(404);
-      } else {
-        reply.code(400);
-      }
-      return { error: message };
-    }
-  });
-
-  app.get<{ Params: { id: string; cardId: string } }>("/boards/:id/cards/:cardId/runs", async (request, reply) => {
-    if (!boardEngine) {
-      reply.code(503);
-      return { error: "Board service is not configured" };
-    }
-
-    const board = await boardEngine.getBoard(request.params.id);
-    if (!board) {
-      reply.code(404);
-      return { error: "Board not found" };
-    }
-
-    const card = board.cards.find((entry) => entry.id === request.params.cardId);
-    if (!card) {
-      reply.code(404);
-      return { error: "Card not found" };
-    }
-
-    return card.runHistory;
   });
 
   // --- SSE stream for a run's real-time events (auth via query param) ---
