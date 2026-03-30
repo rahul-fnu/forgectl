@@ -11,6 +11,7 @@ import { scaffoldPython } from "./scaffolds/scaffold-python.js";
 import { scaffoldNode } from "./scaffolds/scaffold-node.js";
 import { scaffoldGo } from "./scaffolds/scaffold-go.js";
 import { scaffoldRust } from "./scaffolds/scaffold-rust.js";
+import { generateClaudeMd, recordBaseline } from "../context/claude-md.js";
 
 export interface CreateProjectOptions {
   name: string;
@@ -75,6 +76,11 @@ export function scaffoldProject(dir: string, opts: CreateProjectOptions): void {
       scaffoldRust(dir, name);
       break;
   }
+
+  // Generate initial CLAUDE.md and record baseline for evolution tracking
+  const { writeFileSync } = require("node:fs") as typeof import("node:fs");
+  writeFileSync(join(dir, "CLAUDE.md"), generateClaudeMd(dir, name));
+  recordBaseline(dir);
 }
 
 export function initAndPush(dir: string, remoteUrl: string): void {

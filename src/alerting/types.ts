@@ -3,7 +3,8 @@ export type AlertEventType =
   | "run_completed"
   | "cost_ceiling_hit"
   | "usage_limit_detected"
-  | "review_escalated";
+  | "review_escalated"
+  | "claude_md_update";
 
 export interface AlertEvent {
   type: AlertEventType;

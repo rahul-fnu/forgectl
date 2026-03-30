@@ -861,4 +861,41 @@ export function registerRoutes(app: FastifyInstance, queue: RunQueue, services: 
       return analyticsRepo.getFullMetrics(since);
     },
   );
+
+  // CLAUDE.md update endpoint
+  app.post<{ Body: { workspace: string } }>(
+    "/api/v1/claude-md/update",
+    async (request, reply) => {
+      const { workspace } = request.body ?? {};
+      if (!workspace) {
+        reply.code(400);
+        return { error: "workspace is required" };
+      }
+
+      try {
+        const { generateClaudeMd, recordBaseline } = await import("../context/claude-md.js");
+        const { existsSync, writeFileSync } = await import("node:fs");
+        const { join: pathJoin } = await import("node:path");
+        const os = await import("node:os");
+
+        const wsRoot = pathJoin(os.homedir(), ".forgectl", "workspaces");
+        const wsPath = pathJoin(wsRoot, workspace);
+
+        if (!existsSync(wsPath)) {
+          reply.code(404);
+          return { error: `Workspace "${workspace}" not found` };
+        }
+
+        const content = generateClaudeMd(wsPath, workspace);
+        writeFileSync(pathJoin(wsPath, "CLAUDE.md"), content);
+        recordBaseline(wsPath);
+
+        return { status: "updated", workspace };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        reply.code(500);
+        return { error: msg };
+      }
+    },
+  );
 }

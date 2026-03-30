@@ -84,6 +84,24 @@ export async function fetchStatus(daemonPort: number, daemonToken: string): Prom
     .join("\n");
 }
 
+export async function triggerClaudeMdUpdate(workspace: string, daemonPort: number, daemonToken: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/claude-md/update`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${daemonToken}`,
+    },
+    body: JSON.stringify({ workspace }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Update failed (${res.status}): ${text}`);
+  }
+  const data = (await res.json()) as { status: string; pr_url?: string };
+  if (data.pr_url) return `CLAUDE.md updated! PR: ${data.pr_url}`;
+  return `CLAUDE.md update: ${data.status}`;
+}
+
 export async function fetchStats(daemonPort: number, daemonToken: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/summary`, {
     headers: { Authorization: `Bearer ${daemonToken}` },
@@ -214,6 +232,18 @@ export class DiscordBot {
       return;
     }
 
+    if (sub === "update-claude-md") {
+      await interaction.deferReply();
+      const workspace = interaction.options.getString("workspace") ?? "";
+      try {
+        const result = await triggerClaudeMdUpdate(workspace, this.daemonPort, this.daemonToken);
+        await interaction.editReply(result);
+      } catch (err) {
+        await interaction.editReply(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
     // Default: dispatch a task
     const task = interaction.options.getString("task");
     if (!task) {
@@ -251,7 +281,12 @@ export class DiscordBot {
           ),
         )
         .addSubcommand((sub) => sub.setName("status").setDescription("Show current runs"))
-        .addSubcommand((sub) => sub.setName("stats").setDescription("Show analytics summary")),
+        .addSubcommand((sub) => sub.setName("stats").setDescription("Show analytics summary"))
+        .addSubcommand((sub) =>
+          sub.setName("update-claude-md").setDescription("Update CLAUDE.md for a workspace").addStringOption((opt) =>
+            opt.setName("workspace").setDescription("Workspace identifier").setRequired(true),
+          ),
+        ),
     ];
 
     const rest = new REST({ version: "10" }).setToken(token);

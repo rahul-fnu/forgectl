@@ -124,6 +124,7 @@ export const AlertEventTypeEnum = z.enum([
   "cost_ceiling_hit",
   "usage_limit_detected",
   "review_escalated",
+  "claude_md_update",
 ]);
 
 export const WebhookTargetSchema = z.object({
@@ -291,6 +292,13 @@ export const ConfigSchema = z.object({
   project: z.object({
     auto_create: z.boolean().default(false),
     github_org: z.string().optional(),
+  }).default({}),
+
+  claude_md: z.object({
+    enabled: z.boolean().default(false),
+    check_interval_days: z.number().int().positive().default(30),
+    growth_threshold: z.number().min(0).max(1).default(0.2),
+    auto_apply: z.boolean().default(false),
   }).default({}),
 
   validate: z.array(z.string()).default([]),
