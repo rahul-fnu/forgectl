@@ -1,9 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import type { RunPlan } from "../workflow/types.js";
-import type { ContextResult } from "./builder.js";
 import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
-import { formatConventionsForContext } from "../kg/conventions.js";
 
 const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
@@ -14,30 +12,20 @@ interface ContextArtifactSummary {
 }
 
 export interface PromptOptions {
-  kgContext?: ContextResult;
   promotedFindings?: ReviewFindingRow[];
 }
 
-const FALLBACK_CONVENTIONS = `No project-specific conventions have been detected yet. Infer patterns from the existing code:
-- Look at 2-3 existing files similar to what you're creating to understand the style.
-- Match import ordering, error handling patterns, export style, and naming conventions.`;
-
-export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | PromptOptions): string {
-  let kgContext: ContextResult | undefined;
+export function buildPrompt(plan: RunPlan, options?: PromptOptions): string {
   let promotedFindings: ReviewFindingRow[] | undefined;
 
-  if (kgContextOrOptions && "systemContext" in kgContextOrOptions) {
-    kgContext = kgContextOrOptions;
-  } else if (kgContextOrOptions) {
-    const opts = kgContextOrOptions as PromptOptions;
-    kgContext = opts.kgContext;
-    promotedFindings = opts.promotedFindings;
+  if (options && "promotedFindings" in options) {
+    promotedFindings = options.promotedFindings;
   }
 
   const parts: string[] = [];
 
   // 1. Build the conventions block for {{conventions}} placeholder
-  const conventionsBlock = buildConventionsBlock(kgContext, promotedFindings);
+  const conventionsBlock = buildConventionsBlock(promotedFindings);
 
   // 2. System prompt with conventions injected
   const systemPrompt = plan.context.system || plan.workflow.system;
@@ -45,7 +33,6 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(systemPrompt.replace("{{conventions}}", conventionsBlock));
   } else {
     parts.push(systemPrompt);
-    // Append conventions after system prompt if no placeholder exists
     if (conventionsBlock !== FALLBACK_CONVENTIONS) {
       parts.push(`\n## Project conventions\n${conventionsBlock}\n`);
     }
@@ -87,25 +74,15 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push("Use artifact metadata and nearby text context when reasoning about these files.");
   }
 
-  // 4. KG-derived structural context
-  if (kgContext) {
-    parts.push(`\n--- Structural Context (Knowledge Graph) ---`);
-    parts.push(kgContext.systemContext);
-    if (kgContext.taskContext) {
-      parts.push(kgContext.taskContext);
-    }
-    parts.push(`--- End Structural Context ---\n`);
-  }
-
-  // 5. Available tools
+  // 4. Available tools
   if (plan.workflow.tools.length > 0) {
     parts.push(`\n## Available tools\n${plan.workflow.tools.join(", ")}\n`);
   }
 
-  // 6. The task
+  // 5. The task
   parts.push(`\n## Task\n${plan.task}\n`);
 
-  // 7. Validation instructions
+  // 6. Validation instructions
   if (plan.validation.steps.length > 0) {
     const reproSteps = plan.validation.steps.filter((s) => s.before_fix === true);
     const verifySteps = plan.validation.steps.filter((s) => s.before_fix !== true);
@@ -127,7 +104,7 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
     parts.push(`\nIf any check fails, you will receive the error output. Read it carefully, identify the root cause, and fix it. Do not retry the same fix.\n`);
   }
 
-  // 8. Output instructions
+  // 7. Output instructions
   if (plan.output.mode === "files") {
     parts.push(`\nSave all output files to ${plan.output.path}\n`);
   }
@@ -135,28 +112,21 @@ export function buildPrompt(plan: RunPlan, kgContextOrOptions?: ContextResult | 
   return parts.join("\n");
 }
 
+const FALLBACK_CONVENTIONS = `No project-specific conventions have been detected yet. Infer patterns from the existing code:
+- Look at 2-3 existing files similar to what you're creating to understand the style.
+- Match import ordering, error handling patterns, export style, and naming conventions.`;
+
 /**
  * Build the conventions block to replace {{conventions}} in the system prompt.
- * Merges KG-mined conventions and promoted review findings into a single section.
+ * Uses promoted review findings when available.
  */
 function buildConventionsBlock(
-  kgContext?: ContextResult,
   promotedFindings?: ReviewFindingRow[],
 ): string {
   const lines: string[] = [];
 
-  // KG-mined conventions
-  if (kgContext?.conventions && kgContext.conventions.length > 0) {
-    const formatted = formatConventionsForContext(kgContext.conventions);
-    if (formatted) {
-      lines.push("This project follows these conventions (discovered from the codebase):");
-      lines.push(formatted);
-    }
-  }
-
   // Promoted review findings
   if (promotedFindings && promotedFindings.length > 0) {
-    if (lines.length > 0) lines.push("");
     lines.push("Additional conventions from code review history:");
     for (const finding of promotedFindings) {
       const desc = finding.exampleComment ?? `${finding.category} in ${finding.module}`;
