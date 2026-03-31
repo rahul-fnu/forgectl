@@ -45,8 +45,8 @@ import type { AlertEvent } from "../alerting/types.js";
 import { createSpan, endSpan } from "../tracing/context.js";
 import type { Span } from "../tracing/context.js";
 import type { TraceRepository } from "../storage/repositories/traces.js";
-import { detectClarificationNeed, extractQuestion } from "../discord/clarify.js";
-import type { ClarificationCallback } from "../discord/clarify.js";
+import { detectClarificationNeed, extractQuestion } from "../agent/clarify.js";
+import type { ClarificationCallback } from "../agent/clarify.js";
 
 function persistSpan(traceRepo: TraceRepository | undefined, span: Span): void {
   if (!traceRepo) return;

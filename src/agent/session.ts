@@ -1,6 +1,6 @@
 import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "./types.js";
-import type { ClarificationCallback } from "../discord/clarify.js";
+import type { ClarificationCallback } from "./clarify.js";
 import { getAgentAdapter } from "./registry.js";
 import { OneShotSession } from "./oneshot-session.js";
 import { AppServerSession } from "./appserver-session.js";
