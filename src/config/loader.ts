@@ -117,8 +117,7 @@ export function loadRepoConfig(workspaceDir: string): RepoConfig | null {
 
 /**
  * Merge global config with per-repo config from workspace.
- * 2-layer merge: per-repo forgectl.yaml overrides global defaults.
- * Supports: validate, branch_base, max_agents, stack (container image).
+ * Per-repo forgectl.yaml overrides: validate, branch_base, max_agents, stack (container image).
  */
 export function mergeWithRepoConfig(global: ForgectlConfig, repo: RepoConfig): ForgectlConfig {
   const overrides: Partial<ForgectlConfig> = {};
@@ -148,27 +147,6 @@ export function mergeWithRepoConfig(global: ForgectlConfig, repo: RepoConfig): F
   }
 
   return deepMerge(global, overrides);
-}
-
-/**
- * Load config with 2-layer merge: global defaults + per-repo overrides.
- * Auto-detects per-repo config from the workspace directory.
- * Returns {config, repoConfig} so callers can inspect what was detected.
- */
-export function loadTwoLayerConfig(
-  globalConfigPath?: string,
-  workspaceDir?: string,
-): { config: ForgectlConfig; repoConfig: RepoConfig | null } {
-  const globalConfig = loadConfig(globalConfigPath);
-  if (!workspaceDir) return { config: globalConfig, repoConfig: null };
-
-  const repoConfig = loadRepoConfig(workspaceDir);
-  if (!repoConfig) return { config: globalConfig, repoConfig: null };
-
-  return {
-    config: mergeWithRepoConfig(globalConfig, repoConfig),
-    repoConfig,
-  };
 }
 
 function getReposDir(): string {

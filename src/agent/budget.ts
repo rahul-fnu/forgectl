@@ -1,6 +1,16 @@
+import type { CostRepository } from "../storage/repositories/costs.js";
+
 export interface BudgetConfig {
   max_cost_per_run?: number;
   max_cost_per_day?: number;
+}
+
+export interface BudgetStatus {
+  runCostUsd: number;
+  dayCostUsd: number;
+  maxPerRun: number | null;
+  maxPerDay: number | null;
+  withinBudget: boolean;
 }
 
 export class BudgetExceededError extends Error {
@@ -30,6 +40,7 @@ export interface CostCeilingResult {
 
 /**
  * Check cumulative agent usage against cost/token ceilings.
+ * Returns whether the ceiling was exceeded and the percentage used.
  */
 export function checkCostCeiling(
   cumulative: { inputTokens: number; outputTokens: number; costUsd: number },
@@ -53,6 +64,7 @@ export function checkCostCeiling(
     };
   }
 
+  // Compute percent used as the max of either metric
   let percentUsed = 0;
   if (config.maxCostUsd !== undefined && config.maxCostUsd > 0) {
     percentUsed = Math.max(percentUsed, (cumulative.costUsd / config.maxCostUsd) * 100);
@@ -62,4 +74,60 @@ export function checkCostCeiling(
   }
 
   return { exceeded: false, percentUsed };
+}
+
+/**
+ * Check whether the current run is within budget.
+ * Throws BudgetExceededError if over budget.
+ */
+export function checkBudget(
+  costRepo: CostRepository,
+  runId: string,
+  budget: BudgetConfig,
+): void {
+  if (budget.max_cost_per_run !== undefined) {
+    const runSummary = costRepo.sumByRunId(runId);
+    if (runSummary.totalCostUsd >= budget.max_cost_per_run) {
+      throw new BudgetExceededError("per_run", runSummary.totalCostUsd, budget.max_cost_per_run);
+    }
+  }
+
+  if (budget.max_cost_per_day !== undefined) {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const daySummary = costRepo.sumSince(startOfDay);
+    if (daySummary.totalCostUsd >= budget.max_cost_per_day) {
+      throw new BudgetExceededError("per_day", daySummary.totalCostUsd, budget.max_cost_per_day);
+    }
+  }
+}
+
+/**
+ * Get the current budget status for a run.
+ */
+export function getBudgetStatus(
+  costRepo: CostRepository,
+  runId: string,
+  budget: BudgetConfig | undefined,
+): BudgetStatus {
+  const runSummary = costRepo.sumByRunId(runId);
+
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const daySummary = costRepo.sumSince(startOfDay);
+
+  const maxPerRun = budget?.max_cost_per_run ?? null;
+  const maxPerDay = budget?.max_cost_per_day ?? null;
+
+  const withinBudget =
+    (maxPerRun === null || runSummary.totalCostUsd < maxPerRun) &&
+    (maxPerDay === null || daySummary.totalCostUsd < maxPerDay);
+
+  return {
+    runCostUsd: runSummary.totalCostUsd,
+    dayCostUsd: daySummary.totalCostUsd,
+    maxPerRun,
+    maxPerDay,
+    withinBudget,
+  };
 }

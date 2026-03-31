@@ -163,17 +163,4 @@ export interface RunPlan {
     max_cost_usd?: number;
     max_tokens?: number;
   };
-  featureBranch?: string;
-  handoffEntries?: import("../context/prompt.js").HandoffEntry[];
-}
-
-/**
- * Determine whether a task is "complex" based on validation steps,
- * task length, and lint steps. Complex tasks use feature branches.
- */
-export function isComplexTask(plan: RunPlan): boolean {
-  const hasMultipleValidationSteps = plan.validation.steps.length >= 2;
-  const hasLintSteps = plan.validation.lintSteps.length > 0;
-  const isLongTask = plan.task.length > 500;
-  return (hasMultipleValidationSteps && hasLintSteps) || isLongTask;
 }

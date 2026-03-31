@@ -124,19 +124,12 @@ export const AlertEventTypeEnum = z.enum([
   "cost_ceiling_hit",
   "usage_limit_detected",
   "review_escalated",
-  "claude_md_update",
 ]);
 
 export const WebhookTargetSchema = z.object({
   url: z.string().url(),
   events: z.array(AlertEventTypeEnum),
   secret: z.string().optional(),
-});
-
-export const ChannelRepoMappingSchema = z.object({
-  channel_id: z.string(),
-  repo: z.string(),
-  workflow: z.string().optional(),
 });
 
 export const DiscordConfigSchema = z.object({
@@ -146,16 +139,11 @@ export const DiscordConfigSchema = z.object({
   guild_id: z.string().default(""),
   channel_id: z.string().optional(),
   channel_ids: z.array(z.string()).default([]),
-  channel_repos: z.array(ChannelRepoMappingSchema).default([]),
   application_id: z.string().optional(),
   daemon_url: z.string().optional(),
   daemon_token: z.string().optional(),
   allowed_channel_ids: z.array(z.string()).optional(),
   notification_channel_id: z.string().optional(),
-  status_channel_name: z.string().default("forgectl-status"),
-  digest_cron: z.string().default("0 9 * * *"),
-  alerts_enabled: z.boolean().default(true),
-  reaction_controls: z.boolean().default(true),
 }).default({});
 
 export const AlertingConfigSchema = z.object({
@@ -303,13 +291,6 @@ export const ConfigSchema = z.object({
   project: z.object({
     auto_create: z.boolean().default(false),
     github_org: z.string().optional(),
-  }).default({}),
-
-  claude_md: z.object({
-    enabled: z.boolean().default(false),
-    check_interval_days: z.number().int().positive().default(30),
-    growth_threshold: z.number().min(0).max(1).default(0.2),
-    auto_apply: z.boolean().default(false),
   }).default({}),
 
   validate: z.array(z.string()).default([]),

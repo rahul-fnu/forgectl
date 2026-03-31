@@ -30,12 +30,11 @@ const DEFAULT_BUDGET = 60000;
 const AGENT_RESERVE_RATIO = 0.5;
 
 /**
- * CLAUDE.md-native context: agents read CLAUDE.md directly from the workspace.
- * No KG-based file scoring needed — the agent discovers context natively.
- * Returns minimal context metadata since the agent handles its own exploration.
+ * Stub implementation — KG module has been removed.
+ * Returns minimal context without KG-based file scoring.
  */
 export async function buildContext(
-  _task: TaskSpec,
+  task: TaskSpec,
   _kgDb?: unknown,
   budget?: number,
   _taskType?: string,
@@ -44,9 +43,11 @@ export async function buildContext(
   const reservedForAgent = Math.floor(totalBudget * AGENT_RESERVE_RATIO);
 
   const systemContext = [
-    "# Context",
-    "The agent reads CLAUDE.md from the workspace root for project conventions and structure.",
-    "No additional context injection is needed — the agent explores the codebase natively.",
+    "# Codebase Context (auto-generated from Knowledge Graph)",
+    `Merkle root: `,
+    `Files included: 0`,
+    `Token budget: 0/${totalBudget - reservedForAgent} (${reservedForAgent} reserved for agent exploration)`,
+    "",
   ].join("\n");
 
   return {

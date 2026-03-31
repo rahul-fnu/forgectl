@@ -1,30 +1,6 @@
 import type { RunResult } from "../github/comments.js";
+import type { AlertEvent, AlertEventType } from "../alerting/types.js";
 import type { ChildStatus } from "../github/sub-issue-rollup.js";
-import type { RunEvent } from "../logging/events.js";
-import { REACTION_CONTROLS } from "./types.js";
-
-export type AlertEventType = "run_completed" | "run_failed" | "cost_ceiling_hit" | "usage_limit_detected" | "review_escalated" | "claude_md_update";
-
-export interface AlertEvent {
-  type: AlertEventType;
-  runId: string;
-  message: string;
-  issueIdentifier?: string;
-  timestamp: string;
-}
-
-export interface PlanPreview {
-  runId: string;
-  task: string;
-  planBullets: string[];
-  prediction: {
-    estimatedCostUsd: number;
-    estimatedTurns: number;
-    estimatedDurationMs: number;
-    confidence: number;
-    basedOnRuns: number;
-  };
-}
 
 const COLOR_MAP: Record<AlertEventType, number> = {
   run_completed: 0x2eb886,
@@ -32,7 +8,12 @@ const COLOR_MAP: Record<AlertEventType, number> = {
   cost_ceiling_hit: 0xdaa038,
   usage_limit_detected: 0xdaa038,
   review_escalated: 0xdaa038,
-  claude_md_update: 0x5865f2,
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  agent_executing: "Agent executing",
+  validating: "Validation",
+  collecting_output: "Output collection",
 };
 
 export interface DiscordEmbed {
@@ -65,41 +46,37 @@ export function buildAlertEmbed(event: AlertEvent): DiscordEmbed {
 
 export function buildProgressEmbed(
   runId: string,
-  event: RunEvent,
+  completedStages: string[],
+  status: string,
+  validationAttempt?: number,
+  error?: string,
 ): DiscordEmbed {
-  const d = event.data;
-  let description: string;
+  const lines: string[] = [];
+  const stages = ["agent_executing", "validating", "collecting_output"] as const;
 
-  switch (event.type) {
-    case "phase":
-      description = `Phase: **${String(d.phase ?? "unknown")}**`;
-      break;
-    case "agent_started":
-      description = "Agent started working...";
-      break;
-    case "validation_step_completed": {
-      const name = String(d.name ?? d.step ?? "check");
-      const passed = Boolean(d.passed);
-      description = `Validation step **${name}** ${passed ? "passed" : "failed"}`;
-      break;
+  for (const stage of stages) {
+    const label = STAGE_LABELS[stage];
+    const checked = completedStages.includes(stage);
+    let displayLabel = label;
+    if (stage === "validating" && validationAttempt) {
+      displayLabel = `${label} (attempt ${validationAttempt})`;
     }
-    case "retry":
-    case "agent_retry":
-      description = `Retrying (attempt ${d.attempt ?? "?"})`;
-      break;
-    case "cost":
-      description = `Current cost: **$${Number(d.costUsd ?? 0).toFixed(4)}**`;
-      break;
-    default:
-      description = `Event: ${event.type}`;
-      break;
+    lines.push(`${checked ? "✅" : "⬜"} ${displayLabel}`);
   }
+
+  if (error) {
+    lines.push(`\n**Error:** ${error}`);
+  }
+
+  let color = 0x5865f2; // blurple
+  if (status === "completed") color = 0x2eb886;
+  else if (status === "failed") color = 0xa30200;
 
   return {
     title: `Run \`${runId}\``,
-    description,
-    color: 0x5865f2,
-    footer: { text: `Event: ${event.type}` },
+    description: lines.join("\n"),
+    color,
+    footer: { text: `Status: ${status}` },
   };
 }
 
@@ -199,152 +176,37 @@ export function buildStatusEmbed(
 }
 
 export function buildStatsEmbed(stats: {
-  totalRuns?: number;
-  successRate?: number;
-  totalCost?: number;
-  avgDuration?: string;
+  totalRuns: number;
+  succeeded: number;
+  failed: number;
+  avgDurationMs?: number;
+  totalCostUsd?: number;
 }): DiscordEmbed {
-  const fields: DiscordEmbed["fields"] = [];
-
-  if (stats.totalRuns !== undefined) {
-    fields.push({ name: "Total Runs", value: String(stats.totalRuns), inline: true });
-  }
-  if (stats.successRate !== undefined) {
-    fields.push({ name: "Success Rate", value: `${(stats.successRate * 100).toFixed(1)}%`, inline: true });
-  }
-  if (stats.totalCost !== undefined) {
-    fields.push({ name: "Total Cost", value: `$${stats.totalCost.toFixed(2)}`, inline: true });
-  }
-  if (stats.avgDuration !== undefined) {
-    fields.push({ name: "Avg Duration", value: stats.avgDuration, inline: true });
-  }
-
-  return {
-    title: "Analytics Summary",
-    color: 0x5865f2,
-    fields,
-    footer: { text: "forgectl" },
-  };
-}
-
-const MAX_DESCRIPTION_LEN = 4000;
-
-function truncateDescription(text: string, maxLen = MAX_DESCRIPTION_LEN): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + "...";
-}
-
-export function buildTaskSubmittedEmbed(runId: string, task: string): DiscordEmbed {
-  return {
-    title: "Task Dispatched",
-    description: truncateDescription(task),
-    color: 0x5865f2,
-    fields: [
-      { name: "Run ID", value: runId, inline: true },
-    ],
-    footer: { text: "forgectl" },
-  };
-}
-
-export function buildCompletedEmbed(
-  runId: string,
-  details: { filesChanged?: number; prUrl?: string; costUsd?: number; branch?: string },
-): DiscordEmbed {
-  const fields: DiscordEmbed["fields"] = [];
-
-  if (details.filesChanged !== undefined) {
-    fields.push({ name: "Files Changed", value: String(details.filesChanged), inline: true });
-  }
-  if (details.costUsd !== undefined) {
-    fields.push({ name: "Cost", value: `$${details.costUsd}`, inline: true });
-  }
-  if (details.branch !== undefined) {
-    fields.push({ name: "Branch", value: details.branch, inline: true });
-  }
-  if (details.prUrl !== undefined) {
-    fields.push({ name: "Pull Request", value: details.prUrl, inline: false });
-  }
-
-  return {
-    title: "Run Completed",
-    description: `Run \`${runId}\``,
-    color: 0x2eb886,
-    fields,
-    footer: { text: "forgectl" },
-  };
-}
-
-export function buildFailedEmbed(
-  runId: string,
-  details: { error: string },
-): DiscordEmbed {
-  const errorValue = details.error.length > 1024
-    ? details.error.slice(0, 1024)
-    : details.error;
-
-  return {
-    title: "Run Failed",
-    description: `Run \`${runId}\``,
-    color: 0xa30200,
-    fields: [
-      { name: "Error", value: errorValue, inline: false },
-    ],
-    footer: { text: "forgectl" },
-  };
-}
-
-export function buildClarificationEmbed(runId: string, question: string): DiscordEmbed {
-  return {
-    title: "Clarification Needed",
-    description: truncateDescription(question),
-    color: 0xdaa038,
-    fields: [
-      { name: "Run ID", value: runId, inline: true },
-    ],
-    footer: { text: "Reply in this thread to answer the agent's question" },
-  };
-}
-
-export function buildReactionControlsHelp(): DiscordEmbed {
-  return {
-    title: "Reaction Controls",
-    description: "Use emoji reactions on task messages to control runs:",
-    color: 0x5865f2,
-    fields: [
-      { name: `${REACTION_CONTROLS.CANCEL} Cancel`, value: "Cancel the running task", inline: true },
-      { name: `${REACTION_CONTROLS.RETRY} Retry`, value: "Retry a failed task", inline: true },
-      { name: `${REACTION_CONTROLS.APPROVE} Approve`, value: "Approve a plan or paused task", inline: true },
-      { name: `${REACTION_CONTROLS.REJECT} Reject`, value: "Reject and cancel a plan", inline: true },
-      { name: `${REACTION_CONTROLS.PAUSE} Pause`, value: "Pause a running task", inline: true },
-      { name: `${REACTION_CONTROLS.LOGS} Logs`, value: "Show current run status", inline: true },
-    ],
-    footer: { text: "forgectl — reaction controls" },
-  };
-}
-
-export function buildPlanPreviewEmbed(preview: PlanPreview): DiscordEmbed {
-  const { prediction } = preview;
-
-  const bulletList = preview.planBullets.length > 0
-    ? preview.planBullets.map((b) => `- ${b}`).join("\n")
-    : "_(no plan details available)_";
-
-  const confidencePct = (prediction.confidence * 100).toFixed(0);
-  const durationMin = (prediction.estimatedDurationMs / 60_000).toFixed(1);
+  const successRate =
+    stats.totalRuns > 0
+      ? ((stats.succeeded / stats.totalRuns) * 100).toFixed(1)
+      : "0.0";
 
   const fields: DiscordEmbed["fields"] = [
-    { name: "Estimated Cost", value: `$${prediction.estimatedCostUsd.toFixed(2)}`, inline: true },
-    { name: "Estimated Turns", value: String(prediction.estimatedTurns), inline: true },
-    { name: "Estimated Duration", value: `${durationMin} min`, inline: true },
-    { name: "Confidence", value: `${confidencePct}% (${prediction.basedOnRuns} historical runs)`, inline: true },
-    { name: "Plan", value: bulletList, inline: false },
+    { name: "Total Runs", value: String(stats.totalRuns), inline: true },
+    { name: "Succeeded", value: String(stats.succeeded), inline: true },
+    { name: "Failed", value: String(stats.failed), inline: true },
+    { name: "Success Rate", value: `${successRate}%`, inline: true },
   ];
 
+  if (stats.avgDurationMs !== undefined) {
+    const avgSec = (stats.avgDurationMs / 1000).toFixed(1);
+    fields.push({ name: "Avg Duration", value: `${avgSec}s`, inline: true });
+  }
+  if (stats.totalCostUsd !== undefined) {
+    fields.push({ name: "Total Cost", value: `$${stats.totalCostUsd.toFixed(2)}`, inline: true });
+  }
+
   return {
-    title: `Plan Preview: \`${preview.runId}\``,
-    description: `React with \\u2705 to approve or \\u274c to reject.`,
-    color: 0xdaa038,
+    title: "forgectl Stats",
+    description: `Success rate: **${successRate}%** across ${stats.totalRuns} runs`,
+    color: 0x5865f2,
     fields,
-    footer: { text: "forgectl — awaiting approval" },
+    footer: { text: "forgectl" },
   };
 }

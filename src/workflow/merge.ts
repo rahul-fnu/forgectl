@@ -2,32 +2,15 @@ import { deepMerge } from "../config/loader.js";
 import type { ForgectlConfig } from "../config/schema.js";
 
 /**
- * Merge workflow config with four-layer priority:
- * CLI flags > workflow front matter > forgectl.yaml > global defaults.
+ * Merge workflow config: global defaults + forgectl.yaml overrides.
+ * Additional arguments are accepted for backward compatibility but
+ * the merge is now 2-layer (defaults + yaml overlay).
  */
 export function mergeWorkflowConfig(
   defaults: ForgectlConfig,
   forgectlYaml: Partial<ForgectlConfig>,
-  workflowFrontMatter?: Partial<ForgectlConfig>,
-  cliFlags?: Partial<ForgectlConfig>,
+  _workflowFrontMatter?: Partial<ForgectlConfig>,
+  _cliFlags?: Partial<ForgectlConfig>,
 ): ForgectlConfig {
-  let result = deepMerge(defaults, forgectlYaml);
-  if (workflowFrontMatter) {
-    result = deepMerge(result, workflowFrontMatter);
-  }
-  if (cliFlags) {
-    result = deepMerge(result, cliFlags);
-  }
-  return result;
-}
-
-/**
- * Simplified 2-layer config merge: global defaults + per-repo overrides.
- * Per-repo config (from forgectl.yaml in the repo) takes precedence over global defaults.
- */
-export function mergeConfigTwoLayer(
-  globalDefaults: ForgectlConfig,
-  repoOverrides: Partial<ForgectlConfig>,
-): ForgectlConfig {
-  return deepMerge(globalDefaults, repoOverrides);
+  return deepMerge(defaults, forgectlYaml);
 }

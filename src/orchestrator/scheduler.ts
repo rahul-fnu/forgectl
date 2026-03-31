@@ -25,7 +25,6 @@ import { pruneStaleState } from "./state.js";
 import { computeCriticalPath, type IssueDAGNode } from "../tracker/sub-issue-dag.js";
 import { parseCron, cronMatches } from "./cron.js";
 import { probeUsageLimit } from "./usage-limit-probe.js";
-import { checkEvolution } from "../context/claude-md.js";
 
 /**
  * Dependencies for a single tick of the scheduler.
@@ -185,9 +184,6 @@ export async function tick(deps: TickDeps): Promise<void> {
   }
   candidates = [...candidates, ...scheduledIssues];
 
-  // Cache candidates for immediate dispatch when slots open (avoids extra API calls)
-  state.cachedCandidates = candidates;
-
   // Step 4: Build terminalIssueIds from SubIssueCache (SUBISSUE-03), then filter candidates
   const terminalIds = new Set<string>();
   if (deps.subIssueCache) {
@@ -246,11 +242,6 @@ export async function tick(deps: TickDeps): Promise<void> {
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {
     await dispatchIssue(issue, state, tracker, config, workspaceManager, promptTemplate, logger, metrics, governance, deps.githubContext, deps.delegationManager, deps.subIssueCache, deps.skills, deps.validationConfig, undefined, deps.promotedFindings, slotManager, deps.usageLimitRecovery);
-  }
-
-  // Step 11: CLAUDE.md evolution check
-  if (config.claude_md?.enabled) {
-    await checkClaudeMdEvolution(config, workspaceManager, logger, deps.alertManager);
   }
 }
 
@@ -312,67 +303,6 @@ function scheduleToSyntheticIssue(schedule: ScheduleEntry, now: Date): TrackerIs
       ...(schedule.repo ? { repo: schedule.repo } : {}),
     },
   };
-}
-
-/** In-memory state for CLAUDE.md evolution checks. */
-let lastClaudeMdCheckTs = 0;
-const CLAUDE_MD_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
-const claudeMdAlertedRepos = new Set<string>();
-
-/**
- * Periodic check: scan workspace root for repos whose file count has grown 20%+ or 30+ days elapsed.
- * Fires a Discord/alert notification offering to update CLAUDE.md.
- */
-async function checkClaudeMdEvolution(
-  config: ForgectlConfig,
-  workspaceManager: WorkspaceManager,
-  logger: Logger,
-  alertManager?: AlertManager,
-): Promise<void> {
-  const now = Date.now();
-  if (now - lastClaudeMdCheckTs < CLAUDE_MD_CHECK_INTERVAL_MS) return;
-  lastClaudeMdCheckTs = now;
-
-  const wsRoot = (workspaceManager as any).root as string | undefined;
-  if (!wsRoot) return;
-
-  const { readdirSync, existsSync } = await import("node:fs");
-  const { join } = await import("node:path");
-
-  let entries: string[];
-  try {
-    entries = readdirSync(wsRoot);
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (claudeMdAlertedRepos.has(entry)) continue;
-    const wsPath = join(wsRoot, entry);
-    try {
-      const check = checkEvolution(wsPath);
-      if (check.needsUpdate) {
-        claudeMdAlertedRepos.add(entry);
-        logger.info("claude-md", `Workspace "${entry}" needs CLAUDE.md update: ${check.reason}`);
-
-        if (alertManager) {
-          await alertManager.fire({
-            type: "claude_md_update",
-            timestamp: new Date().toISOString(),
-            runId: entry,
-            message: `CLAUDE.md update suggested for workspace "${entry}": ${check.reason}. Reply with \`/forge update-claude-md ${entry}\` to approve.`,
-            metadata: {
-              workspace: entry,
-              currentFiles: check.currentFileCount,
-              baselineFiles: check.baselineFileCount,
-            },
-          }).catch(() => {});
-        }
-      }
-    } catch {
-      // Skip workspaces that can't be scanned
-    }
-  }
 }
 
 /**
