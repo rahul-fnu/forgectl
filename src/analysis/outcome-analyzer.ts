@@ -3,7 +3,18 @@ import type { OutcomeRow } from "../storage/repositories/outcomes.js";
 import type { CalibrationRow } from "../storage/repositories/review-findings.js";
 import type { ReviewQualityStats } from "../storage/repositories/review-metrics.js";
 import type { ReviewFindingRow } from "../storage/repositories/review-findings.js";
-import type { TaskSpec } from "../task/types.js";
+export interface TaskSpec {
+  id: string;
+  title: string;
+  description?: string;
+  context: { files: string[]; docs?: string[]; modules?: string[]; related_tasks?: string[] };
+  constraints: string[];
+  acceptance: { run?: string; assert?: string; description?: string }[];
+  decomposition: { strategy: string; max_depth?: number };
+  effort: { max_turns?: number; max_review_rounds?: number; timeout?: string };
+  metadata?: Record<string, string>;
+  budget?: { max_cost_usd?: number; max_tokens?: number };
+}
 
 export interface AnalysisReport {
   period: { from: string; to: string };
