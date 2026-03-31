@@ -12,7 +12,6 @@ import type { AutonomyLevel, AutoApproveRule } from "../config/schema.js";
 import type { DelegationManager } from "./delegation.js";
 import type { SubIssueCache } from "../tracker/sub-issue-cache.js";
 import type { GitHubContext } from "./dispatcher.js";
-import type { ContextResult } from "../context/builder.js";
 
 /** In-memory dedup for cron schedules (resets on daemon restart). */
 const scheduleLastRun = new Map<string, string>();
@@ -231,13 +230,6 @@ export async function tick(deps: TickDeps): Promise<void> {
   const governance: GovernanceOpts | undefined = deps.runRepo
     ? { autonomy: deps.autonomy ?? "full", autoApprove: deps.autoApprove, runRepo: deps.runRepo, costRepo: deps.costRepo, retryRepo: deps.retryRepo }
     : undefined;
-
-  // KG removed — agents read CLAUDE.md natively from the workspace
-  // KG context removed — agents read CLAUDE.md natively from the workspace
-  const kgContextMap = new Map<string, ContextResult>();
-  if (sorted.length > 0) {
-    // No KG context building needed — Claude Code reads CLAUDE.md automatically
-  }
 
   // Step 10: Dispatch up to available slots (with pre-dispatch triage)
   for (const issue of sorted.slice(0, available)) {

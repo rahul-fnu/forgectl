@@ -638,7 +638,7 @@ export function generateImprovementSuggestions(report: AnalysisReport): Improvem
       id,
       title: "Calibrate turn estimation for complex modules",
       description: `Average turns per run is ${report.turnEstimationBias}, well above the expected baseline. Calibrate the token/turn estimation to better predict effort for complex tasks.`,
-      context: { files: ["src/kg/merkle.ts", "src/context/builder.ts"] },
+      context: { files: ["src/**/*.ts"] },
       constraints: ["Do not change estimation for simple modules", "Maintain backward compatibility"],
       acceptance: [
         { run: "npm test", description: "All tests pass" },

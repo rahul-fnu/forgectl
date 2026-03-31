@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { buildContext, type TaskSpec } from "../context/builder.js";
-import type { ExecutionPlan } from "./types.js";
+import type { ExecutionPlan, TaskSpec } from "./types.js";
 import { validatePlan } from "./validator.js";
 import type { PlanValidationResult } from "./types.js";
 
@@ -192,44 +191,15 @@ export function parsePlanResponse(response: string): ExecutionPlan {
 }
 
 /**
- * Build KG-enriched context for the planning goal.
- * Returns the context string for the prompt, or undefined if KG is not available.
+ * Build context for the planning goal.
+ * KG module removed — returns empty context. Agents read CLAUDE.md natively.
  */
 export async function buildPlannerContext(
-  goalText: string,
-  taskSpec?: TaskSpec,
+  _goalText: string,
+  _taskSpec?: TaskSpec,
   _options?: PlannerOptions,
 ): Promise<{ contextStr?: string; outcomeInsights?: string }> {
-  // KG module removed — build minimal context
-  const contextTask: TaskSpec = taskSpec ?? {
-    id: "planner-goal",
-    title: goalText.slice(0, 200),
-    description: goalText,
-    context: { files: extractFileRefs(goalText) },
-    constraints: [],
-    acceptance: [{ description: "Plan is valid" }],
-    decomposition: { strategy: "auto" },
-    effort: { max_turns: 1 },
-  };
-
-  let contextStr: string | undefined;
-  try {
-    const ctx = await buildContext(contextTask);
-    contextStr = `${ctx.systemContext}\n${ctx.taskContext}`;
-  } catch {
-    // context build failed
-  }
-
-  return { contextStr };
-}
-
-/**
- * Extract file path references from free-text goals.
- */
-function extractFileRefs(text: string): string[] {
-  const pattern = /(?:src|test|lib)\/[\w/.=-]+\.(?:ts|js|tsx|jsx)/g;
-  const matches = text.match(pattern);
-  return matches ? [...new Set(matches)] : ["src/**/*.ts"];
+  return { contextStr: undefined };
 }
 
 /**
