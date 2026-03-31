@@ -1,9 +1,30 @@
 import type { RunResult } from "../github/comments.js";
-import type { AlertEvent, AlertEventType } from "../alerting/types.js";
 import type { ChildStatus } from "../github/sub-issue-rollup.js";
-import type { PlanPreview } from "../analysis/cost-predictor.js";
 import type { RunEvent } from "../logging/events.js";
 import { REACTION_CONTROLS } from "./types.js";
+
+export type AlertEventType = "run_completed" | "run_failed" | "cost_ceiling_hit" | "usage_limit_detected" | "review_escalated" | "claude_md_update";
+
+export interface AlertEvent {
+  type: AlertEventType;
+  runId: string;
+  message: string;
+  issueIdentifier?: string;
+  timestamp: string;
+}
+
+export interface PlanPreview {
+  runId: string;
+  task: string;
+  planBullets: string[];
+  prediction: {
+    estimatedCostUsd: number;
+    estimatedTurns: number;
+    estimatedDurationMs: number;
+    confidence: number;
+    basedOnRuns: number;
+  };
+}
 
 const COLOR_MAP: Record<AlertEventType, number> = {
   run_completed: 0x2eb886,

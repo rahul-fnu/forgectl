@@ -1,6 +1,5 @@
 import type { CLIOptions } from "../workflow/resolver.js";
 import type { ExecutionResult } from "../orchestration/single.js";
-import type { RunRepository, RunRow } from "../storage/repositories/runs.js";
 
 export type QueuedRunStatus = "queued" | "running" | "completed" | "failed";
 
@@ -15,83 +14,53 @@ export interface QueuedRun {
   error?: string;
 }
 
-function rowToQueuedRun(row: RunRow): QueuedRun {
-  return {
-    id: row.id,
-    options: (row.options as CLIOptions) ?? { task: row.task },
-    status: row.status as QueuedRunStatus,
-    submittedAt: row.submittedAt,
-    startedAt: row.startedAt ?? undefined,
-    completedAt: row.completedAt ?? undefined,
-    result: (row.result as ExecutionResult) ?? undefined,
-    error: row.error ?? undefined,
-  };
-}
-
 export class RunQueue {
+  private runs = new Map<string, QueuedRun>();
   private running = false;
-  private repo: RunRepository;
   private onExecute: (run: QueuedRun) => Promise<ExecutionResult>;
 
-  constructor(repo: RunRepository, onExecute: (run: QueuedRun) => Promise<ExecutionResult>) {
-    this.repo = repo;
+  constructor(onExecute: (run: QueuedRun) => Promise<ExecutionResult>) {
     this.onExecute = onExecute;
   }
 
   submit(id: string, options: CLIOptions): QueuedRun {
-    const submittedAt = new Date().toISOString();
-    const row = this.repo.insert({
+    const run: QueuedRun = {
       id,
-      task: options.task,
-      workflow: options.workflow,
       options,
       status: "queued",
-      submittedAt,
-    });
-    // Trigger processing asynchronously
+      submittedAt: new Date().toISOString(),
+    };
+    this.runs.set(id, run);
     void this.processNext();
-    return rowToQueuedRun(row);
+    return run;
   }
 
   get(id: string): QueuedRun | undefined {
-    const row = this.repo.findById(id);
-    return row ? rowToQueuedRun(row) : undefined;
+    return this.runs.get(id);
   }
 
   list(): QueuedRun[] {
-    return this.repo.list().map(rowToQueuedRun);
-  }
-
-  /** Kick off processing of any queued runs (e.g. after crash recovery). */
-  drain(): void {
-    void this.processNext();
+    return [...this.runs.values()];
   }
 
   private async processNext(): Promise<void> {
     if (this.running) return;
-    const queued = this.repo.findByStatus("queued");
-    const next = queued[0];
+    const next = [...this.runs.values()].find(r => r.status === "queued");
     if (!next) return;
 
     this.running = true;
-    const startedAt = new Date().toISOString();
-    this.repo.updateStatus(next.id, { status: "running", startedAt });
-    const run = rowToQueuedRun({ ...next, status: "running", startedAt });
+    next.status = "running";
+    next.startedAt = new Date().toISOString();
 
     try {
-      const result = await this.onExecute(run);
-      const status = result.success ? "completed" : "failed";
-      this.repo.updateStatus(next.id, {
-        status,
-        completedAt: new Date().toISOString(),
-        result,
-      });
+      const result = await this.onExecute(next);
+      next.status = result.success ? "completed" : "failed";
+      next.completedAt = new Date().toISOString();
+      next.result = result;
     } catch (err) {
-      this.repo.updateStatus(next.id, {
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
+      next.status = "failed";
+      next.completedAt = new Date().toISOString();
+      next.error = err instanceof Error ? err.message : String(err);
     } finally {
       this.running = false;
       void this.processNext();

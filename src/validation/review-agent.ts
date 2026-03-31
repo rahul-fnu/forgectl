@@ -1,7 +1,6 @@
 import type Docker from "dockerode";
 import type { AgentAdapter, AgentOptions } from "../agent/types.js";
 import type { Logger } from "../logging/logger.js";
-import type { ReviewFindingsRepository } from "../storage/repositories/review-findings.js";
 import { invokeAgent } from "../agent/invoke.js";
 import { load as yamlLoad } from "js-yaml";
 
@@ -30,11 +29,6 @@ export interface ReviewOutput {
 
 const VALID_SEVERITIES = new Set<string>(["MUST_FIX", "SHOULD_FIX", "NIT"]);
 
-/**
- * Build the prompt for the review agent.
- * Instructs the agent to review code for architectural issues, edge cases,
- * error handling, abstraction level, and coupling — things linters can't catch.
- */
 export function buildReviewAgentPrompt(task: string, workingDir: string): string {
   return [
     "You are an expert code reviewer. The code in this workspace has already passed linting.",
@@ -80,15 +74,10 @@ export function buildReviewAgentPrompt(task: string, workingDir: string): string
   ].join("\n");
 }
 
-/**
- * Parse the structured YAML review output from the agent.
- * Returns undefined if the output cannot be parsed as valid review YAML.
- */
 export function parseReviewOutput(stdout: string): ReviewOutput | undefined {
   const trimmed = stdout.trim();
   if (!trimmed) return undefined;
 
-  // Try to extract YAML block — agent may wrap it in markdown fences
   let yamlText = trimmed;
   const fenceMatch = /```(?:ya?ml)?\s*\n([\s\S]*?)```/.exec(trimmed);
   if (fenceMatch) {
@@ -106,7 +95,6 @@ export function parseReviewOutput(stdout: string): ReviewOutput | undefined {
 
   const obj = parsed as Record<string, unknown>;
 
-  // Validate comments array
   const comments: ReviewComment[] = [];
   if (Array.isArray(obj.comments)) {
     for (const item of obj.comments) {
@@ -135,7 +123,6 @@ export function parseReviewOutput(stdout: string): ReviewOutput | undefined {
     }
   }
 
-  // Validate summary
   let summary: ReviewSummary;
   if (obj.summary && typeof obj.summary === "object") {
     const s = obj.summary as Record<string, unknown>;
@@ -157,19 +144,10 @@ export function parseReviewOutput(stdout: string): ReviewOutput | undefined {
   return { comments, summary };
 }
 
-/**
- * Serialize review output to a JSON string suitable for review_comments_json.
- */
 export function serializeReviewOutput(output: ReviewOutput): string {
   return JSON.stringify(output);
 }
 
-/**
- * Run the review agent inside a container. Only call this AFTER lint validation passes.
- *
- * Returns the parsed review output, or undefined if the agent fails or produces
- * unparseable output.
- */
 export async function runReviewAgent(
   container: Docker.Container,
   adapter: AgentAdapter,
@@ -213,62 +191,10 @@ export async function runReviewAgent(
   return output;
 }
 
-/**
- * Extract the module directory from a file path.
- * e.g. "src/storage/repositories/runs.ts" -> "src/storage"
- */
 export function extractModule(filePath: string): string {
   const parts = filePath.split("/");
   if (parts.length >= 2) {
     return parts.slice(0, 2).join("/");
   }
   return parts[0] || "*";
-}
-
-/**
- * Accumulate review findings from a review output.
- * Upserts each comment's category+pattern+module into the findings table,
- * then promotes any findings that have reached the threshold.
- */
-export function accumulateFindings(
-  output: ReviewOutput,
-  repo: ReviewFindingsRepository,
-  logger: Logger,
-): number {
-  for (const comment of output.comments) {
-    const module = extractModule(comment.file);
-    repo.upsertFinding({
-      category: comment.category,
-      pattern: comment.category,
-      module,
-      exampleComment: comment.comment,
-    });
-  }
-
-  const promoted = repo.promoteEligible();
-  if (promoted > 0) {
-    logger.info("review-agent", `Promoted ${promoted} recurring findings to conventions`);
-  }
-  return promoted;
-}
-
-/**
- * Record calibration data from human review overrides.
- * Call this when a human overrides review agent comments.
- */
-export function recordReviewCalibration(
-  repo: ReviewFindingsRepository,
-  module: string,
-  totalComments: number,
-  overriddenComments: number,
-  logger: Logger,
-): void {
-  repo.recordCalibration(module, totalComments, overriddenComments);
-  const calibration = repo.getCalibration(module);
-  if (calibration && calibration.falsePositiveRate > 0.3) {
-    logger.warn(
-      "review-agent",
-      `Miscalibration detected for module ${module}: ${(calibration.falsePositiveRate * 100).toFixed(1)}% false positive rate`,
-    );
-  }
 }

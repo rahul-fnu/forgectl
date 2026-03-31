@@ -2,8 +2,6 @@ import type { RunPlan } from "../workflow/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { OutputResult } from "../output/types.js";
 import type { ValidationResult } from "../validation/runner.js";
-import type { SnapshotRepository } from "../storage/repositories/snapshots.js";
-import type { LockRepository } from "../storage/repositories/locks.js";
 import { getAgentAdapter } from "../agent/registry.js";
 import { createAgentSession } from "../agent/session.js";
 import { buildPrompt, buildHandoffContext } from "../context/prompt.js";
@@ -14,7 +12,6 @@ import { createIsolatedNetwork, applyFirewall } from "../container/network.js";
 import { getClaudeAuth } from "../auth/claude.js";
 import { getCodexAuth } from "../auth/codex.js";
 import { prepareClaudeMounts, prepareCodexMounts } from "../auth/mount.js";
-import { prepareSkillMounts } from "../skills/mount.js";
 import { runValidationLoop, runLintGate, type LintGateResult } from "../validation/runner.js";
 import { runReviewAgent, serializeReviewOutput } from "../validation/review-agent.js";
 import type { ReviewOutput } from "../validation/review-agent.js";
@@ -24,23 +21,9 @@ import { collectOutput } from "../output/collector.js";
 import { cleanupRun, type CleanupContext } from "../container/cleanup.js";
 import { Timer } from "../utils/timer.js";
 import { emitRunEvent } from "../logging/events.js";
-import { saveCheckpoint } from "../durability/checkpoint.js";
-import { acquireLock, releaseLock } from "../durability/locks.js";
-import type { RunRepository } from "../storage/repositories/runs.js";
-import { needsPostApproval } from "../governance/autonomy.js";
-import { enterPendingOutputApproval } from "../governance/approval.js";
-import { evaluateAutoApprove } from "../governance/rules.js";
 import { checkCostCeiling, BudgetExceededError } from "../agent/budget.js";
 import { isComplexTask } from "../workflow/types.js";
 import { buildFeatureBranchName } from "../planner/decompose-to-issues.js";
-
-/** Optional durability dependencies for checkpoint/lock support. */
-export interface DurabilityDeps {
-  snapshotRepo?: SnapshotRepository;
-  lockRepo?: LockRepository;
-  daemonPid?: number;
-  runRepo?: RunRepository;
-}
 
 export interface ReviewSummary {
   totalRounds: number;
@@ -64,9 +47,6 @@ export interface ExecutionResult {
 /**
  * Shared prepare phase: ensure image, prepare workspace, credentials,
  * network, create container, apply firewall.
- *
- * The caller owns the `cleanup` context — resources are added to it
- * progressively so cleanup works even if this function throws partway through.
  */
 export async function prepareExecution(
   plan: RunPlan,
@@ -94,10 +74,9 @@ export async function prepareExecution(
     binds.push(`${outputDir}:${plan.output.path}`);
   }
 
-  // 3. Prepare credentials and build direct env vars (no shell subcommands)
+  // 3. Prepare credentials and build direct env vars
   const agentEnv: string[] = [];
 
-  // Warn if team config is present but agent is not claude-code
   if (plan.team && !plan.noTeam && plan.agent.type !== "claude-code") {
     logger.warn(
       "prepare",
@@ -118,7 +97,6 @@ export async function prepareExecution(
       agentEnv.push(`${k}=${v}`);
     }
     agentEnv.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
-    // Team mode: set CLAUDE_NUM_TEAMMATES if team configured and not disabled
     if (!plan.noTeam && plan.team && plan.team.size > 1) {
       const teammates = plan.team.size - 1;
       agentEnv.push(`CLAUDE_NUM_TEAMMATES=${teammates}`);
@@ -137,31 +115,20 @@ export async function prepareExecution(
     }
   }
 
-  // 4. Skill mounts (Claude Code only)
-  let skillAddDirFlags: string[] = [];
-  if (plan.agent.type === "claude-code") {
-    const { mounts: skillMounts, addDirFlags } = prepareSkillMounts(
-      plan.workflow.skills ?? [],
-      plan.noSkills ?? false,
-    );
-    binds.push(...skillMounts.binds);
-    skillAddDirFlags = addDirFlags;
-  }
-
-  // 5. Create network (only for allowlist mode)
+  // 4. Create network (only for allowlist mode)
   if (plan.container.network.mode === "allowlist") {
     logger.info("prepare", "Creating isolated network...");
     await createIsolatedNetwork(plan.container.network.dockerNetwork);
     cleanup.networkName = plan.container.network.dockerNetwork;
   }
 
-  // 6. Create container with resolved image
+  // 5. Create container with resolved image
   logger.info("prepare", "Starting container...");
   const resolvedPlan = { ...plan, container: { ...plan.container, image: resolvedImage } };
   const container = await createContainer(resolvedPlan, binds);
   cleanup.container = container;
 
-  // 7. Apply firewall (only for allowlist mode)
+  // 6. Apply firewall (only for allowlist mode)
   if (plan.container.network.mode === "allowlist" && plan.container.network.allow) {
     logger.info("prepare", "Applying network firewall...");
     await applyFirewall(container, plan.container.network.allow);
@@ -173,7 +140,7 @@ export async function prepareExecution(
     model: plan.agent.model,
     maxTurns: plan.agent.maxTurns,
     timeout: plan.agent.timeout,
-    flags: [...plan.agent.flags, ...skillAddDirFlags],
+    flags: [...plan.agent.flags],
     workingDir: plan.input.mountPath,
   };
 
@@ -184,31 +151,13 @@ export async function executeSingleAgent(
   plan: RunPlan,
   logger: Logger,
   noCleanup = false,
-  deps: DurabilityDeps = {},
 ): Promise<ExecutionResult> {
   const timer = new Timer();
   const cleanup: CleanupContext = { tempDirs: [], secretCleanups: [] };
-  const { snapshotRepo, lockRepo, daemonPid, runRepo } = deps;
-
-  // --- Lock acquisition ---
-  // Acquire workspace lock using the runId as both key and owner
-  const workspaceKey = plan.input.sources[0];
-  if (lockRepo && daemonPid && workspaceKey) {
-    const gotLock = acquireLock(lockRepo, {
-      lockType: "workspace",
-      lockKey: workspaceKey,
-      ownerId: plan.runId,
-      daemonPid,
-    });
-    if (!gotLock) {
-      throw new Error(`Cannot execute run ${plan.runId}: workspace ${workspaceKey} is locked by another run`);
-    }
-  }
 
   try {
     // --- Phase: Prepare ---
     const { container, adapter, agentOptions, agentEnv } = await prepareExecution(plan, logger, cleanup);
-    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "prepare");
 
     // --- Feature branch for complex tasks ---
     if (!plan.featureBranch && isComplexTask(plan)) {
@@ -226,7 +175,6 @@ export async function executeSingleAgent(
     const prompt = buildPrompt(plan, { handoffContext });
     logger.info("agent", `Running ${plan.agent.type}...`);
 
-    // Use AgentSession for the top-level invocation
     const session = createAgentSession(plan.agent.type, container, agentOptions, agentEnv, {
       onOutput: (chunk, stream) => {
         emitRunEvent({
@@ -272,7 +220,6 @@ export async function executeSingleAgent(
         logger.debug("agent", `stderr: ${agentResult.stderr.slice(0, 500)}`);
       }
     }
-    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "execute", { agentStatus: agentResult.status });
 
     // --- Phase: Lint Gate ---
     const lintOnOutput = (chunk: string, stream: "stdout" | "stderr") => {
@@ -317,9 +264,8 @@ export async function executeSingleAgent(
     const validationResult = await runValidationLoop(
       container, plan, adapter, agentOptions, agentEnv, logger
     );
-    if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "validate", { passed: validationResult.passed });
 
-    // --- Phase: Review Agent with self-addressing loop (only after validation passes) ---
+    // --- Phase: Review Agent with self-addressing loop ---
     const MAX_REVIEW_SELF_ADDRESS_ROUNDS = 2;
     let reviewOutput: ReviewOutput | undefined;
     let reviewRounds = 0;
@@ -340,14 +286,12 @@ export async function executeSingleAgent(
 
         if (!reviewOutput) break;
 
-        // Check for MUST_FIX comments that need self-addressing
         const mustFix = reviewOutput.comments.filter(c => c.severity === "MUST_FIX");
         if (mustFix.length === 0) {
           logger.info("review-agent", "No MUST_FIX comments — review passed");
           break;
         }
 
-        // Check for review loop (same comments repeated)
         const loopCheck = recordReviewComments(reviewLoopState, reviewOutput.comments);
         if (loopCheck) {
           logger.error("review-agent", `Review loop detected: ${loopCheck.detail}`);
@@ -363,7 +307,6 @@ export async function executeSingleAgent(
           break;
         }
 
-        // Feed MUST_FIX + SHOULD_FIX comments back to the agent
         const actionable = reviewOutput.comments.filter(c => c.severity === "MUST_FIX" || c.severity === "SHOULD_FIX");
         const fixParts = [
           `REVIEW COMMENTS (round ${round}) — address all items below:`,
@@ -380,7 +323,6 @@ export async function executeSingleAgent(
         logger.info("review-agent", `Feeding ${actionable.length} actionable comments to agent (round ${round})...`);
         await invokeAgent(container, adapter, fixPrompt, agentOptions, agentEnv, `review-fix-${round}`);
 
-        // Re-run lint gate + validation after fix
         if (plan.validation.lintSteps.length > 0) {
           const reLint = await runLintGate(
             container, plan.validation.lintSteps, plan.input.mountPath,
@@ -417,36 +359,6 @@ export async function executeSingleAgent(
 
       logger.info("output", `Collecting ${plan.output.mode} output...`);
       const output = await collectOutput(container, plan, logger);
-      if (snapshotRepo && !plan.skipCheckpoints) saveCheckpoint(snapshotRepo, plan.runId, "output");
-
-      // --- Post-execution approval gate ---
-      const autonomy = plan.workflow.autonomy ?? "full";
-      if (needsPostApproval(autonomy) && runRepo) {
-        // Check auto-approve bypass (with actual cost from token usage)
-        const actualCost = agentResult.tokenUsage
-          ? (agentResult.tokenUsage.input * 3 + agentResult.tokenUsage.output * 15) / 1_000_000
-          : undefined;
-        const autoApproveCtx = {
-          labels: [] as string[],
-          workflowName: plan.workflow.name,
-          actualCost,
-        };
-        if (plan.workflow.auto_approve && evaluateAutoApprove(plan.workflow.auto_approve, autoApproveCtx)) {
-          logger.info("governance", `Auto-approved post-gate for run ${plan.runId}`);
-        } else {
-          // Output is collected; enter pending_output_approval and return early
-          enterPendingOutputApproval(runRepo, plan.runId);
-          logger.info("governance", `Run ${plan.runId} requires output approval (autonomy=${autonomy})`);
-          return {
-            success: validationResult.passed,
-            output,
-            validation: validationResult,
-            durationMs: timer.elapsed(),
-            review: reviewSummary,
-            reviewCommentsJson,
-          };
-        }
-      }
 
       emitRunEvent({
         runId: plan.runId,
@@ -507,11 +419,6 @@ export async function executeSingleAgent(
       error: message,
     };
   } finally {
-    // --- Lock release ---
-    if (lockRepo && workspaceKey) {
-      releaseLock(lockRepo, "workspace", workspaceKey, plan.runId);
-    }
-
     if (!noCleanup) {
       logger.info("cleanup", "Cleaning up...");
       await cleanupRun(cleanup);
