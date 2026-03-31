@@ -9,7 +9,10 @@ import { saveMergeDaemonPid, removeMergeDaemonPid } from "./lifecycle.js";
 import { registerMergeDaemonRoutes, type MergeDaemonStatus } from "./routes.js";
 import { PRProcessor, type PRProcessorConfig } from "./pr-processor.js";
 import { loadConfig } from "../config/loader.js";
-import { resolveToken } from "../tracker/token.js";
+function resolveToken(token: string): string {
+  if (token.startsWith("$")) return process.env[token.slice(1)] ?? token;
+  return token;
+}
 import { Logger } from "../logging/logger.js";
 
 export async function startMergeDaemon(port = 4857, ciTimeoutMs?: number, configPath?: string): Promise<void> {

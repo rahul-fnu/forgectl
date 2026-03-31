@@ -6,7 +6,10 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveToken } from "../tracker/token.js";
+function resolveToken(token: string): string {
+  if (token.startsWith("$")) return process.env[token.slice(1)] ?? token;
+  return token;
+}
 import {
   cloneAndRebase,
   mergeMain,
