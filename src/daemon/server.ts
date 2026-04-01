@@ -198,28 +198,8 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
     eventRepo,
   });
 
-  // Import resumeRun for Discord and GitHub integrations
+  // Import resumeRun for GitHub integrations
   const { resumeRun: resumeRunFn } = await import("../durability/pause.js");
-
-  // Discord bot initialization (optional, only when config.discord is present)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let discordBot: any = null;
-  if (config.discord) {
-    try {
-      const { DiscordBot } = await import("../discord/bot.js");
-      discordBot = new DiscordBot({
-          config,
-          logger: daemonLogger,
-          daemonPort: port,
-          daemonToken: daemonToken ?? "",
-        });
-      await discordBot.start();
-      daemonLogger.info("daemon", "Discord bot initialized");
-    } catch (err) {
-      daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);
-      discordBot = null;
-    }
-  }
 
   // GitHub App initialization (optional, only when config.github_app is present)
   let ghAppService: Awaited<ReturnType<typeof import("../github/app.js").createGitHubAppService>> | null = null;
@@ -589,28 +569,9 @@ export async function startDaemon(port = 4856, enableOrchestrator = false, confi
 
   console.log(`forgectl daemon running on http://127.0.0.1:${port}`);
 
-  // Discord bot initialization (when discord.enabled is true)
-  if (config.discord?.enabled) {
-    try {
-      const { startDiscordBot } = await import("../discord/bot.js");
-      discordBot = await startDiscordBot({
-        config,
-        logger: daemonLogger,
-        daemonPort: port,
-        daemonToken,
-      });
-      daemonLogger.info("daemon", "Discord bot started");
-    } catch (err) {
-      daemonLogger.error("daemon", `Failed to start Discord bot: ${err}`);
-    }
-  }
-
   const shutdown = async () => {
     stopMergeDaemon.fn();
     watcher?.stop();
-    if (discordBot) {
-      await discordBot.stop();
-    }
     if (orchestrator) {
       await orchestrator.stop();
     }

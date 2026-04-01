@@ -132,24 +132,9 @@ export const WebhookTargetSchema = z.object({
   secret: z.string().optional(),
 });
 
-export const DiscordConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  bot_token: z.string().default(""),
-  token: z.string().optional(),
-  guild_id: z.string().default(""),
-  channel_id: z.string().optional(),
-  channel_ids: z.array(z.string()).default([]),
-  application_id: z.string().optional(),
-  daemon_url: z.string().optional(),
-  daemon_token: z.string().optional(),
-  allowed_channel_ids: z.array(z.string()).optional(),
-  notification_channel_id: z.string().optional(),
-}).default({});
-
 export const AlertingConfigSchema = z.object({
   webhooks: z.array(WebhookTargetSchema).default([]),
   slack_webhook_url: z.string().optional(),
-  discord_webhook_url: z.string().optional(),
 }).default({});
 
 export const ConfigSchema = z.object({
@@ -283,8 +268,6 @@ export const ConfigSchema = z.object({
     decomposition_model: z.string().default("claude-haiku-4-5-20251001"),
     max_sub_issues: z.number().int().min(1).max(50).default(10),
   }).default({}),
-
-  discord: DiscordConfigSchema,
 
   alerting: AlertingConfigSchema,
 
