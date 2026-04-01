@@ -23,5 +23,4 @@ export interface WebhookTarget {
 export interface AlertingConfig {
   webhooks?: WebhookTarget[];
   slack_webhook_url?: string;
-  discord_webhook_url?: string;
 }

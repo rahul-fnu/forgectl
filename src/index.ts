@@ -461,7 +461,6 @@ import { projectAddCommand, projectListCommand, projectShowCommand } from "./cli
 import { planCommand, planValidateResponseCommand } from "./cli/plan.js";
 import { analyzeCommand } from "./cli/analyze.js";
 import { traceCommand } from "./cli/trace.js";
-import { discordCommand } from "./cli/discord.js";
 
 const repoCmd = program
   .command("repo")
@@ -522,14 +521,5 @@ program
   .description("Validate a plan response (use - for stdin)")
   .option("--db <path>", "Custom KG database path")
   .action(planValidateResponseCommand);
-
-// forgectl discord — start the Discord bot
-program
-  .command("discord")
-  .description("Start the Discord bot interface for forgectl")
-  .option("--token <string>", "Discord bot token (or set DISCORD_BOT_TOKEN)")
-  .option("--daemon-url <url>", "Daemon URL (default: http://127.0.0.1:4856)")
-  .option("-c, --config <path>", "Config file path")
-  .action(discordCommand);
 
 program.parse();
