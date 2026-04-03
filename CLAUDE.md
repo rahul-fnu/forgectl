@@ -85,6 +85,9 @@ npm run typecheck     # tsc --noEmit
 - See `docs/REACTIVE-MAINTENANCE-PLAN.md` for upcoming features
 - CI failure dispatch, post-merge test generation, triage gate, reproduce-first prompting
 
+## E2E Test Results
+- Autocode e2e tests passed on 2026-04-03
+
 ## Conventions
 - Use `async/await` everywhere (no callbacks)
 - All Docker operations go through `dockerode`, never shell out to `docker` CLI
