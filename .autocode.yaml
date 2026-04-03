@@ -1,0 +1,4 @@
+prompt: forgectl is a CLI + daemon that runs AI agents (Claude Code, Codex) inside isolated Docker containers for any workflow (code, research, content, data, ops)
+base: main
+model: claude-sonnet-4-6
+maxIterations: 5
